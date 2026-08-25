@@ -4,6 +4,22 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### backend/cpu -- reprice Go 1.27 F32 Abs fan-out (T-01M0VEZY4CE0P, 2026-08-25)
+
+The Apple ARM64 F32 Abs route now keeps the Go 1.27 NEON leaf serial below
+2,097,152 values instead of fanning out from 262,144. A new preallocated policy
+benchmark makes the serial/parallel crossover independently reproducible, and
+the production benchmark now includes its 262K and 1M boundary rungs.
+
+Nine alternating Apple M2 Pro policy pairs favor serial 7/9 at 1,048,576
+(**1.108x** median paired advantage) and parallel 7/9 at 2,097,152. In the
+complete allocated operation, the 349,440 median moves from 354,955 to 344,511
+ns with 8/9 wins; the 1M serial route wins 6/9 pairs, and retaining parallel at
+2M beats the rejected `1<<22` threshold **1.092x** with 8/9 wins. Serial cells
+also drop from six to four allocations. Raw-bit gates execute both sides of the
+new boundary. The general stale-crossover detector requirement is perfscan
+issue #914.
+
 ### build -- require and validate Go 1.27 (T-01M0V9BWA4F35, 2026-08-25)
 
 The module now requires Go 1.27.0, the public installation floor is Go 1.27+,

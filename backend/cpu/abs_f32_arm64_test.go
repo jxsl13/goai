@@ -4,7 +4,11 @@ package cpu
 
 import (
 	"math"
+	"runtime"
 	"testing"
+
+	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/tensor"
 )
 
 func TestAbsF32Arm64ExactAllLengths(t *testing.T) {
@@ -65,6 +69,39 @@ func TestAbsF32Arm64ExactInPlace(t *testing.T) {
 	for i, value := range values {
 		if got := math.Float32bits(value); got != want[i] {
 			t.Fatalf("i=%d: got %08x, want %08x", i, got, want[i])
+		}
+	}
+}
+
+func TestAbsF32ParallelThresholdGeometry(t *testing.T) {
+	previous := runtime.GOMAXPROCS(2)
+	t.Cleanup(func() { runtime.GOMAXPROCS(previous) })
+
+	be, ok := backend.Get(backend.CPU)
+	if !ok {
+		t.Fatal("CPU backend unavailable")
+	}
+	ctx := backend.NewContext().WithBackend(be)
+	for _, n := range []int{absF32ParallelThreshold - 1, absF32ParallelThreshold} {
+		values := make([]float32, n)
+		state := uint32(0x9e3779b9)
+		for i := range values {
+			state ^= state << 13
+			state ^= state >> 17
+			state ^= state << 5
+			values[i] = math.Float32frombits(state)
+		}
+		x := tensor.FromFloat32(tensor.Shape{n}, values)
+		got, err := backend.Execute(ctx, backend.OpAbs, []*tensor.Tensor{x}, nil)
+		if err != nil {
+			t.Fatalf("n=%d: %v", n, err)
+		}
+		out := got[0].Storage().F32()
+		for i, value := range values {
+			want := math.Float32bits(float32(math.Abs(float64(value))))
+			if bits := math.Float32bits(out[i]); bits != want {
+				t.Fatalf("n=%d i=%d input=%08x: got %08x, want %08x", n, i, math.Float32bits(value), bits, want)
+			}
 		}
 	}
 }

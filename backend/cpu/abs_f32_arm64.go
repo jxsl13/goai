@@ -5,8 +5,9 @@ package cpu
 import "math"
 
 // A single NEON stream is faster than worker-pool fan-out below this measured
-// complete-operation crossover on M2 Pro.
-const absF32ParallelThreshold = 1 << 18
+// complete-operation crossover on M2 Pro. Reprice this whenever the leaf
+// kernel, worker pool, or Go toolchain changes materially.
+const absF32ParallelThreshold = 1 << 21
 
 // absF32BlocksNeon computes the active Go toolchain's scalar Abs result for
 // 16*blocks values. Go release build tags select the matching NaN behavior.
