@@ -2,22 +2,6 @@
 schema: v1
 ---
 
-## T-01KYJNDQJZEW0SMH58S84Z23PM Add an SGLang datapoint beside vLLM in the serving comparison
-kind: task
-state: approved
-created: 2026-07-27
-targets: docs/benchmarking.md
-
-Extend the serving benchmark from three-way to four-way. SGLang was confirmed to install on the worker box but was never measured.
-
-Scope: worker-machine only (RTX 3060, TinyLlama-1.1B). Use the identical protocol as the existing vLLM rows: batch=1 decode tg128, prefill pp128, n=16 and n=64 aggregates, sequential GPU-exclusive runs, versions recorded.
-
-Output: a three-way section row in docs/benchmarking.md and a row in BENCHMARKS.md section 1.
-
-Value: SGLang's RadixAttention prefix reuse is the industry mirror of this repo's prefix-caching arc, so a direct comparison sharpens that story. Precision must be matched and disclosed on both sides.
-
-Migrated from cavekit SPEC.md T888.
-
 ## ADR-01KYJNF428F8Q9RQTABB1ZSVPC What is the agent commit and push authority on this repo?
 kind: adr
 state: submitted
