@@ -3982,3 +3982,11 @@ option: Resize hidden scratch for every Step shape
 option: Retain the capacity-wide unary control
 blocks: P-01M0SKYF35FYGB3RPMP0DDPCAW
 choice: One bounded BiasGELU recorder dispatch
+
+## B-01M0VBYXNNF4T8VMN25FR0CX8A Complete the Go 1.27 AMD64 archsimd API migration tree-wide
+kind: bug
+state: draft
+created: 2026-08-25
+targets: internal/simd/simd_avx.go, format/gguf/dequant_q8_simd_amd64.go, format/gguf/quant_matmul_q8_simd_amd64.go, backend/cpu/gemm_simd.go, backend/cpu/norm_avx_amd64.go, backend/cpu/softmax_avx_amd64.go, backend/cpu/vexp_amd64.go, backend/cpu/vexp_f64_underflow_amd64_test.go, backend/cpu/vsilu_f64_test.go
+
+Replacement for rejected under-declared bug B-01M0VBPMFMFAY. Go 1.27 changes experimental AMD64 archsimd slice load/store and rounding names across internal/simd, backend/cpu, and two Q8 GGUF paths. Migrate every production and test caller from Load*Slice to Load*, StoreSlice to Store, and vector RoundToEven to Round; pass native slices to the new loads and preserve the allocation-free byte-to-int8 reinterpretation with unsafe.Slice. Do not change vector operation order, reductions, runtime feature gates, scalar fallbacks, or non-SIMD builds. Definition of done: Go 1.27.0 with GOOS=linux GOARCH=amd64 CGO_ENABLED=0 GOEXPERIMENT=simd builds the full tree; internal/simd, backend/cpu, and format/gguf SIMD test binaries compile; all PR checks are terminal green.
