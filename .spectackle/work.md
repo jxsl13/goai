@@ -3991,3 +3991,13 @@ grilled: 2026-08-25 open=0
 targets: autograd/vjp_eigh.go, autograd/vjp_eigh_bench_test.go, autograd/vjp_eigh_bitidentity_test.go, docs/perf-notes-cpu.md, CHANGELOG.md
 
 The Eigh backward computes tmp[a,j] as a dot between inner[a,:] and V[j,:]. The inner row is invariant across output j but is streamed once per output, matching external perfscan PS6010. On Apple M2 Pro, the current n=256 benchmark median is about 9.98 ms with substantial host-load variance. Compute four adjacent j outputs with independent accumulators while each retains the original ascending b reduction; keep the scalar tail, row-parallel ownership, tensor layout, all other Eigh stages, and public behavior unchanged. Gate raw-bit identity against the existing full column-walk reference and benchmark n=128/256 with alternating frozen binaries.
+
+## T-01M0V7KKKCES5R4JQBAPPYFGQN Implement and gate four-output Eigh VJP inner-product tiling
+kind: task
+state: active
+created: 2026-08-25
+parent: P-01M0V7J7H3E9PRCBFTXSQ6PE7E
+grilled: 2026-08-25 open=0
+targets: autograd/vjp_eigh.go, autograd/vjp_eigh_bench_test.go, autograd/vjp_eigh_bitidentity_test.go, docs/perf-notes-cpu.md, CHANGELOG.md
+
+In the Eigh VJP tmp=inner times V-transpose stage, process four adjacent output columns with independent float64 accumulators and one shared ascending traversal of inner[a,:]. Preserve each output dot product operand order, scalar remainder for n modulo 4, existing row-parallel ownership, transposed inputs, upper-triangle stage, dtype behavior, and API. Extend the independent bit-identity oracle so sizes exercise all tile remainders and both serial/parallel thresholds; red-proof it with a reversed-reduction mutation. Acceptance: external PS6010 disappears at this site; n=128/256 M2 benchmarks show a repeatable alternating-pair latency win with unchanged allocations; canonical make preflight passes; record measurements and any rejected width in CPU notes/changelog; report generalized detector evidence to perfscan.
