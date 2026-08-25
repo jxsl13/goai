@@ -677,10 +677,10 @@ func softplusKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attr
 // softCapKernelCPU is the F64 CPU soft-cap (Gemma-2 attn_logit_softcapping /
 // final_logit_softcapping): out = cap·tanh(x/cap), applied to every attention
 // score on every layer — a hot scalar-tanh op that had no CPU kernel and fell to
-// the ref backend. The amd64 SIMD build routes F64 through the 4-wide vsoftcapF64
-// (tanh off expF64x4); F32 stays on the ref fallback. Not under the CPU==Ref exact
-// invariant; rides the model f64 tolerance. Non-SIMD builds keep the scalar formula
-// (bit-for-bit ref) below.
+// the ref backend. SIMD builds route F64 through vsoftcapF64 (4-wide AVX2 or a
+// dedicated two-lane ARM64 NEON pass); F32 stays on the ref fallback. Not under
+// the CPU==Ref exact invariant; rides the model f64 tolerance. Non-SIMD builds
+// keep the scalar formula (bit-for-bit ref) below.
 func softCapKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	pa, _ := attrs.(backend.SoftCapAttrs)
 	if pa.Cap <= 0 {
@@ -691,7 +691,7 @@ func softCapKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.A
 	case tensor.F64:
 		out := tensor.NewOn(ctx.Device(), tensor.F64, in[0].Shape())
 		d, o := xc.Storage().F64(), out.Storage().F64()
-		if vexpF64Fast {
+		if vsoftcapF64Fast {
 			parallel(len(o), func(lo, hi int) { vsoftcapF64(o[lo:hi], d[lo:hi], pa.Cap) })
 			return []*tensor.Tensor{out}, nil
 		}

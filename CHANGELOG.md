@@ -4,6 +4,23 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### backend/cpu -- fuse ARM64 F64 soft-cap into one NEON pass (T-01M0W06V0GEVT, 2026-08-25)
+
+Apple ARM64 `GOEXPERIMENT=simd` soft-cap now fuses scale, degree-13 exponential
+reduction, tanh quotient, sign/NaN repair, and rescale into one two-lane assembly
+traversal. A dedicated capability gate leaves global F64 exp policy, existing
+sigmoid/SiLU/tanh consumers, plain builds, and non-ARM64 behavior unchanged.
+
+Nine alternating frozen-binary Apple M2 Pro pairs improve the production 64K
+operation **1.110x** by paired median with 7/9 wins and the 256K operation
+**1.148x** with 8/9 wins; independent medians improve 1.083x and 1.097x. Eight
+allocations remain unchanged. Direct leaf controls improve **3.658x** at 64K
+and **3.637x** at 256K. Dense cap-30/cap-50 accuracy, vector/tail bit identity,
+aliasing, special values and NaN payloads, disassembly, native plain/SIMD tests,
+and cross-platform test-binary builds pass. Neutral sigmoid/SiLU controls leave
+the shared leaf unchanged. Focused external perfscan PS6077 findings fall from
+three to two; the reusable fusion result is perfscan issue #917.
+
 ### backend/cpu -- compose ARM64 F64 tanh from the shared logistic leaf (T-01M0VW5BZ2FR1, 2026-08-25)
 
 Apple ARM64 `GOEXPERIMENT=simd` tanh now composes

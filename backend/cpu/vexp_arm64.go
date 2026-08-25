@@ -22,6 +22,10 @@ const (
 	// vtanhF64Fast promotes only the separately validated tanh composition;
 	// global vexpF64Fast and every other deferred F64 composite stay disabled.
 	vtanhF64Fast = true
+	// vsoftcapF64Fast promotes only the dedicated one-pass soft-cap kernel. It
+	// stays independent of vexpF64Fast so the other deferred F64 composites keep
+	// their exact scalar routes.
+	vsoftcapF64Fast = true
 )
 
 // vexpQuadsNeonF32 is the 4-wide NEON exp kernel (vexp_arm64.s):
@@ -222,6 +226,14 @@ func vlogF32(dst, src []float32) {
 //go:noescape
 func vlogisticPairsNeonF64(dst, src *float64, pairs, mulX int)
 
+// vsoftcapPairsNeonF64 evaluates two float64 lanes per pair in one traversal:
+// dst[i] = cap*tanh(src[i]/cap). The exponential reduction is the same one used
+// by vlogisticPairsNeonF64, with the soft-cap scale and sign repair fused around
+// it.
+//
+//go:noescape
+func vsoftcapPairsNeonF64(dst, src *float64, pairs int, cap float64)
+
 // expF64poly is the scalar twin of the NEON exp lane. Keeping the operation
 // sequence identical makes the vector body and the odd tail bit-for-bit equal.
 func expF64poly(x float64) float64 {
@@ -368,11 +380,34 @@ func vsoftplusF32(dst, src []float32) {
 	}
 }
 
-// vsoftcapF64 exists only so softCapKernelCPU type-checks on arm64; vexpF64Fast is
-// false here (amd64-only for now), so it is dead code.
+// softcapF64Arm64Poly is the scalar bit-twin of one vsoftcapPairsNeonF64 lane.
+// The explicit NaN branch mirrors the vector ordered-select before the final
+// cap multiply, retaining the divided input's payload and sign.
+func softcapF64Arm64Poly(x, cap float64) float64 {
+	zc := x / cap
+	a := math.Abs(zc)
+	z := 0.0
+	if a+a <= 708.0 {
+		z = expF64poly(-(a + a))
+	}
+	t := (1 - z) / (1 + z)
+	t = math.Copysign(t, zc)
+	if math.IsNaN(zc) {
+		t = zc
+	}
+	return t * cap
+}
+
+// vsoftcapF64 evaluates the Gemma-2 logit soft-cap in one ARM64 NEON pass.
+// Whole pairs use the assembly kernel; an odd tail uses the operation-identical
+// scalar twin so vector/tail boundaries do not change bits.
 func vsoftcapF64(dst, src []float64, cap float64) {
-	for i, v := range src {
-		dst[i] = cap * math.Tanh(v/cap)
+	n2 := len(src) &^ 1
+	if n2 > 0 {
+		vsoftcapPairsNeonF64(&dst[0], &src[0], n2>>1, cap)
+	}
+	for i := n2; i < len(src); i++ {
+		dst[i] = softcapF64Arm64Poly(src[i], cap)
 	}
 }
 

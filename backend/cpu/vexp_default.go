@@ -18,6 +18,7 @@ const (
 	vsiluF64Fast    = false
 	vsigmoidF64Fast = false
 	vtanhF64Fast    = false
+	vsoftcapF64Fast = false
 )
 
 // vexpF32 computes p[i] = exp(p[i]-m) in place and returns Σ p[i].
