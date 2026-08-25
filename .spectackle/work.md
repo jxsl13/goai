@@ -3985,7 +3985,7 @@ choice: One bounded BiasGELU recorder dispatch
 
 ## T-01M0VTHS92F97A747FM6FW5KQE Reuse the M2 F64 NEON logistic leaf for Softplus backward
 kind: task
-state: active
+state: approved
 created: 2026-08-25
 grilled: 2026-08-25 open=0
 targets: backend/cpu/vexp_arm64.go, backend/cpu/elementwise.go, backend/cpu/vsoftplus_grad_f64_arm64_test.go, docs/perf-notes-cpu.md, CHANGELOG.md
