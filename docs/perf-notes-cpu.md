@@ -648,3 +648,64 @@ Focused external perfscan v1.81.0 drops from four PS6077 findings to three. The
 general shared-transcendental-composition result is recorded on
 [perfscan issue #917](https://github.com/jxsl13/perfscan/issues/917). These are
 local same-machine kernel claims, not cross-library leadership evidence.
+
+## Single-pass F64 NEON soft-cap (T-01M0W06V0GEVT)
+
+The rejected three-pass ARM64 composition around the shared logistic leaf was
+fast in isolation but lost its advantage once two extra streaming transforms
+met the already-parallel scalar `math.Tanh` baseline. The replacement is a
+dedicated two-lane assembly boundary that performs `x/cap`, the degree-13
+exponential reduction for `exp(-2*abs(x/cap))`, the tanh quotient, sign repair,
+and `*cap` between one input load and one output store. It has its own
+`vsoftcapF64Fast` capability, leaving global F64 exp policy and the established
+sigmoid, SiLU, tanh, Softplus, and non-ARM64 routes unchanged.
+
+Implementation commit `ae26df41` was compiled into frozen baseline and
+candidate binaries that differ only in the ARM64 soft-cap capability flag.
+Both use Go 1.27.0 on Apple M2 Pro, macOS 26.5.1, `GOMAXPROCS=12`, a 750 ms
+benchmark time, one excluded warmup, and alternating process order. The host
+was variable, so the predeclared gate uses per-pair ratios and win counts:
+
+| pair | order | 64K baseline | 64K candidate | 256K baseline | 256K candidate |
+|---:|:---:|---:|---:|---:|---:|
+| 1 | B→C | 158.287 us | 162.497 us | 311.524 us | 357.442 us |
+| 2 | C→B | 152.532 us | 125.724 us | 322.667 us | 249.463 us |
+| 3 | B→C | 165.318 us | 148.926 us | 376.461 us | 327.997 us |
+| 4 | C→B | 177.045 us | 138.007 us | 502.242 us | 317.159 us |
+| 5 | B→C | 176.058 us | 175.038 us | 392.235 us | 363.193 us |
+| 6 | C→B | 182.866 us | 167.517 us | 413.898 us | 383.560 us |
+| 7 | B→C | 174.995 us | 145.240 us | 377.146 us | 338.624 us |
+| 8 | C→B | 223.502 us | 173.387 us | 734.044 us | 399.418 us |
+| 9 | B→C | 215.801 us | 254.122 us | 903.357 us | 472.379 us |
+
+| production shape | baseline median | candidate median | independent | paired median | wins |
+|---|---:|---:|---:|---:|---:|
+| F64 64K, cap 30 | 176.058 us | 162.497 us | **1.083x** | **1.110x** | 7/9 |
+| F64 256K, cap 30 | 392.235 us | 357.442 us | **1.097x** | **1.148x** | 8/9 |
+
+Both production cells retain eight allocations per operation. In a same-binary
+serial leaf control, 64K moves from 584.489 to 159.763 us (**3.658x** by
+independent medians, **3.602x** paired, 5/5 wins), and 256K moves from 2.330479
+ms to 640.754 us (**3.637x**, **3.552x** paired, 5/5). This separates the
+kernel gain from the smaller complete-operation gain after parallel scheduling
+and output allocation.
+
+The unchanged sigmoid production control is 1.033x by paired median with 3/5
+wins. The unchanged SiLU leaf is 0.996x by paired median with 1/5 wins and zero
+allocations on both sides; its normalized instruction stream is unchanged and
+the 0.45% direction is host noise, not a regression claim. Objdump confirms
+the new soft-cap loop contains vector divide, FMA reduction, quotient, sign
+bit operations, ordered NaN select, and one load/store traversal.
+
+Dense cap-30/cap-50 validation observes maximum absolute errors of 8.438e-15
+and 1.288e-14 over 262,145 values. Vector bodies and scalar tails are
+bit-identical, including aliasing, signed zeros, infinities, and exact quiet-NaN
+payloads. Native plain/SIMD tests and Linux ARM64, Linux AMD64 SIMD, and Windows
+AMD64 SIMD test-binary builds pass. The general lesson—when a vector leaf loses
+after materializing affine pre/post passes, fuse the complete algebraic
+consumer into the leaf—is recorded on
+[perfscan issue #917](https://github.com/jxsl13/perfscan/issues/917). Focused
+external perfscan v1.81.0 drops from three PS6077 findings to two, leaving
+ARM64 F64 Softplus forward and GELU as the remaining cross-partition gaps.
+These are local same-machine kernel claims, not cross-library leadership
+evidence.
