@@ -3982,3 +3982,12 @@ option: Resize hidden scratch for every Step shape
 option: Retain the capacity-wide unary control
 blocks: P-01M0SKYF35FYGB3RPMP0DDPCAW
 choice: One bounded BiasGELU recorder dispatch
+
+## T-01M0VTHS92F97A747FM6FW5KQE Reuse the M2 F64 NEON logistic leaf for Softplus backward
+kind: task
+state: approved
+created: 2026-08-25
+grilled: 2026-08-25 open=0
+targets: backend/cpu/vexp_arm64.go, backend/cpu/elementwise.go, backend/cpu/vsoftplus_grad_f64_arm64_test.go, docs/perf-notes-cpu.md, CHANGELOG.md
+
+Under ARM64-F64-EXP-SCOPE-001, replace only the Apple ARM64 GOEXPERIMENT=simd scalar vsoftplusGradF64 exponential loop with the already validated two-lane vsigmoidF64 leaf followed by an in-place g multiply. Keep global vexpF64Fast false and leave Softplus forward, tanh, soft-cap, GELU, WKV, SSM, default builds, and AMD64 behavior unchanged. Preserve the formula dx=g*sigmoid(x), allocation structure, parallel chunking, stable sign split, special values, and deterministic vector/tail equality. Add ARM64 SIMD accuracy and boundary tests against both sigmoidF64poly and the reference backend, including odd lengths, signed zeros, infinities, and NaNs. Gate promotion on nine alternating frozen-binary Apple M2 production OpSoftplusBackward F64 measurements at a Mamba-shaped 256K workload with unchanged allocations, plus a same-binary scalar control and compiler/disassembly evidence for the logistic leaf. Run backend/cpu plain and GOEXPERIMENT=simd suites, focused native race, Linux ARM64/AMD64 and Darwin AMD64 plain/SIMD compile gates, Rosetta AMD64 SIMD regression tests, changed Markdown lint, external perfscan v1.81.0 through GOPROXY=direct, and make preflight. Report the generalizable derivative-reuse result to github.com/jxsl13/perfscan.
