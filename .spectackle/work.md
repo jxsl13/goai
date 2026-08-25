@@ -3982,3 +3982,11 @@ option: Resize hidden scratch for every Step shape
 option: Retain the capacity-wide unary control
 blocks: P-01M0SKYF35FYGB3RPMP0DDPCAW
 choice: One bounded BiasGELU recorder dispatch
+
+## P-01M0V9AJGTFXNTP2BSGMQ2XGTN Raise the supported build and CI toolchain to Go 1.27
+kind: proposal
+state: draft
+created: 2026-08-25
+targets: go.mod, README.md, .github/workflows/ci.yml
+
+Rebuild GoAI with the installed Go 1.27.0 release and make that toolchain explicit across the module contract, public installation requirement, and every CI lane. Validate module-tidy stability, pure-Go portability, cgo/race, Metal, Vulkan, CUDA compile coverage, and representative M2 performance against the Go 1.26.6 incumbent where both toolchains can build the same current-main source. Preserve historical evidence and comments that intentionally describe Go 1.26 behavior; change only live compatibility declarations. Definition of done: go.mod requires Go 1.27, README requires Go 1.27+, all setup-go lanes use 1.27.x, the exact Go 1.27 head passes full preflight and accelerator gates, and any compiler performance movement is reported honestly.
