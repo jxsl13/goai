@@ -3966,3 +3966,12 @@ option: Resize hidden scratch for every Step shape
 option: Retain the capacity-wide unary control
 blocks: P-01M0SKYF35FYGB3RPMP0DDPCAW
 choice: One bounded BiasGELU recorder dispatch
+
+## P-01M0W38CXRFN9TJ70JBE2RX3EQ Fuse ARM64 F64 Softplus into one NEON pass
+kind: proposal
+state: approved
+created: 2026-08-25
+grilled: 2026-08-25 open=0
+targets: go:cpu.vsoftplusF64~2, backend/cpu/vexp_arm64.s, backend/cpu/elementwise.go, backend/cpu/vsoftplus_f64_test.go, backend/cpu/bench_test.go, docs/perf-notes-cpu.md, CHANGELOG.md
+
+Replace the Apple ARM64 scalar math.Exp plus math.Log1p Softplus loop with a dedicated two-lane Plan 9 NEON kernel. Reuse the proven degree-13 F64 exp reduction and the AMD64 Cephes log1p rational, but keep a separate vsoftplusF64Fast gate so GELU and the global vexpF64Fast route remain unchanged. Preserve ordered NaN payloads, signed-zero semantics, infinities, aliasing, tail parity, input immutability, non-ARM64 fallbacks, and existing F64 model tolerances. Accept only with direct same-binary and production OpSoftplus A/B wins at 64K and 256K under interleaved median methodology, unchanged allocation behavior, full preflight, SIMD/race validation, and Linux/Windows cross-builds. Record raw measurements in docs/perf-notes-cpu.md and report the general scalar transcendental composite gap to perfscan.
