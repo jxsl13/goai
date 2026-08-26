@@ -22,6 +22,9 @@ const (
 	// vtanhF64Fast promotes only the separately validated tanh composition;
 	// global vexpF64Fast and every other deferred F64 composite stay disabled.
 	vtanhF64Fast = true
+	// vsoftplusF64Fast promotes only the separately validated one-pass Softplus
+	// composite; the global vexpF64Fast and GELU route remain scalar and exact.
+	vsoftplusF64Fast = true
 	// vsoftcapF64Fast promotes only the dedicated one-pass soft-cap kernel. It
 	// stays independent of vexpF64Fast so the other deferred F64 composites keep
 	// their exact scalar routes.
@@ -234,6 +237,13 @@ func vlogisticPairsNeonF64(dst, src *float64, pairs, mulX int)
 //go:noescape
 func vsoftcapPairsNeonF64(dst, src *float64, pairs int, cap float64)
 
+// vsoftplusPairsNeonF64 evaluates two float64 lanes per pair in one traversal:
+// dst[i] = max(src[i], 0) + log1p(exp(-abs(src[i]))). It combines the shared
+// exponential reduction with the Cephes double-precision log rational.
+//
+//go:noescape
+func vsoftplusPairsNeonF64(dst, src *float64, pairs int)
+
 // expF64poly is the scalar twin of the NEON exp lane. Keeping the operation
 // sequence identical makes the vector body and the odd tail bit-for-bit equal.
 func expF64poly(x float64) float64 {
@@ -358,15 +368,57 @@ func vsigmoidF64(dst, src []float64) {
 	}
 }
 
-// vsoftplusF64 exists only so softplusKernelCPU type-checks on arm64; vexpF64Fast
-// is false here (amd64-only for now), so it is dead code.
+// softplusF64Arm64Poly is the scalar bit-twin of one vsoftplusPairsNeonF64
+// lane. The explicit NaN return mirrors the vector ordered-select repair.
+func softplusF64Arm64Poly(x float64) float64 {
+	if math.IsNaN(x) {
+		return x
+	}
+	ax := math.Float64frombits(math.Float64bits(x) & 0x7fffffffffffffff)
+	u := 0.0
+	if ax <= 708.0 {
+		u = expF64poly(-ax)
+	}
+	v := 1 + u
+	var f, e float64
+	if v >= 1.4142135623730951 {
+		f, e = v*0.5-1, 1
+	} else {
+		f, e = v-1, 0
+	}
+	z := f * f
+	p := 1.01875663804580931796e-4
+	p = math.FMA(p, f, 4.97494994976747001425e-1)
+	p = math.FMA(p, f, 4.70579119878881725854e0)
+	p = math.FMA(p, f, 1.44989225341610930846e1)
+	p = math.FMA(p, f, 1.79368678507819816313e1)
+	p = math.FMA(p, f, 7.70838733755885391666e0)
+	q := f + 1.12873587189167450590e1
+	q = math.FMA(q, f, 4.52279145837532221105e1)
+	q = math.FMA(q, f, 8.29875266912776603211e1)
+	q = math.FMA(q, f, 7.11544750618563894466e1)
+	q = math.FMA(q, f, 2.31251620126765340583e1)
+	y := f * (z * p / q)
+	y = math.FMA(e, -2.121944400546905827679e-4, y)
+	y -= z * 0.5
+	r := f + y
+	r = math.FMA(e, 6.93359375e-1, r)
+	mx := x
+	if mx < 0 {
+		mx = 0
+	}
+	return mx + r
+}
+
+// vsoftplusF64 evaluates Softplus in one ARM64 NEON pass. Whole pairs use the
+// assembly kernel; an odd tail follows the operation-identical scalar twin.
 func vsoftplusF64(dst, src []float64) {
-	for i, v := range src {
-		if v > 0 {
-			dst[i] = v + math.Log1p(math.Exp(-v))
-		} else {
-			dst[i] = math.Log1p(math.Exp(v))
-		}
+	n2 := len(src) &^ 1
+	if n2 > 0 {
+		vsoftplusPairsNeonF64(&dst[0], &src[0], n2>>1)
+	}
+	for i := n2; i < len(src); i++ {
+		dst[i] = softplusF64Arm64Poly(src[i])
 	}
 }
 

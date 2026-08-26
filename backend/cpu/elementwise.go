@@ -627,7 +627,7 @@ func softplusKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attr
 	case tensor.F64:
 		out := tensor.NewOn(ctx.Device(), tensor.F64, in[0].Shape())
 		d, o := xc.Storage().F64(), out.Storage().F64()
-		if vexpF64Fast {
+		if vsoftplusF64Fast {
 			parallel(len(o), func(lo, hi int) { vsoftplusF64(o[lo:hi], d[lo:hi]) })
 			return []*tensor.Tensor{out}, nil
 		}
@@ -974,8 +974,9 @@ func init() {
 	reg(backend.OpSigmoid, sigmoidKernelCPU)
 	reg(backend.OpSiLU, siluKernelCPU)
 
-	// F64-only: softplus (Mamba/Jamba Δ) rides the amd64 vsoftplusF64 SIMD kernel;
-	// F32 stays on the ref fallback. The non-SIMD build runs the scalar formula.
+	// F64-only: softplus (Mamba/Jamba Δ) rides the architecture-specific
+	// vsoftplusF64 SIMD kernel; F32 stays on the ref fallback. Non-SIMD builds
+	// run the scalar formula.
 	std.add(backend.OpSoftplus, tensor.F64, softplusKernelCPU)
 	std.add(backend.OpSoftplus, tensor.F32, softplusKernelCPU)
 	std.add(backend.OpSoftplusBackward, tensor.F64, softplusBackwardKernelCPU)
