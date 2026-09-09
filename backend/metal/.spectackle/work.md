@@ -38,6 +38,7 @@ choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4
 kind: proposal
 state: draft
 created: 2026-09-09
+grilled: 2026-09-09 open=0
 targets: go:metal.TestPrefillOpCosts, TIMING-ASSERTIONS-SKIP-ON-RUNNERS-001
 
 Existing CI run34390073218 at76d889fb failed only cgo+metal/macOS TestPrefillOpCosts: RMSNorm68.02us exceeded60us absoluteceiling. This source is unchanged from mainb9c05946 and prior checkpoint72410b07 passed; do not retry until lucky or weakenfullthreshold. Existing TIMING-ASSERTIONS-SKIP-ON-RUNNERS-001 requires timing budgets skip under testing.Short and correctness assertions remain unconditional; precedent archivedP-01M0QV7XJ3EW6 handles RoPE timing. Independent branch frommain, no GELU runtime or failedqualification waiver. Modify only TestPrefillOpCosts: in short mode run one recorded operation per named case to preserve devicebuffer,recorder,operation-error,commit/wait/free smoke behavior; do not run16/128×15 timing workload or compare wallclockceilings. Nonshort measurement protocol,15repeats,min slope,shapes and all60/90/40/600/1200us thresholds byte/semantic unchanged. Keep all numerical tests unaffected. Freshimplementerandverifier; realM2 shortsmokeandfulltiming tests default+SIMD serialized beforeallocationdiagnostics. Fullmodebaseline/candidate logs retained but no kernelperformanceclaim. Verify APIerrorhandlingandalltestlimits source diff. Proper separatePR, allCIjobsANDsteps greenbeforemerge, remoteexactbranchdeleteaftermerge.
