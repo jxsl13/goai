@@ -65,6 +65,7 @@ kind: task
 state: draft
 created: 2026-09-09
 parent: P-01M246EFHMFR3VAR37V7FBSSS8
+grilled: 2026-09-09 open=0
 targets: go:autograd.unaryVJP, go:autograd.reluVJP, go:autograd.tanhVJP, go:autograd.sigmoidVJP
 
 GOAL: implement and test an exact candidate removing per-element bounds checks from the eight F32/F64 typed loops in unaryVJP/reluVJP/tanhVJP/sigmoidVJP, and provide reproducible whole-operation benchmarks. This task is an experiment, not permission to claim a speedup. Parent P-01M246EFHMFR3 freezes performance qualification, which root executes only after independent verification.
