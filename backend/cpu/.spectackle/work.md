@@ -41,6 +41,7 @@ state: draft
 created: 2026-09-09
 parent: P-01M23BZPZNF9VV3FF326AQX28E
 refs: R-01M23VWNB5FRP85PW5NSQWY5QA
+grilled: 2026-09-09 open=0
 targets: backend/cpu/control_alloc_sites_test.go
 
 GOAL: implement matched, opt-in, test-only raw allocation-site capture for the reviewed Softplus diagnostic, without changing runtime code or claiming performance/attribution. Consume R-01M23VWNB5FRP; parent P-01M23BZPZNF9V stays active and both GELU rejections plus ARM64-F64-GELU-CONTROLS-001 remain binding. Architecture remains the existing Go Context/Execute CPU path; no dispatch/kernel/storage/scheduler changes or dependencies.
