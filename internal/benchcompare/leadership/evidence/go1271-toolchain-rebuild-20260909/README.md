@@ -92,10 +92,15 @@ tests, and complete-tree scan (1,890 advisory findings; compatibility scan:
 Tidy, gofmt, changed-document lint, and parsing/counting all ten CI selectors
 also pass.
 
-Independent final verification and every PR CI lane must pass before merge.
-In particular,
-inspect the actual SIMD job and step conclusions: `continue-on-error` means
-the overall workflow conclusion alone is insufficient.
+An independent verifier repeated the full pure-Go and native SIMD gates,
+Linux AMD64 SIMD build/test compilation, document/YAML/shell checks, and
+recomputed every sample count, median, pair direction, p-value, and hash.
+All 16 jobs in [CI run 34357138053](https://github.com/jxsl13/goai/actions/runs/34357138053)
+passed at `8a50cd38f2936227f2766ad7d7c863b8b197b714`, with zero failed steps,
+including the actual AMD64 SIMD execution gates. The final archival commit
+must also pass its PR checks before merge. Checking individual step results
+matters because `continue-on-error` makes an overall workflow conclusion
+alone insufficient evidence for SIMD.
 
 Spectackle 0.10.0 EARS lint reports zero errors and 136 inherited prose
 warnings. Independent review repaired six rules' path-only `applies` lists
@@ -106,7 +111,9 @@ contracts without source anchors. Both bundles match the base commit.
 Declaring them logical is correctly refused by this CLI because the rules are
 unbound; arbitrary source anchors would misrepresent their scope. These are
 explicit existing spec-context debt, so the whole check is not reported as
-clean. The supported server has no rule/context relocation operation.
+clean. The supported server has no rule/context relocation operation; this
+migration limitation is reported in
+[Spectackle issue #284](https://github.com/jxsl13/spectackle/issues/284).
 
 This update supersedes stale PR #1246, which targeted an older feature branch
 and duplicated already merged changes. Its `ReadRawFile` returned tensor
