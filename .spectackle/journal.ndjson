@@ -1464,3 +1464,4 @@
 {"t":"2026-09-09T15:06:43Z","eid":"939029e9c27bdf61","ag":"ag-e70b","ev":"create","id":"R-01M23B9YZ1E16ANNE778WX5G7T","k":"research","ti":"Design a fused M2 F64 exact-erf GELU SIMD leaf with truthful numerical and caller gates"}
 {"t":"2026-09-09T15:18:35Z","eid":"9f67f391e6665061","ag":"ag-4010","ev":"create","id":"P-01M23BZPZNF9VV3FF326AQX28E","k":"proposal","ti":"Measure explicitly gated ARM64 F64 exact-erf GELU intrinsics on Go 1.27.1"}
 {"t":"2026-09-09T15:19:39Z","eid":"b7062a9ad412594e","ag":"ag-ae6c","ev":"grill","id":"P-01M23BZPZNF9VV3FF326AQX28E","gr":"2026-09-09 open=1","hash":"5df1e2c6e9fc85a02d4d5a4a397d3f1df8e3e6fb1cd262283f55c89ed546d191","open":1,"keys":["blast:13"]}
+{"t":"2026-09-09T15:23:23Z","eid":"995bb2262422ca33","ag":"ag-912b","ev":"grill","id":"P-01M23BZPZNF9VV3FF326AQX28E","gr":"2026-09-09 open=1","hash":"5df1e2c6e9fc85a02d4d5a4a397d3f1df8e3e6fb1cd262283f55c89ed546d191","open":1,"keys":["blast:13"]}

@@ -457,10 +457,10 @@ ARM64-F64-GELU-NUMERIC-001	go:cpu.geluBackwardF64KernelCPU	backend/cpu/activatio
 ARM64-F64-GELU-SCOPE-001	go:cpu.geluKernelCPU	backend/cpu/elementwise.go	272-317	7dd24a76d50a579d	b75a6cd1445f94e7
 ARM64-F64-GELU-SCOPE-001	go:cpu.geluBackwardF64KernelCPU	backend/cpu/activation_bwd_f64.go	43-55	260f873c068735c6	b75a6cd1445f94e7
 ARM64-F64-GELU-SCOPE-001	go:cpu.vexpF64Fast~2	backend/cpu/vexp_arm64.go	13-13	816a1c01e6bd8ca7	b75a6cd1445f94e7
-ARM64-F64-GELU-FALLBACK-001	go:cpu.vgeluF64~2	backend/cpu/vexp_arm64.go	480-485	0b8acb8b67665a5a	499ac7f317cfb402
-ARM64-F64-GELU-FALLBACK-001	go:cpu.geluBackwardF64KernelCPU	backend/cpu/activation_bwd_f64.go	43-55	260f873c068735c6	499ac7f317cfb402
-ARM64-F64-GELU-PERF-001	go:cpu.geluKernelCPU	backend/cpu/elementwise.go	272-317	7dd24a76d50a579d	d1de1e9f28d5b73a
-ARM64-F64-GELU-PERF-001	go:cpu.geluBackwardF64KernelCPU	backend/cpu/activation_bwd_f64.go	43-55	260f873c068735c6	d1de1e9f28d5b73a
-ARM64-F64-GELU-EXP-ORDER-001	go:cpu.geluBackwardF64KernelCPU	backend/cpu/activation_bwd_f64.go	43-55	260f873c068735c6	35a6c7a8cc8e6c27
+ARM64-F64-GELU-FALLBACK-001	go:cpu.vgeluF64~2	backend/cpu/vexp_arm64.go	480-485	0b8acb8b67665a5a	3d0c94560eda9b5e
+ARM64-F64-GELU-FALLBACK-001	go:cpu.geluBackwardF64KernelCPU	backend/cpu/activation_bwd_f64.go	43-55	260f873c068735c6	3d0c94560eda9b5e
+ARM64-F64-GELU-PERF-001	go:cpu.geluKernelCPU	backend/cpu/elementwise.go	272-317	7dd24a76d50a579d	2989bf34dede2101
+ARM64-F64-GELU-PERF-001	go:cpu.geluBackwardF64KernelCPU	backend/cpu/activation_bwd_f64.go	43-55	260f873c068735c6	2989bf34dede2101
+ARM64-F64-GELU-EXP-ORDER-001	go:cpu.geluBackwardF64KernelCPU	backend/cpu/activation_bwd_f64.go	43-55	260f873c068735c6	a70b7eaf808c98e4
 ARM64-F64-GELU-CONTROLS-001	go:cpu.geluKernelCPU	backend/cpu/elementwise.go	272-317	7dd24a76d50a579d	ba1e25322bec2940
 ARM64-F64-GELU-CONTROLS-001	go:cpu.geluBackwardF64KernelCPU	backend/cpu/activation_bwd_f64.go	43-55	260f873c068735c6	ba1e25322bec2940
