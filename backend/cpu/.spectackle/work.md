@@ -41,6 +41,7 @@ state: draft
 created: 2026-09-09
 parent: P-01M23BZPZNF9VV3FF326AQX28E
 refs: R-01M23B9YZ1E16ANNE778WX5G7T
+grilled: 2026-09-09 open=1
 targets: backend/cpu/vgelu_f64_arm64.go, backend/cpu/vgelu_f64_neon_test.go
 
 Bounded V2 follow-up under approved active parent P-01M23BZPZNF9V. V1 T-01M23C5EWPE8P was numerically correct but rejected: all24 large target cells passed, small n2048 active-forward Execute regressed68.95–76.65% in all3campaigns/GMP1,12; independent evidence at internal/benchcompare/leadership/evidence/m2-f64-gelu-neon-20260909. Research R-01M23B9YZ1E16 and perfscan966. No external leadership claim.
