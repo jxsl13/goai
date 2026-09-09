@@ -3,6 +3,7 @@
 package cpu
 
 import (
+	"fmt"
 	"math"
 	"slices"
 	"testing"
@@ -195,39 +196,71 @@ func TestVGELUF64NeonEligibleAccuracyAndBodyTail(t *testing.T) {
 
 func TestVGELUF64NeonExactFallbackWholeCall(t *testing.T) {
 	badX := []float64{math.Nextafter(32, math.Inf(1)), math.Nextafter(-32, math.Inf(-1)), math.Inf(1), math.Inf(-1), math.NaN()}
-	for _, bad := range badX {
-		x, g := []float64{0.5, bad, -0.75}, []float64{1, 2, -1}
-		gotF, gotD := make([]float64, 3), make([]float64, 3)
-		xBefore, gBefore := slices.Clone(x), slices.Clone(g)
-		vgeluF64(gotF, x)
-		vgeluGradF64(gotD, x, g)
-		if !equalF64Bits(x, xBefore) || !equalF64Bits(g, gBefore) {
-			t.Fatal("fallback changed input")
-		}
-		for i := range x {
-			assertGELUF64Value(t, gotF[i], geluF64Oracle(x[i]))
-			assertGELUF64Value(t, gotD[i], geluGradF64Oracle(x[i], g[i]))
-		}
-		xAlias := slices.Clone(x)
-		vgeluF64(xAlias, xAlias)
-		for i := range x {
-			assertGELUF64Value(t, xAlias[i], geluF64Oracle(x[i]))
+	for _, n := range []int{3, 4} {
+		for badIndex := 0; badIndex < n; badIndex++ {
+			for badCase, bad := range badX {
+				t.Run(fmt.Sprintf("badx/n%d/index%d/case%d", n, badIndex, badCase), func(t *testing.T) {
+					x, g := make([]float64, n), make([]float64, n)
+					for i := range x {
+						x[i], g[i] = -0.75+float64(i)/3, -1+float64(i)
+					}
+					x[badIndex] = bad
+					xBefore, gBefore := slices.Clone(x), slices.Clone(g)
+					wantF, wantD := make([]float64, n), make([]float64, n)
+					for i := range x {
+						wantF[i], wantD[i] = geluF64Oracle(x[i]), geluGradF64Oracle(x[i], g[i])
+					}
+					gotF, gotD := make([]float64, n), make([]float64, n)
+					vgeluF64(gotF, x)
+					vgeluGradF64(gotD, x, g)
+					if !equalF64Bits(x, xBefore) || !equalF64Bits(g, gBefore) {
+						t.Fatal("fallback changed input")
+					}
+					xForwardAlias, xBackwardAlias, gBackwardAlias := slices.Clone(x), slices.Clone(x), slices.Clone(g)
+					vgeluF64(xForwardAlias, xForwardAlias)
+					vgeluGradF64(xBackwardAlias, xBackwardAlias, g)
+					vgeluGradF64(gBackwardAlias, x, gBackwardAlias)
+					for i := range x {
+						for _, got := range []float64{gotF[i], xForwardAlias[i]} {
+							assertGELUF64Value(t, got, wantF[i])
+						}
+						for _, got := range []float64{gotD[i], xBackwardAlias[i], gBackwardAlias[i]} {
+							assertGELUF64Value(t, got, wantD[i])
+						}
+					}
+				})
+			}
 		}
 	}
 	badG := []float64{math.Inf(1), math.Inf(-1), math.NaN(), math.Nextafter(1e-150, 0), math.Nextafter(-1e-150, 0), math.Nextafter(8, math.Inf(1)), math.Nextafter(-8, math.Inf(-1))}
-	for _, bad := range badG {
-		x, g := []float64{0.5, -0.75, 1}, []float64{1, bad, -1}
-		got := make([]float64, 3)
-		vgeluGradF64(got, x, g)
-		for i := range x {
-			assertGELUF64Value(t, got[i], geluGradF64Oracle(x[i], g[i]))
-		}
-		xAlias, gAlias := slices.Clone(x), slices.Clone(g)
-		vgeluGradF64(xAlias, xAlias, g)
-		vgeluGradF64(gAlias, x, gAlias)
-		for i := range x {
-			assertGELUF64Value(t, xAlias[i], geluGradF64Oracle(x[i], g[i]))
-			assertGELUF64Value(t, gAlias[i], geluGradF64Oracle(x[i], g[i]))
+	for _, n := range []int{3, 4} {
+		for badIndex := 0; badIndex < n; badIndex++ {
+			for badCase, bad := range badG {
+				t.Run(fmt.Sprintf("badg/n%d/index%d/case%d", n, badIndex, badCase), func(t *testing.T) {
+					x, g := make([]float64, n), make([]float64, n)
+					for i := range x {
+						x[i], g[i] = -0.75+float64(i)/3, -1+float64(i)
+					}
+					g[badIndex] = bad
+					xBefore, gBefore := slices.Clone(x), slices.Clone(g)
+					want, got := make([]float64, n), make([]float64, n)
+					for i := range x {
+						want[i] = geluGradF64Oracle(x[i], g[i])
+					}
+					vgeluGradF64(got, x, g)
+					if !equalF64Bits(x, xBefore) || !equalF64Bits(g, gBefore) {
+						t.Fatal("fallback changed input")
+					}
+					xAlias, gAlias := slices.Clone(x), slices.Clone(g)
+					vgeluGradF64(xAlias, xAlias, g)
+					vgeluGradF64(gAlias, x, gAlias)
+					for i := range x {
+						for _, v := range []float64{got[i], xAlias[i], gAlias[i]} {
+							assertGELUF64Value(t, v, want[i])
+						}
+					}
+				})
+			}
 		}
 	}
 }
@@ -297,5 +330,95 @@ func TestVGELUF64NeonProductionForward(t *testing.T) {
 	}
 	for i, v := range got[0].Storage().F64() {
 		assertGELUF64Close(t, v, want[0].Storage().F64()[i])
+	}
+}
+
+func TestVGELUF64NeonPublicReachability(t *testing.T) {
+	be, ok := backend.Get(backend.CPU)
+	if !ok {
+		t.Fatal("cpu backend unavailable")
+	}
+	for _, n := range []int{3, 4, 200003, 262144} {
+		t.Run(fmt.Sprintf("forward/n%d", n), func(t *testing.T) {
+			x := make([]float64, n)
+			witness := false
+			for i := range x {
+				x[i] = -8 + 16*float64((i*1137)%10000)/10000
+				for step := 1; step < 10000 && !witness; step++ {
+					candidate := -8 + 16*float64(step)/10000
+					one := []float64{0}
+					vgeluF64(one, []float64{candidate})
+					if math.Float64bits(one[0]) != math.Float64bits(geluF64Oracle(candidate)) {
+						x[i], witness = candidate, true
+					}
+				}
+			}
+			if !witness {
+				t.Fatal("no forward scalar-reference bit witness found")
+			}
+			want := make([]float64, n)
+			vgeluF64(want, x)
+			in := tensor.New(tensor.F64, tensor.Shape{n})
+			copy(in.Storage().F64(), x)
+			got, err := backend.Execute(backend.NewContext().WithBackend(be), backend.OpGELU, []*tensor.Tensor{in}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := range want {
+				assertGELUF64Value(t, got[0].Storage().F64()[i], want[i])
+			}
+		})
+		t.Run(fmt.Sprintf("backward/n%d", n), func(t *testing.T) {
+			x, g := make([]float64, n), make([]float64, n)
+			witness := false
+			for i := range x {
+				x[i], g[i] = -8+16*float64((i*1777)%10000)/10000, 0.75+float64(i%17)/10
+			}
+			for step := 1; step < 10000 && !witness; step++ {
+				candidate := -8 + 16*float64(step)/10000
+				one := []float64{0}
+				vgeluGradF64(one, []float64{candidate}, []float64{1.25})
+				if math.Float64bits(one[0]) != math.Float64bits(geluGradF64Oracle(candidate, 1.25)) {
+					x[0], g[0], witness = candidate, 1.25, true
+				}
+			}
+			if !witness {
+				t.Fatal("no backward scalar-reference bit witness found")
+			}
+			want := make([]float64, n)
+			vgeluGradF64(want, x, g)
+			xBase, gBase := tensor.New(tensor.F64, tensor.Shape{n + 2}), tensor.New(tensor.F64, tensor.Shape{n + 2})
+			copy(xBase.Storage().F64()[1:], x)
+			copy(gBase.Storage().F64()[1:], g)
+			xView, err := xBase.Slice(0, 1, n+1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			gView, err := gBase.Slice(0, 1, n+1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			xBefore, gBefore := slices.Clone(xBase.Storage().F64()), slices.Clone(gBase.Storage().F64())
+			recorder := &geluF64NeonRecorder{}
+			got, err := backend.Execute(backend.NewContext().WithBackend(be).WithRecorder(recorder), backend.OpGELUBackward, []*tensor.Tensor{xView, gView}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if recorder.calls != 1 {
+				t.Fatalf("recorder calls=%d, want 1", recorder.calls)
+			}
+			if got[0].Dtype() != tensor.F64 || !got[0].Shape().Equal(xView.Shape()) || !got[0].IsContiguous() || got[0].Offset() != 0 {
+				t.Fatal("bad backward output metadata")
+			}
+			if got[0].Storage() == xBase.Storage() || got[0].Storage() == gBase.Storage() {
+				t.Fatal("backward output aliases input")
+			}
+			if !equalF64Bits(xBase.Storage().F64(), xBefore) || !equalF64Bits(gBase.Storage().F64(), gBefore) {
+				t.Fatal("backward Execute changed input storage")
+			}
+			for i := range want {
+				assertGELUF64Value(t, got[0].Storage().F64()[i], want[i])
+			}
+		})
 	}
 }
