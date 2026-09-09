@@ -15,6 +15,13 @@ path is optimized to its ceiling and still loses by the §C3 threshold.
 
 ## Running
 
+The [2026-09-09 Go 1.27.1 rebuild evidence](../internal/benchcompare/leadership/evidence/go1271-toolchain-rebuild-20260909/README.md)
+pins the source, compilers, frozen binaries, raw alternating pairs, and
+confirmation run. It records no compiler speedup: an initial 22% parallel
+MoE slowdown did not reproduce significantly in a longer focused campaign.
+The live module and CI use the exact Go 1.27.1 patch; historical measurements
+retain their original toolchain declarations.
+
 ```sh
 make bench                       # all benchmarks, CGO_ENABLED=0
 go test ./backend/ref -bench .   # a single package

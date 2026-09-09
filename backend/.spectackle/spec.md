@@ -16,12 +16,12 @@ schema: v1
 - T-01M0GFJMPQE4GANWAQM376TK7B Implement and gate exact arm64 F32 Neg: Shipped exact arm64 F32 Neg sign-bit toggling with a portable exact fallback, a measured 1,048,576-element serial/parallel crossover, and default/SIMD M2 host routing through 16,777,216 elements. Every frozen CPU and Metal promotion cell passed across three count-7 campaigns. Evidence lives at internal/benchcompare/leadership/evidence/m2-arm64-neg-acceleration-20260820/README.md; perfscan issue 78 [body truncated at tombstone retention cap]
 - T-01KYJREHNVE9QS89QB05TW5SWV Memoize kernel resolution in Execute and stop Metal re-entering the dispatcher: Implemented a generation-aware dense Execute resolution cache keyed by exact registered backend identity, operation, and dtype. The registry publishes immutable atomic identity tables; generation changes from Register, RegisterReference, RegisterDefault, or SetPreference invalidate warmed entries. Dynamic opBackends routes and unregistered or same-name wrappers deliberately remain live and uncache [body truncated at tombstone retention cap]
 
-## MEASURED-METAL-UNARY-ROUTE-001 {applies: go:metal.unaryF32,backend/metal/unary_route_arm64_default.go}
+## MEASURED-METAL-UNARY-ROUTE-001 {applies: go:metal.unaryF32,go:metal.measuredHostUnaryMaxElements}
 WHEN a contiguous offset-zero F32 unary other than Abs is requested, the backend SHALL route Neg through CPU up to 16,777,216 elements, ReLU/Sqrt through CPU up to 4,194,304, and Exp/Log/Tanh/Sigmoid through CPU up to 2,048; otherwise use direct Metal.
 
 Rationale: Three independent 100x count-7 M2 campaigns measure exact CPU Neg 3.14x-3.98x faster than direct Metal through 16,777,216 elements; all other unary ceilings remain unchanged.
 
-## MEASURED-METAL-SIMD-UNARY-ROUTE-001 {applies: go:metal.unaryF32,backend/metal/unary_route_arm64simd.go}
+## MEASURED-METAL-SIMD-UNARY-ROUTE-001 {applies: go:metal.unaryF32,go:metal.measuredHostUnaryMaxElements~2}
 WHEN a contiguous offset-zero F32 unary other than Abs is requested under GOEXPERIMENT=simd, the backend SHALL route Neg through CPU up to 16,777,216 elements and Exp/Log/Tanh/ReLU/Sigmoid/Sqrt through CPU up to 4,194,304; otherwise use direct Metal.
 
 Rationale: Three independent 100x count-7 M2 SIMD campaigns measure exact CPU Neg 3.01x-3.76x faster than direct Metal through 16,777,216 elements; all other unary ceilings remain unchanged.
@@ -29,7 +29,7 @@ Rationale: Three independent 100x count-7 M2 SIMD campaigns measure exact CPU Ne
 ## MEASURED-METAL-UNARY-FALLBACK-001 {applies: go:metal.unaryF32,go:metal.measuredHostUnaryCandidate}
 WHERE measured host unary execution, WHEN an F32 unary operation is requested, the Metal unary selector SHALL the system shall execute CPU with a nil nested recorder; all other inputs and unmeasured architectures shall use direct Metal.
 
-## MEASURED-METAL-UNARY-FALLBACK-002 {applies: go:metal.unaryF32,backend/metal/unary_route_arm64_default.go,backend/metal/unary_route_arm64simd.go}
+## MEASURED-METAL-UNARY-FALLBACK-002 {applies: go:metal.unaryF32,go:metal.measuredHostUnaryMaxElements,go:metal.measuredHostUnaryMaxElements~2}
 WHEN contiguous offset-zero F32 Abs is requested on Apple arm64, the backend SHALL route through CPU up to 16,777,216 elements; otherwise use direct Metal.
 
 Rationale: Three route-extension and three production-selector campaigns per build mode win every frozen cell. Route-extension minima at 8M/16M are 2.800x/2.983x; production-selector minima are 2.816x/2.844x.

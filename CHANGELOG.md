@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### build -- pin the Go 1.27.1 patch toolchain (T-01M234MSKYE6D, 2026-09-09)
+
+The module floor, installation requirement, and all ten CI toolchain
+declarations now select Go 1.27.1. Current-main kernels and GGUF ownership APIs
+are unchanged. Same-source M2 compiler measurements and a focused MoE repeat
+are retained in the
+[rebuild evidence](internal/benchcompare/leadership/evidence/go1271-toolchain-rebuild-20260909/README.md).
+An initial 22% parallel MoE slowdown did not reproduce significantly in the
+confirmation campaign; no compiler speedup or equivalence is claimed.
+
 ### backend/cpu -- fuse ARM64 F64 Softplus into one NEON pass (T-01M0W39FV0F7Z, 2026-08-25)
 
 Apple ARM64 `GOEXPERIMENT=simd` Softplus now fuses its exponential reduction,

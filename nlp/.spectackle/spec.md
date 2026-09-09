@@ -30,7 +30,7 @@ Rationale: Without the control, a failing gate cannot distinguish real drift fro
 - R-01KYZDQNMFF599ECM5A10M89GW nlp decode paths: four ranked candidates, MoE dense evaluation the largest: Consumed: candidate 1 shipped and measured. JambaMoE now evaluates only routed experts — BenchmarkJambaDecode -23.7 percent ns/op, -20.2 percent B/op, -20.8 percent allocs, 8 samples per arm interleaved in BOTH orders at -benchtime=200x. Gated by TestJambaMoESkippingUnselectedExpertsIsExact, an EXACT-equality comparison against a dense reference built from the public API, with a fixture floor pr [body truncated at tombstone retention cap]
 - T-01KYJQZE63ERCSRSWEFEJAFE69 Rewrite keepSinkRecent as typed row copies: compact
 
-## EAGLE-SMOOTHL1-FUSION-001 {applies: go:nlp.eagleSmoothL1,backend/cpu/smoothl1.go,backend/ref/smoothl1.go,autograd/vjp_smoothl1.go}
+## EAGLE-SMOOTHL1-FUSION-001 {applies: go:nlp.eagleSmoothL1,go:cpu.smoothL1KernelCPU,go:cpu.smoothL1BackwardKernelCPU,go:cpu.smoothL1F32,go:cpu.smoothL1F64,go:cpu.smoothL1BackwardF32,go:cpu.smoothL1BackwardF64,go:ref.smoothL1Kernel,go:ref.smoothL1BackwardKernel,go:autograd.init~33}
 WHEN feature regression executes on F32 or F64 and the active backend provides a native Smooth-L1 core, the EAGLE loss path SHALL dispatch one fused elementwise core whose forward values and VJP are bit-identical to the branch-free composite.
 
 Rationale: The exact Abs leaf remains below the 1.03 EAGLE workload gate alone. Fusion removes six elementwise passes and their allocations without folding the mean or scale, while an exact composite-VJP oracle pins floating-point accumulation order.

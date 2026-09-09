@@ -532,6 +532,8 @@ Mathematical and scientific grounding is required per unit of work. Numeric deci
 - T-01M0W06V0GEVTV1S2Z5Z8XQRGG Fuse ARM64 F64 soft-cap into one NEON pass: Implemented the dedicated one-pass Apple ARM64 F64 soft-cap kernel at ae26df41 after the earlier three-pass composition failed production. The two-lane assembly fuses x/cap, exp(-2*abs(x/cap)), tanh quotient, sign/ordered-NaN repair, and *cap between one load and store, behind a separate capability that leaves the shared logistic leaf and other partitions unchanged. Nine alternating Go 1.27.0 M2 P [body truncated at tombstone retention cap]
 - T-01M0W39FV0F7Z9NCDV2TXNPVXE Implement and gate ARM64 F64 Softplus fusion: Implemented dedicated Apple ARM64 goexperiment.simd two-lane Softplus assembly at code commit 022ea11e and documented it at 37429f65. The separately gated one-pass kernel retains exp(-abs(x)), the Cephes log1p rational, max(x,0), and ordered NaN repair in registers. Nine alternating frozen-binary production pairs on Apple M2 Pro with Go 1.27.0 improve 64K from 693911 to 182244 ns (3.808x independe [body truncated at tombstone retention cap]
 - P-01M0W38CXRFN9TJ70JBE2RX3EQ Fuse ARM64 F64 Softplus into one NEON pass: Implemented and validated by archived task T-01M0W39FV0F7Z9NCDV2TXNPVXE. ARM64 F64 Softplus now uses a dedicated one-pass NEON kernel with exact special-value behavior, 2.085x to 2.122x direct same-binary gains and 3.49x to 3.81x production-path gains on Apple M2 Pro, zero allocation regression, full preflight success, and the generalized finding reported at perfscan issue 917.
+- T-01M234MSKYE6D8NGMMEYBJG4GZ Pin and validate Go 1.27.1 on current main: Rebuilt current main with checksum-verified Go 1.27.1; pinned module, README and all ten CI selectors. No runtime algorithm changes. Nine same-source alternating pairs retained; initial parallel MoE +22.00% p=.024 did not reproduce significantly in focused confirmation (+3.60% p=.489). All 108 samples, hashes and statistics independently verified. Full pure-Go build/vet/short suites, native SIMD f [body truncated at tombstone retention cap]
+- P-01M234HF6DF2JB1Y3X1BPKMK7Z Rebuild current main with the pinned Go 1.27.1 patch toolchain: Go 1.27.1 patch rebuild completed and independently verified from current main; task T-01M234MSKYE6D archived after all16 CI34357138053 jobs passed. Module and ten CI declarations pinned; exact same-source benchmark campaigns retained, with no speedup claim and the unreproduced initial parallel MoE slowdown disclosed. Native M2, portable, SIMD, external perfscan direct and cross-platform gates pas [body truncated at tombstone retention cap]
 
 ## PROC-007
 WHERE a performance transform is not bit-identical, the GoAI SHALL apply it only where the value is a continuous output, and never where it feeds round, quantize, argmax, or a threshold comparison.
@@ -737,7 +739,7 @@ WHILE mixed Q4_K/Q6_K QKV segments share K and fit the f16 cache budget, the Met
 
 Rationale: Ten TinyLlama mixed layers improve 1.7378x at M64 and 1.2198x at M512; fused scatter preserves the end-to-end gain.
 
-## MEASURED-METAL-SIMD-ACTIVATION-ROUTE-001 {applies: backend/metal/metal.go,backend/metal/activation_route_arm64simd.go,backend/metal/activation_route_default.go}
+## MEASURED-METAL-SIMD-ACTIVATION-ROUTE-001 {applies: go:metal.hostSIMDActivationCandidate,go:metal.maxHostSIMDActivationElements,go:metal.unaryF32,go:metal.geluBackwardF32,go:metal.siluBackwardF32,go:metal.hostSIMDActivationRouteEnabled,go:metal.hostSIMDActivationRouteEnabled~2}
 WHEN contiguous offset-zero F32 GELU or SiLU forward or backward executes on a darwin/arm64 SIMD build, the Metal SHALL use optimized CPU through 4,194,304 elements, with direct Metal retained elsewhere.
 
 Rationale: ADR-01M0FYKCJMFRE: all 84 production-selector medians cleared 1.10x across three isolated count-7 campaigns, and full SIMD GPT training improved 1.038x.
@@ -786,7 +788,7 @@ WHILE the external registry lacks at least one stable ID present in the legacy r
 WHEN CI evaluates a non-documentation change, the GoAI CI SHALL execute one external perfscan scan over ./..., fail on tool or configuration errors, and publish the advisory finding count.
 
 ## GO127-LIVE-TOOLCHAIN-001
-WHEN GoAI is built or tested in live CI, the GoAI SHALL require Go 1.27.0 in go.mod and select Go 1.27.x in all ten setup-go lanes.
+WHEN GoAI is built or tested in live CI, the GoAI SHALL require Go 1.27.1 in go.mod and select Go 1.27.1 in all ten setup-go lanes.
 
 Rationale: One declared compiler generation prevents local, documentation, and CI semantics from drifting across Go 1.27 lowering changes.
 

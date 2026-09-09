@@ -1,0 +1,396 @@
+pair: 1
+toolchain: go1.27.0
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/linalg
+cpu: Apple M2 Pro
+BenchmarkSVD_128x128-12    	      22	  25692657 ns/op	  794641 B/op	     144 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128        	     145	   4116895 ns/op	 1073600 B/op	     153 allocs/op
+BenchmarkMoECombineBackward 	      27	  18744571 ns/op	67378112 B/op	      35 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128-12           	     481	   1189578 ns/op	 1076341 B/op	     228 allocs/op
+BenchmarkMoECombineBackward-12    	     142	   4158645 ns/op	67404216 B/op	      60 allocs/op
+PASS
+pair: 1
+toolchain: go1.27.1
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/linalg
+cpu: Apple M2 Pro
+BenchmarkSVD_128x128-12    	      22	  25497617 ns/op	  794652 B/op	     144 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128        	     148	   4051024 ns/op	 1073602 B/op	     153 allocs/op
+BenchmarkMoECombineBackward 	      25	  20286667 ns/op	67378112 B/op	      35 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128-12           	     277	   2442356 ns/op	 1076368 B/op	     228 allocs/op
+BenchmarkMoECombineBackward-12    	     115	   5491119 ns/op	67404161 B/op	      60 allocs/op
+PASS
+pair: 2
+toolchain: go1.27.1
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/linalg
+cpu: Apple M2 Pro
+BenchmarkSVD_128x128-12    	      22	  25917684 ns/op	  794642 B/op	     144 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128        	     145	   4134350 ns/op	 1073601 B/op	     153 allocs/op
+BenchmarkMoECombineBackward 	      36	  15854938 ns/op	67378113 B/op	      35 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128-12           	     558	   1096429 ns/op	 1076318 B/op	     228 allocs/op
+BenchmarkMoECombineBackward-12    	     132	   5256828 ns/op	67404086 B/op	      60 allocs/op
+PASS
+pair: 2
+toolchain: go1.27.0
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/linalg
+cpu: Apple M2 Pro
+BenchmarkSVD_128x128-12    	      21	  25416101 ns/op	  794654 B/op	     144 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128        	     146	   4073173 ns/op	 1073600 B/op	     153 allocs/op
+BenchmarkMoECombineBackward 	      34	  17142429 ns/op	67378112 B/op	      35 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128-12           	     566	   1169284 ns/op	 1076362 B/op	     228 allocs/op
+BenchmarkMoECombineBackward-12    	     150	   4056449 ns/op	67404131 B/op	      60 allocs/op
+PASS
+pair: 3
+toolchain: go1.27.0
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/linalg
+cpu: Apple M2 Pro
+BenchmarkSVD_128x128-12    	      22	  25351572 ns/op	  794659 B/op	     144 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128        	     146	   4117584 ns/op	 1073600 B/op	     153 allocs/op
+BenchmarkMoECombineBackward 	      32	  16908122 ns/op	67378112 B/op	      35 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128-12           	     548	   1091350 ns/op	 1076359 B/op	     228 allocs/op
+BenchmarkMoECombineBackward-12    	     132	   4500250 ns/op	67404100 B/op	      60 allocs/op
+PASS
+pair: 3
+toolchain: go1.27.1
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/linalg
+cpu: Apple M2 Pro
+BenchmarkSVD_128x128-12    	      22	  25673356 ns/op	  794655 B/op	     144 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128        	     144	   4336346 ns/op	 1073600 B/op	     153 allocs/op
+BenchmarkMoECombineBackward 	      30	  20767933 ns/op	67378113 B/op	      35 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128-12           	     418	   1653062 ns/op	 1076478 B/op	     228 allocs/op
+BenchmarkMoECombineBackward-12    	     118	   5788689 ns/op	67404163 B/op	      60 allocs/op
+PASS
+pair: 4
+toolchain: go1.27.1
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/linalg
+cpu: Apple M2 Pro
+BenchmarkSVD_128x128-12    	      22	  27406174 ns/op	  794909 B/op	     144 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128        	     144	   4336238 ns/op	 1073601 B/op	     153 allocs/op
+BenchmarkMoECombineBackward 	      27	  19119660 ns/op	67378113 B/op	      35 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128-12           	     561	   1634111 ns/op	 1076317 B/op	     228 allocs/op
+BenchmarkMoECombineBackward-12    	     114	   6012562 ns/op	67404166 B/op	      60 allocs/op
+PASS
+pair: 4
+toolchain: go1.27.0
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/linalg
+cpu: Apple M2 Pro
+BenchmarkSVD_128x128-12    	      21	  26253730 ns/op	  794654 B/op	     144 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128        	     140	   4219576 ns/op	 1073601 B/op	     153 allocs/op
+BenchmarkMoECombineBackward 	      28	  19489065 ns/op	67378112 B/op	      35 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128-12           	     514	   1327511 ns/op	 1076363 B/op	     228 allocs/op
+BenchmarkMoECombineBackward-12    	      99	   5232396 ns/op	67404326 B/op	      60 allocs/op
+PASS
+pair: 5
+toolchain: go1.27.0
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/linalg
+cpu: Apple M2 Pro
+BenchmarkSVD_128x128-12    	      22	  26049280 ns/op	  794643 B/op	     144 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128        	     146	   4156932 ns/op	 1073600 B/op	     153 allocs/op
+BenchmarkMoECombineBackward 	      25	  20330093 ns/op	67378112 B/op	      35 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128-12           	     447	   2036467 ns/op	 1076330 B/op	     228 allocs/op
+BenchmarkMoECombineBackward-12    	     150	   4737786 ns/op	67404100 B/op	      60 allocs/op
+PASS
+pair: 5
+toolchain: go1.27.1
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/linalg
+cpu: Apple M2 Pro
+BenchmarkSVD_128x128-12    	      21	  25638724 ns/op	  794654 B/op	     144 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128        	     146	   4084534 ns/op	 1073600 B/op	     153 allocs/op
+BenchmarkMoECombineBackward 	      26	  19360705 ns/op	67378112 B/op	      35 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128-12           	     436	   1256542 ns/op	 1076412 B/op	     228 allocs/op
+BenchmarkMoECombineBackward-12    	     100	   6390473 ns/op	67404496 B/op	      61 allocs/op
+PASS
+pair: 6
+toolchain: go1.27.1
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/linalg
+cpu: Apple M2 Pro
+BenchmarkSVD_128x128-12    	      22	  27345964 ns/op	  794425 B/op	     144 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128        	     100	   5154509 ns/op	 1073601 B/op	     153 allocs/op
+BenchmarkMoECombineBackward 	      26	  22295157 ns/op	67378112 B/op	      35 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128-12           	     439	   1900484 ns/op	 1076304 B/op	     228 allocs/op
+BenchmarkMoECombineBackward-12    	     148	   4945566 ns/op	67404097 B/op	      60 allocs/op
+PASS
+pair: 6
+toolchain: go1.27.0
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/linalg
+cpu: Apple M2 Pro
+BenchmarkSVD_128x128-12    	      22	  25617222 ns/op	  794648 B/op	     144 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128        	     146	   4086585 ns/op	 1073601 B/op	     153 allocs/op
+BenchmarkMoECombineBackward 	      30	  18743399 ns/op	67378113 B/op	      35 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128-12           	     457	   1273107 ns/op	 1076312 B/op	     228 allocs/op
+BenchmarkMoECombineBackward-12    	     117	   4680187 ns/op	67404282 B/op	      60 allocs/op
+PASS
+pair: 7
+toolchain: go1.27.0
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/linalg
+cpu: Apple M2 Pro
+BenchmarkSVD_128x128-12    	      22	  25503903 ns/op	  794400 B/op	     144 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128        	     146	   4117274 ns/op	 1073601 B/op	     153 allocs/op
+BenchmarkMoECombineBackward 	      27	  21599566 ns/op	67378112 B/op	      35 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128-12           	     207	   2997053 ns/op	 1076577 B/op	     228 allocs/op
+BenchmarkMoECombineBackward-12    	     105	   6444132 ns/op	67404369 B/op	      60 allocs/op
+PASS
+pair: 7
+toolchain: go1.27.1
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/linalg
+cpu: Apple M2 Pro
+BenchmarkSVD_128x128-12    	      21	  26315089 ns/op	  794654 B/op	     144 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128        	     145	   4111069 ns/op	 1073601 B/op	     153 allocs/op
+BenchmarkMoECombineBackward 	      31	  18545300 ns/op	67378112 B/op	      35 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128-12           	     576	   1411468 ns/op	 1076345 B/op	     228 allocs/op
+BenchmarkMoECombineBackward-12    	     145	   4674696 ns/op	67404095 B/op	      60 allocs/op
+PASS
+pair: 8
+toolchain: go1.27.1
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/linalg
+cpu: Apple M2 Pro
+BenchmarkSVD_128x128-12    	      22	  25728093 ns/op	  794646 B/op	     144 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128        	     146	   4080980 ns/op	 1073600 B/op	     153 allocs/op
+BenchmarkMoECombineBackward 	      27	  19143181 ns/op	67378112 B/op	      35 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128-12           	     601	   1597536 ns/op	 1076342 B/op	     228 allocs/op
+BenchmarkMoECombineBackward-12    	     132	   6215387 ns/op	67404257 B/op	      60 allocs/op
+PASS
+pair: 8
+toolchain: go1.27.0
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/linalg
+cpu: Apple M2 Pro
+BenchmarkSVD_128x128-12    	      21	  26663083 ns/op	  794654 B/op	     144 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128        	     122	   4702057 ns/op	 1073601 B/op	     153 allocs/op
+BenchmarkMoECombineBackward 	      25	  20567350 ns/op	67378112 B/op	      35 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128-12           	     412	   1460423 ns/op	 1076420 B/op	     228 allocs/op
+BenchmarkMoECombineBackward-12    	     110	   5164797 ns/op	67404108 B/op	      60 allocs/op
+PASS
+pair: 9
+toolchain: go1.27.0
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/linalg
+cpu: Apple M2 Pro
+BenchmarkSVD_128x128-12    	      22	  25562699 ns/op	  794646 B/op	     144 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128        	     145	   4090786 ns/op	 1073600 B/op	     153 allocs/op
+BenchmarkMoECombineBackward 	      31	  19451841 ns/op	67378112 B/op	      35 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128-12           	     456	   1427719 ns/op	 1076303 B/op	     228 allocs/op
+BenchmarkMoECombineBackward-12    	     126	   4567309 ns/op	67404092 B/op	      60 allocs/op
+PASS
+pair: 9
+toolchain: go1.27.1
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/linalg
+cpu: Apple M2 Pro
+BenchmarkSVD_128x128-12    	      22	  25573123 ns/op	  794644 B/op	     144 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128        	     145	   4344167 ns/op	 1073600 B/op	     153 allocs/op
+BenchmarkMoECombineBackward 	      28	  20673702 ns/op	67378112 B/op	      35 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/autograd
+cpu: Apple M2 Pro
+BenchmarkEighVJP_128-12           	     416	   1344105 ns/op	 1076338 B/op	     228 allocs/op
+BenchmarkMoECombineBackward-12    	     121	   5709938 ns/op	67404098 B/op	      60 allocs/op
+PASS
