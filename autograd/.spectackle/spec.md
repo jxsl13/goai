@@ -34,3 +34,6 @@ WHEN inner times V-transpose spans 4 adjacent output columns, the Eigh VJP SHALL
 
 ## UNARY-BCE-EXACT-001 {applies: go:autograd.unaryVJP,go:autograd.reluVJP,go:autograd.tanhVJP,go:autograd.sigmoidVJP}
 WHEN typed unary VJP slice proofs replace elementwise bounds branches, the optimized helpers SHALL preserve 0 Float32bits/Float64bits differences, ascending callback visits, historical short-input panics, empty behavior, view extents, and dtype fallbacks in TestUnaryVJPBoundsExact.
+
+## UNARY-BCE-PERF-001 {applies: go:autograd.unaryVJP,go:autograd.reluVJP,go:autograd.tanhVJP,go:autograd.sigmoidVJP}
+WHEN three alternating seven-pair M2 Go1.27.1 campaigns qualify unary bounds elimination, the promotion gate SHALL require at least 1.05x direct ReLU and 1.03x taped ReLU medians with p<0.05, and retain 0 allocation increases or reproducible control time regressions above3percent.
