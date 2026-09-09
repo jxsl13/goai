@@ -1,0 +1,277 @@
+R-01M23Q8QJDE3Y — read-only allocation-accounting research
+Date: 2026-09-09
+
+Conclusion
+==========
+
+The frozen evidence correctly rejects V2 under the original, unrelaxed promotion
+rule. This research does not rescore it and does not recommend a waiver. It also
+does not establish that V2 added an allocation path to Softplus, Sigmoid, or SiLU
+backward. The source evidence is against that interpretation: between the pinned
+old runtime dd1e779eb085bb621ed5dafff0a4351636b6e656 and V2 runtime
+361955ac35eaada696045f2cf828817b650174ec, the control benchmark harness and the
+relevant Execute, tensor allocation, CPU scheduler, Softplus, Sigmoid, and SiLU
+backward execution paths are byte-for-byte unchanged. The relevant diff is only
+the GELU gate split plus the new ARM64 GELU implementation/tests and documentation.
+
+The observed +1..+4 B/op parallel-control medians are compatible with benchmark
+accounting noise. Go 1.27.1 computes benchmark memory results from two
+process-wide runtime.MemStats snapshots around the timed region, then reports the
+integer quotient of total bytes by the adaptively chosen iteration count. Thus a
+reported B/op value is neither an operation-local attribution nor an exact total,
+and identical allocs/op does not imply identical total allocated bytes. This is a
+plausible explanation, not demonstrated causality. Only a predeclared old-old,
+equal-N diagnostic with raw totals can distinguish baseline measurement movement
+from a candidate-specific effect. No new implementation or benchmark-contract
+revision is justified before that diagnostic is independently reviewed and run
+under a new task.
+
+Frozen evidence and observed pattern
+====================================
+
+The independent performance verifier reports: all 24/24 large public targets and
+48/48 small controls pass; no GELU B/op or allocs/op median increases; no fixed
+control allocs/op median increases. At GOMAXPROCS=12 only, median B/op increases
+appear for campaign 1 Sigmoid (+1), all three Softplus campaigns (+2,+3,+2), and
+campaigns 2/3 SiLUBackward (+4,+1). Individual exact rank p-values are 0.0816 to
+0.9202. Nonsignificance is not evidence of equality and does not erase the
+separate repeated-median veto. Conversely, repeated rounded medians are not
+source-level attribution.
+
+The raw stream makes the accounting sensitivity visible. Serial Softplus samples
+are consistently 2,097,448 B/op and 5 allocs/op. Parallel examples vary around
+2,097,480..2,097,486 B/op and 6 allocs/op while adaptive N varies materially
+(examples include N=3,367, 3,957, 4,023, 4,290). Sigmoid has observed N values of
+10,000 and approximately 12,000 while Softplus and SiLUBackward have lower,
+independently calibrated N values. Therefore each printed unit change represents a
+different range of possible total-byte deltas in different processes. The raw
+text retains B/op and N, not MemBytes itself: for printed q and N, exact MemBytes
+is only known to lie in [q*N, (q+1)*N-1]. Medians of q values do not commute with
+division by differing N.
+
+Exact source findings
+=====================
+
+1. Benchmark boundary and call path
+
+backend/cpu/bench_test.go:18-28 defines benchOn. It creates the backend/context
+before ResetTimer, calls b.ReportAllocs and b.ResetTimer, then each timed iteration
+calls backend.Execute. BenchmarkSoftplusF64_256K_cpu (lines 56-58) supplies one
+prebuilt 262,144-element input. Execute resolves the already registered kernel,
+then softplusKernelCPU calls Contiguous (a no-copy return for this fixture),
+tensor.NewOn for the output, and parallel(len(out), closure). The returned output
+becomes unreachable after the iteration.
+
+At GOMAXPROCS=12, backend/cpu/cpu.go parallelWork uses the persistent worker pool,
+creates a per-call poolBarrier, submits poolTask values carrying the closure and
+barrier pointer, runs the first chunk, may drain work, and waits. Runtime scheduling
+determines whether tasks are received, stolen/drained, or executed inline. At
+GOMAXPROCS=1 it directly invokes body(0,n), explaining why the additional parallel
+overhead/accounting opportunity is absent. This scheduler source is identical in
+old and V2.
+
+Sigmoid follows the same Execute -> tensor.NewOn -> parallel shape, but allocates
+a 65,536-element output. Softplus allocates a 262,144-element output. Their main
+per-operation output backing arrays are exactly 524,288 and 2,097,152 bytes,
+respectively; the remaining printed bytes cover Tensor/Storage metadata, return
+slices, closures/scheduler effects, and any process activity captured by the
+global counters. Their kernel source is unchanged.
+
+SiLUBackwardF64 follows Execute -> siluBackwardF64KernelCPU. Per iteration it
+allocates both a 262,144-element output and a 262,144-element sigmoid scratch
+(`make([]float64, len(ds))`), then calls parallel once. This explains its roughly
+4,194,7xx B/op and one more allocation than forward controls, but that path too is
+unchanged between pins. The GELU V2 files do not call these control functions.
+
+2. Go 1.27.1 benchmark accounting
+
+The pinned SDK source is
+/private/tmp/goai-go1271-j1cLvq/go/src/testing/benchmark.go. B.StartTimer reads
+runtime.MemStats and records Mallocs and TotalAlloc (lines 138-147). B.StopTimer
+reads it again and accumulates differences into b.netAllocs and b.netBytes (lines
+151-162). runN invokes runtime.GC, resets counters, starts the timer, runs the
+benchmark, and stops it (lines 197-220). launch predicts and changes N until the
+requested duration is met (lines 327-360). BenchmarkResult stores aggregate
+MemAllocs/MemBytes, while AllocsPerOp and AllocedBytesPerOp return integer division
+by N (lines 541-597); fractional bytes/allocations are truncated in output.
+
+The pinned runtime source is
+/private/tmp/goai-go1271-j1cLvq/go/src/runtime/mstats.go. MemStats.TotalAlloc is
+documented as cumulative bytes allocated for heap objects and never decreases;
+Mallocs is the cumulative heap-object count (lines 55-89). ReadMemStats stops the
+world and returns allocator statistics current at the call (lines 350-364).
+readmemstats_m populates TotalAlloc from the runtime-wide totalAlloc and Mallocs
+from nMalloc (around lines 500-512). There is no benchmark-goroutine or operation
+filter. Allocations by any goroutine in this test process between snapshots can
+enter the delta. The benchmark framework serializes benchmark runN calls with
+benchmarkLock, but that does not suspend runtime/background goroutines or worker
+pool activity; worker allocations are intentionally part of the operation, while
+unrelated process allocations are not distinguishable in this metric.
+
+3. Old versus V2 deterministic source delta
+
+`git diff dd1e779e 361955ac -- backend/cpu/bench_test.go backend/cpu/cpu.go
+backend/cpu/elementwise.go backend/cpu/activation_bwd_f64.go backend/execute.go
+tensor/tensor.go tensor/storage.go` changes only eight comment/gate lines in
+elementwise.go and activation_bwd_f64.go: GELU uses the new vgeluF64Fast gate
+instead of vexpF64Fast. cpu.go, bench_test.go, Execute, Tensor/Storage, and the
+control function bodies have no diff. ARM64 adds vgelu_f64_arm64.go and initializes
+GELU SIMD constants at process startup, outside benchOn's ResetTimer. No static
+source path connects those additions to a timed control call.
+
+This rules out an explicit control-source allocation addition. It does not prove
+machine-code identity or exclude indirect binary-wide effects: added code/data can
+change layout, initialization history, GC/scheduler state, or timing, which changes
+adaptive N and opportunities for process activity. No disassembly/object comparison
+for all control call paths was retained, so exact emitted-code identity remains
+unknown. Even identical emitted control functions would not make the process-wide
+counter operation-local.
+
+Interpretation and uncertainty
+==============================
+
+Most likely hypotheses to test, without ranking them as established causes:
+
+* Integer quotient plus unequal adaptive N: small non-per-iteration byte totals
+  are divided by N; changing N changes q even when the operation allocation path
+  is the same. Repeated Softplus q=2,097,484 may be a stable quotient regime rather
+  than evidence of a new operation-local allocation.
+* Process-wide/runtime and pool effects: worker scheduling, goroutine/runtime
+  bookkeeping, and GC work can contribute heap allocations within snapshots. The
+  parallel-only occurrence supports investigating this, but is not proof.
+* A candidate-wide emitted-code or escape-analysis difference despite unchanged
+  control source. This is less directly supported but cannot be excluded without
+  binary-level and raw-total diagnostics.
+
+The evidence does not support claiming: (a) the V2 GELU shortcut caused these
+bytes; (b) nonsignificant p-values prove no effect; (c) unchanged allocs/op proves
+unchanged allocation behavior; or (d) a chosen tolerance would make the original
+qualification pass. External host activity affects timing and adaptive N, but OS
+processes do not directly allocate on the Go test process heap; only effects
+mediated through this process/runtime are relevant to TotalAlloc.
+
+Minimally sufficient predeclared diagnostic (new reviewed task only)
+====================================================================
+
+Purpose: diagnose accounting, not rerun/rescore qualification. Preserve all old,
+V1, V2 binaries and raw evidence. Do not change the original promotion contract.
+
+Pins and isolation
+------------------
+
+* Pin the existing old binary SHA-256
+  c95691bc1a7289094bc523250fde7a9cae614756635b78701e9c306962b246cb,
+  V2 SHA-256 b768ca10228a7487aad1cbef3a658c99cb21078b5059b815fa690b0d9bcc7614,
+  harness SHA-256 b53599699510a31f3a2d086f08f1b11b968b9ad1f25941e75c8a1f62fc49c9f3,
+  commits dd1e779e... and 361955ac..., Go 1.27.1-X:simd, Darwin ARM64/v8.0,
+  CGO_ENABLED=0, GOEXPERIMENT=simd, and the same Apple M2 Pro.
+* Serialize every heavy invocation. No concurrent builds, tests, profiles, other
+  benchmarks, or owned compute workloads. Record the same environment disclosures;
+  do not claim continuous host idleness.
+* Predeclare benchmark regex, exact command templates, N values, repetitions,
+  arm order, process-count order, retention rules, and analysis before observing
+  results. Retain every PASS/FAIL and sample.
+
+Phase A — mandatory old-old negative control
+---------------------------------------------
+
+Use two immutable copies (or two verified paths) of the exact old binary, labeled
+old-A and old-B. This detects label/order/accounting movement when runtime code is
+identical. Use at least three alternating, count-seven paired campaigns at
+GOMAXPROCS=1 and 12 for exactly the three controls. Alternate A/B arm order by pair
+and process-count order by campaign as in the frozen protocol. Do not compare an
+old run from V2 evidence with a new diagnostic run; both arms must be contemporaneous.
+
+Phase B — equal fixed-N old/V2 diagnostic
+-----------------------------------------
+
+Before Phase A, choose and freeze an exact N that is safe for every selected
+benchmark/process cell; 1024 is a defensible predeclared value below all observed
+completed N values in the frozen stream. Use the same N for A and B and later for
+old and V2. Invoke the matched diagnostic binaries with the anchored diagnostic
+Test regex, `-test.benchtime=1024x`, and `-test.count=1`, one heavy process at a
+time. Fixed-N, not equal duration, is the essential control. Repeat with the same
+predeclared paired design. Phase B may proceed regardless of Phase A's outcome,
+but interpretations must include Phase A.
+
+Raw totals
+----------
+
+Standard benchmark text is insufficient because it exposes only truncated B/op
+and allocs/op. The lowest-perturbation option is a new diagnostic-only `_test.go`
+file in package cpu_test whose Test function calls `testing.Benchmark` with each
+existing benchmark function (`BenchmarkSoftplusF64_256K_cpu`,
+`BenchmarkSigmoidF64_64K_cpu`, and `BenchmarkSiLUBackwardF64_256K_cpu`). After
+each call returns, print the public BenchmarkResult fields N, MemBytes, and
+MemAllocs, plus `MemBytes/N`, `MemBytes%N`, `MemAllocs/N`, and `MemAllocs%N`.
+`testing.Benchmark` constructs a normal testing.B and runs the existing benchmark
+function through its normal runN/StartTimer/StopTimer machinery; therefore this
+preserves benchOn, Execute, kernel, timer, and allocation accounting instead of
+duplicating timer brackets or attempting to access internal start/end fields.
+
+Build matched diagnostic binaries from old and V2 with exactly the same added
+diagnostic file and compiler settings, verify their hashes, and retain the
+original frozen binaries untouched. Invoke the diagnostic Test with an exact
+fixed count, for example the predeclared `-test.benchtime=1024x` supplied to both
+matched binaries; testing.Benchmark consumes the registered benchTime setting.
+Run one labeled binary/process-count arm per process and print only after each
+Benchmark call returns so diagnostic formatting is outside the measured region.
+Use the same matched diagnostic binaries for old-A/old-B and old/V2 phases. Any
+outside-loop ReadMemStats, GC count, or pause observation is auxiliary only and
+must not replace BenchmarkResult.MemBytes/MemAllocs. Do not use a heap profile as
+the primary byte total: runtime docs say profiles are GC-cycle snapshots whereas
+ReadMemStats is current. The added Test/build can still perturb whole-binary
+layout or initialization, so matched construction and old-old negative controls
+remain mandatory, and diagnostic results must never be substituted into the
+original qualification.
+
+Predeclared decisions
+---------------------
+
+* First question: does old-A versus old-B reproduce repeated B/op or raw-total
+  label movement at equal N? If yes, the frozen symptom is demonstrably possible
+  without a source/binary difference, but V2 remains rejected under its original
+  rule.
+* Second: after subtracting/stratifying only by the predeclared old-old behavior,
+  does old versus V2 show a repeatable difference in exact total bytes or Mallocs
+  at equal N? Report effect distributions and paired raw deltas; do not invent a
+  post-hoc threshold or use nonsignificance as equivalence.
+* If exact Mallocs changes, add allocation-site evidence in a separately approved
+  follow-up (matched alloc profiles or runtime tracing) before attributing a path.
+  If MemBytes changes with identical Mallocs, inspect allocation size-class/site
+  evidence. If neither exact total changes but printed q does under adaptive N,
+  integer division/adaptation is directly demonstrated for this symptom.
+* Independent verification must confirm hashes, source pins, command expansion,
+  fixed equal N, order, sample completeness, raw arithmetic, and that no diagnostic
+  result was used to alter the original V2 verdict.
+
+Evidence required before further work
+=====================================
+
+Before any V3 implementation: a reviewed diagnostic task, completed old-old and
+equal-N raw-total evidence, and a defensible candidate-specific allocation/call
+site if a difference survives controls. Before any benchmark-contract revision:
+separate proposal/review explaining whether the contract intends operation-local
+allocations or process-wide testing.B output, plus a predeclared equivalence/noise
+model validated on negative controls. Neither follows from this research alone.
+
+Sources and read-only commands used
+===================================
+
+Repository workflow/item: `.claude/commands/spectackle.md`; `spectackle call
+-instructions`; `spectackle call get '{"id":"R-01M23Q8QJDE3Y"}'`; Spectackle
+find/get for go:cpu_test.benchOn, go:backend.Execute, and
+go:cpu.siluBackwardF64KernelCPU before raw known-file reads.
+
+Primary retained evidence:
+internal/benchcompare/leadership/evidence/m2-f64-gelu-neon-v2-20260909/
+verifier-performance.txt, controls.txt, README.md, and environment.txt.
+
+Primary source:
+backend/cpu/bench_test.go; backend/cpu/cpu.go; backend/cpu/elementwise.go;
+backend/cpu/activation_bwd_f64.go; backend/execute.go; tensor/tensor.go;
+tensor/storage.go; Go 1.27.1 testing/benchmark.go and runtime/mstats.go at the
+pinned SDK path above. Commit comparison used `git diff dd1e779e 361955ac --`
+with only the named source files and `git diff --name-status` to inventory the
+bounded delta. No builds, tests, benchmarks, profiles, lifecycle writes, commits,
+pushes, or mutations were performed.

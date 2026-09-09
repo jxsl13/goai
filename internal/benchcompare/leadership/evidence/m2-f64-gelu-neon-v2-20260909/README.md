@@ -143,6 +143,13 @@ without relying on the analysis CSV. Its report records the limitations of
 adaptive benchmark counts, unpaired rank testing despite paired execution,
 excluded warmups, and point-in-time environmental observations.
 
+The subsequent read-only [allocation research](allocation-research.txt),
+`R-01M23Q8QJDE3Y`, finds unchanged source in the fixed controls and confirms that
+Go 1.27.1 reports process-wide heap deltas divided by adaptive N. This makes
+accounting effects plausible but does not prove causality or change the V2
+rejection. A new diagnostic must compare identical old binaries and old/V2 at
+equal fixed N, retaining exact `testing.Benchmark` result totals and remainders.
+
 ## CI setup observation
 
 Run `34383399053` at `bd8faf5f` failed CUDA/Vulkan Ubuntu setup before compilation
