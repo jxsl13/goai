@@ -1,0 +1,221 @@
+Task: T-01M23Y32PDEKB
+Parent: P-01M23Y1K1TEXF
+Worktree: /private/tmp/goai-classic-short-NZ49Qz/repo
+Base: main4f17f5a4
+
+IMPLEMENTATION
+
+Changed only classic/fit_time_guard_test.go. Every case still invokes its existing Fit exactly once with unchanged data, options, ordering, and error handling. After a successful Fit, testing.Short() now emits an unambiguous per-model smoke-pass log and continues before elapsed-time reporting and enforcement. Full-mode timing measurement, all five ceilings, and the non-arm64 report versus arm64 failure behavior remain intact. Nearby prose now limits the timing tripwire to controlled full-test runs and treats a ceiling overrun as an investigation trigger rather than proof of an algorithmic cause.
+
+No production, workflow, model, data, seed, iteration, option, ceiling, architecture-policy, lifecycle, or Git changes were made.
+
+SHORT/FULL OBSERVATIONS
+
+- Default short focused run: exactly 5 Fit smoke logs; no SKIP and no ceiling failure.
+- SIMD short focused run: exactly 5 Fit smoke logs; no SKIP and no ceiling failure.
+- Default full focused run: exactly 5 timing outputs; all under unchanged ceilings.
+- SIMD full focused run: exactly 5 timing outputs; all under unchanged ceilings.
+- All declared focused, package, vet, race, diff, and version gates exited 0.
+
+PROTOCOL/SETUP COMMAND TRANSCRIPT
+
+Command:
+sed -n '1,240p' .claude/commands/spectackle.md
+Exit status: 0
+Output was read in full before any task action.
+
+Command:
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local spectackle call -instructions
+Exit status: 0
+Output was read in full before querying the task and parent.
+
+Command (failed syntax attempt, retained literally):
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local spectackle call get id=T-01M23Y32PDEKB depth=3
+Exit status: 2
+Output:
+call: too many arguments (want NAME [JSON]): [get id=T-01M23Y32PDEKB depth=3]
+
+Command (failed syntax attempt, retained literally):
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local spectackle call get id=P-01M23Y1K1TEXF depth=3
+Exit status: 2
+Output:
+call: too many arguments (want NAME [JSON]): [get id=P-01M23Y1K1TEXF depth=3]
+
+Command:
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local spectackle call get '{"id":"T-01M23Y32PDEKB","depth":3}'
+Exit status: 0
+Output:
+c . journal 1116 events since last compact
+i T-01M23Y32PDEKB task active classic Preserve five classic Fit smokes under short mode without wall-clock failures
+parent P-01M23Y1K1TEXF
+targets go:classic.TestClassicFitTimeGuard
+GOAL: implement P-01M23Y1K1TEXF by changing only classic/fit_time_guard_test.go; keep every model Fit and error assertion, bypass only time ceilings under testing.Short. Dedicated worktree /private/tmp/goai-classic-short-NZ49Qz/repo, base4f17f5a4. Root owns lifecycle, Git and evidence. No runtime, workflow, model, data, seed, iteration, option, ceiling or architecture-policy edits. Read .claude/commands/spectackle.md fully and spectackle call -instructions; get this T and parent. Claim/release exact file with lease if available; no raw .spectackle edits and no lifecycle moves. Only source file and new report /private/tmp/goai-classic-short-NZ49Qz/implementation.txt may be written (apply_patch, gofmt permitted). Do not explore: existing source is fully in the named file; fmt, testing, time and runtime already imported. Parent and root timing rule are binding.
+
+IMPLEMENT: existing loop calls c.fit then checks error with t.Fatalf. Keep it unconditional and before any short branch. After the successful Fit, if testing.Short() log an unambiguous per-model Fit smoke passed message and continue the case loop before ceiling assertions/ceiling report. All five cases must still fit exactly once with identical data and options. Keep nonshort elapsed measurement, ceilings and non-arm64 report vs arm64 failure unchanged. Adjust comments so shared CI does not claim wall-time overruns establish an algorithmic cause; historical convergence evidence stays. Do not claim smoke validates predictions or solver iteration counts.
+
+VERIFY (serial, all commands explicit pinned environment): PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0. First go version and git diff --check. Run go test ./classic -run '^TestClassicFitTimeGuard$' -short -count=1 -v; then without -short. Repeat both commands with GOEXPERIMENT=simd. Confirm 5 smoke logs and no SKIP/ceiling failure under each short build; 5 full timing outputs under each full build. Run go test ./classic -short -count=1 and same with GOEXPERIMENT=simd; go vet ./classic default and SIMD; CGO_ENABLED=1 go test -race ./classic -short -count=1. Retain literal command stdout/stderr and exit codes, failures as well as successes; no truncated output as full proof. Hash final source and inspect git diff --check. A failing local full ceiling is evidence to report, not permission to increase a ceiling. Root will perform independent verification and a controlled ceiling mutation; do not mutate production or benchmarks. No heavy CPU tests/builds outside your declared window; root has authorized your window now and will do only docs/read-only operations alongside it. Report completion without Git or move actions.
+
+Command:
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local spectackle call get '{"id":"P-01M23Y1K1TEXF","depth":3}'
+Exit status: 0
+Output:
+c . journal 1116 events since last compact
+i P-01M23Y1K1TEXF proposal active classic Keep classic Fit smoke checks in short CI and reserve time ceilings for full runs
+targets go:classic.TestClassicFitTimeGuard
+Goal: make TestClassicFitTimeGuard obey the existing TIMING-ASSERTIONS-SKIP-ON-RUNNERS-001 contract without dropping its five Fit error checks or weakening full local timing ceilings. Current draft PR1249 CI run34400229272 at a84cdb98 fails classic/fit_time_guard_test.go:129 under the cgo+metal macOS short command: RandomForest100 312.445542ms exceeds300ms. Other model observations: DecisionTree3.65ms, GradientBoosting100335.22ms, SVC_rbf11.82ms, GaussianNB0.42ms. These are a hosted-runner observation, not proven algorithmic regression or proof of noise. All Metal tests passed this run. Isolate this fix from rejected GELU runtime in a new branch based on clean main4f17f5a4.
+
+Change only classic/fit_time_guard_test.go executable code. Keep all five model fits and their error failures unconditional, using the existing 4000x20 data, three classes, seeds, options, serial case order and exactly one Fit per case. After the fit/error check, short mode logs a per-model smoke completion and skips the wall-clock ceiling assertion. Do not return/Skip the whole test. Keep normal mode timing and 50/300/800/60/10ms ceilings, arm64 error vs other-architecture report behavior, and model production code unchanged. Adjust nearby comments/messages only as necessary to distinguish controlled local regression detection from shared-runner timing and avoid asserting a time overrun proves its cause. A Fit smoke is not a prediction/accuracy or iteration-count assertion.
+
+Verify on pinned Go1.27.1, default and SIMD, short and full focused test count1 verbose; full classic short package tests both builds and default CGO1 short race. Vet classic both builds. Record exact commands, full output, hashes and failures without substituting reruns. Fresh independent verifier repeats VERIFY from source diff. No speedup/leadership claim, threshold raising, workflow edits, skipping model fits, algorithm tuning, or retrospective GELU qualification. Root retains CI excerpt/evidence, opens draft on first push, finalizes checked state, reads every CI job and executed step before merge, then removes only verified merged remote feature branch. Existing perfscan868 gets the confirmed new timing-guard fixture; do not claim a current detector false negative without actually running it.
+review pass root-classic-short-plan :: [correctness] All five existing Fit calls and error failures remain unconditional; short mode bypasses only elapsed ceilings. [scope] One test file, unchanged model/data/options/ceilings and nonshort architecture behavior. [verification] Four focused modes, both short package suites, race and vet; fresh verifier will additionally force a compiled ceiling overrun and restore exact bytes. [refutation] 312ms CI does not establish an algorithmic cause or a detector false negative. No speedup claim or GELU promotion. Existing binding timing contract resolves policy; no open findings.
+
+Command (lease-shape probe, retained literally):
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local spectackle call lease '{}'
+Exit status: 1
+Output:
+validating "arguments": validating root: required: missing properties: ["op"]
+shape: lease {op*:claim|release|ls, item, paths, ttl}
+
+Command (failed ttl-type attempt, retained literally):
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local spectackle call lease '{"op":"claim","item":"T-01M23Y32PDEKB","paths":["classic/fit_time_guard_test.go"],"ttl":"2h"}'
+Exit status: 1
+Output:
+validating "arguments": validating root: validating /properties/ttl: type: 2h has type "string", want "integer"
+shape: lease {op*:claim|release|ls, item, paths, ttl}
+
+Command:
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local spectackle call lease '{"op":"claim","item":"T-01M23Y32PDEKB","paths":["classic/fit_time_guard_test.go"],"ttl":7200}'
+Exit status: 0
+Output:
+c . journal 1116 events since last compact
+ok claimed classic/fit_time_guard_test.go
+
+Command:
+gofmt -w classic/fit_time_guard_test.go
+Exit status: 0
+Output: <empty>
+
+VERIFICATION COMMAND TRANSCRIPT
+
+Command:
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go version
+Exit status: 0
+Output:
+go version go1.27.1 darwin/arm64
+
+Command:
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 git diff --check
+Exit status: 0
+Output: <empty>
+
+Command:
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go test ./classic -run '^TestClassicFitTimeGuard$' -short -count=1 -v
+Exit status: 0
+Output:
+=== RUN   TestClassicFitTimeGuard
+    fit_time_guard_test.go:118: FITGUARD DecisionTree Fit smoke passed; timing ceiling not enforced in short mode
+    fit_time_guard_test.go:118: FITGUARD RandomForest100 Fit smoke passed; timing ceiling not enforced in short mode
+    fit_time_guard_test.go:118: FITGUARD GradientBoosting100 Fit smoke passed; timing ceiling not enforced in short mode
+    fit_time_guard_test.go:118: FITGUARD SVC_rbf Fit smoke passed; timing ceiling not enforced in short mode
+    fit_time_guard_test.go:118: FITGUARD GaussianNB Fit smoke passed; timing ceiling not enforced in short mode
+--- PASS: TestClassicFitTimeGuard (0.11s)
+PASS
+ok  	github.com/jxsl13/goai/classic	0.600s
+
+Command:
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go test ./classic -run '^TestClassicFitTimeGuard$' -count=1 -v
+Exit status: 0
+Output:
+=== RUN   TestClassicFitTimeGuard
+FITGUARD DecisionTree            4.93 ms (ceiling 50 ms)
+FITGUARD RandomForest100        25.40 ms (ceiling 300 ms)
+FITGUARD GradientBoosting100    78.88 ms (ceiling 800 ms)
+FITGUARD SVC_rbf                 4.20 ms (ceiling 60 ms)
+FITGUARD GaussianNB              0.33 ms (ceiling 10 ms)
+--- PASS: TestClassicFitTimeGuard (0.12s)
+PASS
+ok  	github.com/jxsl13/goai/classic	0.362s
+
+Command:
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd go test ./classic -run '^TestClassicFitTimeGuard$' -short -count=1 -v
+Exit status: 0
+Output:
+=== RUN   TestClassicFitTimeGuard
+    fit_time_guard_test.go:118: FITGUARD DecisionTree Fit smoke passed; timing ceiling not enforced in short mode
+    fit_time_guard_test.go:118: FITGUARD RandomForest100 Fit smoke passed; timing ceiling not enforced in short mode
+    fit_time_guard_test.go:118: FITGUARD GradientBoosting100 Fit smoke passed; timing ceiling not enforced in short mode
+    fit_time_guard_test.go:118: FITGUARD SVC_rbf Fit smoke passed; timing ceiling not enforced in short mode
+    fit_time_guard_test.go:118: FITGUARD GaussianNB Fit smoke passed; timing ceiling not enforced in short mode
+--- PASS: TestClassicFitTimeGuard (0.11s)
+PASS
+ok  	github.com/jxsl13/goai/classic	0.465s
+
+Command:
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd go test ./classic -run '^TestClassicFitTimeGuard$' -count=1 -v
+Exit status: 0
+Output:
+=== RUN   TestClassicFitTimeGuard
+FITGUARD DecisionTree            5.21 ms (ceiling 50 ms)
+FITGUARD RandomForest100        26.21 ms (ceiling 300 ms)
+FITGUARD GradientBoosting100    74.23 ms (ceiling 800 ms)
+FITGUARD SVC_rbf                 3.32 ms (ceiling 60 ms)
+FITGUARD GaussianNB              0.35 ms (ceiling 10 ms)
+--- PASS: TestClassicFitTimeGuard (0.11s)
+PASS
+ok  	github.com/jxsl13/goai/classic	0.356s
+
+Command:
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go test ./classic -short -count=1
+Exit status: 0
+Output:
+ok  	github.com/jxsl13/goai/classic	0.963s
+
+Command:
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd go test ./classic -short -count=1
+Exit status: 0
+Output:
+ok  	github.com/jxsl13/goai/classic	1.013s
+
+Command:
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go vet ./classic
+Exit status: 0
+Output: <empty>
+
+Command:
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd go vet ./classic
+Exit status: 0
+Output: <empty>
+
+Command:
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=1 go test -race ./classic -short -count=1
+Exit status: 0
+Output:
+ok  	github.com/jxsl13/goai/classic	13.185s
+
+Command:
+shasum -a 256 classic/fit_time_guard_test.go
+Exit status: 0
+Output:
+91b4c285b42cc399d83b195497026c33220e326d65226d1cd0f270f4aa10ac57  classic/fit_time_guard_test.go
+
+Command:
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 git diff --check
+Exit status: 0
+Output: <empty>
+
+LEASE RELEASE
+
+Command:
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local spectackle call lease '{"op":"release","item":"T-01M23Y32PDEKB","paths":["classic/fit_time_guard_test.go"]}'
+Exit status: 0
+Output:
+c . journal 1116 events since last compact
+ok released
+
+FINAL SOURCE SHA-256
+
+91b4c285b42cc399d83b195497026c33220e326d65226d1cd0f270f4aa10ac57  classic/fit_time_guard_test.go
+
+HEAVY TEST/BUILD WINDOW
+
+Closed explicitly after the serial race gate, final hash, diff inspection, and lease release. No further heavy command was run.

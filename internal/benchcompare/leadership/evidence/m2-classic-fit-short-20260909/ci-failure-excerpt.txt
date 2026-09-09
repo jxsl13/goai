@@ -1,0 +1,20 @@
+Filtered excerpt, not the complete job log.
+Repository jxsl13/goai; run34400229272; PR1249 head a84cdb98ef117afdf020d9cee8383720b9baf3df.
+Command: gh run view 34400229272 --repo jxsl13/goai --log-failed | rg -n -C 3 'FITGUARD|TestClassicFitTimeGuard|fit_time_guard_test.go:129|FAIL[[:space:]]+github.com/jxsl13/goai/classic'
+
+1349-cgo+metal / macos	UNKNOWN STEP	2026-09-09T20:23:48.2570330Z ok  	github.com/jxsl13/goai/backend/metal	202.894s
+1350-cgo+metal / macos	UNKNOWN STEP	2026-09-09T20:23:48.2667850Z ok  	github.com/jxsl13/goai/backend/ref	0.227s
+1351-cgo+metal / macos	UNKNOWN STEP	2026-09-09T20:23:48.2769710Z ?   	github.com/jxsl13/goai/backend/vulkan	[no test files]
+1352:cgo+metal / macos	UNKNOWN STEP	2026-09-09T20:23:48.2871610Z FITGUARD DecisionTree            3.65 ms (ceiling 50 ms)
+1353:cgo+metal / macos	UNKNOWN STEP	2026-09-09T20:23:48.2974780Z FITGUARD RandomForest100       312.44 ms (ceiling 300 ms)
+1354-cgo+metal / macos	UNKNOWN STEP	2026-09-09T20:23:48.3029030Z exit status 1
+1355:cgo+metal / macos	UNKNOWN STEP	2026-09-09T20:23:48.3060890Z FITGUARD GradientBoosting100   335.22 ms (ceiling 800 ms)
+1356:cgo+metal / macos	UNKNOWN STEP	2026-09-09T20:23:48.3088920Z FITGUARD SVC_rbf                11.82 ms (ceiling 60 ms)
+1357:cgo+metal / macos	UNKNOWN STEP	2026-09-09T20:23:48.3090380Z FITGUARD GaussianNB              0.42 ms (ceiling 10 ms)
+1358:cgo+metal / macos	UNKNOWN STEP	2026-09-09T20:23:48.3091490Z --- FAIL: TestClassicFitTimeGuard (0.67s)
+1359:cgo+metal / macos	UNKNOWN STEP	2026-09-09T20:23:48.3099810Z     fit_time_guard_test.go:129: RandomForest100 fit took 312.445542ms, over the 300ms order-of-magnitude ceiling — a regression this large is a convergence or algorithmic failure, not machine noise
+1360-cgo+metal / macos	UNKNOWN STEP	2026-09-09T20:23:48.3111530Z FAIL
+1361:cgo+metal / macos	UNKNOWN STEP	2026-09-09T20:23:48.3115170Z FAIL	github.com/jxsl13/goai/classic	2.608s
+1362-cgo+metal / macos	UNKNOWN STEP	2026-09-09T20:23:48.3116480Z ok  	github.com/jxsl13/goai/format/gguf	0.341s
+1363-cgo+metal / macos	UNKNOWN STEP	2026-09-09T20:23:48.3117650Z ok  	github.com/jxsl13/goai/format/pytorch	0.020s
+1364-cgo+metal / macos	UNKNOWN STEP	2026-09-09T20:23:48.3118270Z ok  	github.com/jxsl13/goai/internal/apicheck	2.610s
