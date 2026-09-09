@@ -66,3 +66,25 @@ scalar expression must remain exact against the reference for finite results
 and signed zero, with matching nonfinite classes and input immutability.
 Existing SIMD tolerances must not be widened. A failed performance gate
 requires reverting the runtime candidate and preserving the rejection evidence.
+
+## Frozen control and mutation
+
+The test-only control commit is
+`d0599a53ac51ded818526766c16321fcdcaa184e`. Before runtime edits,
+`go test -c ./backend/cpu` with the exact Go 1.27.1 SIMD settings above produced
+`gelu-direct-old.test`, SHA256
+`d3c1e9c78ad70f170fcd39988856cc671dfd2fd63132f375bf1f1513f4213636`.
+The shared harness file `backend/cpu/gelu_bwd_direct_test.go` has SHA256
+`b2211d70284afa42eb2c5354e63f35b6f9e5f0f70fcd3765fb55ce7b6979b86c`.
+The pre-change runtime file `backend/cpu/activation_bwd_f64.go` has SHA256
+`ee4cc131844f4e4e259fd22c03d118a3a8d1a136d3f4135f88a645739852646b`.
+
+Before the rewrite, temporarily replacing the scalar return with
+`math.Nextafter(g*(phi+x*pdf), math.Inf(1))` failed both
+`TestActivationBackwardF64CPUMatchesRef` and `TestCPUGeluBackwardCrossReference`
+at their first GELU comparison; `mutation-one-ulp.txt` retains the failures.
+The original runtime source was restored byte-for-byte before freezing the
+control. Focused correctness passed in default and SIMD builds at GOMAXPROCS
+1 and 12, including small/ragged/parallel shapes, special values, views,
+input/output ownership, mixed-gradient fallback, validation errors, and recorder
+counts. No numerical tolerance was widened.

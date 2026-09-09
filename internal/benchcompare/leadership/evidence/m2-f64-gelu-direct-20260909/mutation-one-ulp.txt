@@ -1,0 +1,10 @@
+=== RUN   TestActivationBackwardF64CPUMatchesRef
+    activation_bwd_f64_test.go:45: gelu_backward i=0 x=-3: cpu -0.023891294408367836 != ref -0.02389129440836784 (must be bit-exact)
+--- FAIL: TestActivationBackwardF64CPUMatchesRef (0.02s)
+=== RUN   TestCPUGeluBackwardCrossReference
+    cpu_test.go:201: gelu_backward/f64 [0]: cpu -3.6521489697225005 != ref -3.652148969722501
+--- FAIL: TestCPUGeluBackwardCrossReference (0.09s)
+FAIL
+FAIL	github.com/jxsl13/goai/backend/cpu	0.563s
+FAIL
+
