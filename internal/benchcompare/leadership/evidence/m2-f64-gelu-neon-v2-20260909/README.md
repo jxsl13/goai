@@ -1,6 +1,6 @@
 # M2 F64 GELU uniform-small follow-up — September 9, 2026
 
-Status: independent plan review passed; implementation in progress. No V2
+Status: minimal candidate implemented; independent qualification pending. No V2
 measurement yet.
 The rejected [V1 experiment](../m2-f64-gelu-neon-20260909/README.md) and its frozen
 binary remain immutable. This follow-up must pass the same gates; it does not
@@ -30,6 +30,15 @@ New explicit pair-permutation tests must pass before the runtime edit. A valid
 compiled mutation inside the early return must fail an assertion and be restored
 before committing, lifecycle writes, or final builds. Independent verification
 reruns the full declared correctness/build/race/cross-build checks from the diff.
+
+The [initial pair/body-tail tests](test-first-v1.txt) passed on unchanged V1.
+Review added reversed both-small, signed-zero, and signed-subnormal pairs.
+Two [compiled mutation checks](mutations.txt) then failed actual assertions:
+corrupting the early-return result and allowing either lane to trigger it.
+Both were restored before any committing operation resumed. A subsequent
+import-order formatting repair is separately disclosed in the mutation record.
+The production change is five new shortcut lines plus reuse of the same mask;
+full correctness and generated-code verification must still complete.
 
 ## Unchanged performance gates
 

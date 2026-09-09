@@ -114,6 +114,11 @@ func erfF64x2GELU(y archsimd.Float64x2) archsimd.Float64x2 {
 	denU = denU.MulAdd(z, geluNVU3)
 	denU = denU.MulAdd(z, geluNVU4)
 	erfSmall := y.Mul(numT).Div(denU)
+	small := ay.Less(geluNVOne)
+	lanes := small.ToInt64x2()
+	if lanes.GetElem(0) != 0 && lanes.GetElem(1) != 0 {
+		return erfSmall
+	}
 	e := expF64x2GELU(geluNVZero.Sub(z))
 	numP := geluNVP0.MulAdd(ay, geluNVP1)
 	numP = numP.MulAdd(ay, geluNVP2)
@@ -135,7 +140,7 @@ func erfF64x2GELU(y archsimd.Float64x2) archsimd.Float64x2 {
 	sign := y.ToBits().And(geluNVSign)
 	erfMiddle := geluNVOne.Sub(erfc).ToBits().And(geluNVAbs).Or(sign).BitsToFloat64()
 	erfBig := geluNVOne.ToBits().Or(sign).BitsToFloat64()
-	erf := erfSmall.IfElse(ay.Less(geluNVOne), erfMiddle)
+	erf := erfSmall.IfElse(small, erfMiddle)
 	return erfBig.IfElse(ay.GreaterEqual(geluNVSix), erf)
 }
 

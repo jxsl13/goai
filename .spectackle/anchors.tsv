@@ -466,4 +466,4 @@ ARM64-F64-GELU-NUMERIC-001	go:cpu.vgeluGradF64~3	backend/cpu/vgelu_f64_arm64.go	
 ARM64-F64-GELU-EXP-ORDER-001	go:cpu.vgeluGradF64~3	backend/cpu/vgelu_f64_arm64.go	217-235	67f085dc9e582e7e	a70b7eaf808c98e4
 ARM64-F64-GELU-FALLBACK-001	go:cpu.vgeluF64~3	backend/cpu/vgelu_f64_arm64.go	199-215	7254549d7e7ebaf3	6ac5d34d6f640780
 ARM64-F64-GELU-FALLBACK-001	go:cpu.vgeluGradF64~3	backend/cpu/vgelu_f64_arm64.go	217-235	67f085dc9e582e7e	6ac5d34d6f640780
-ARM64-F64-GELU-UNIFORM-SMALL-001	go:cpu.erfF64x2GELU	backend/cpu/vgelu_f64_arm64.go	104-140	175bd4afe550bdb8	e67180f264468535
+ARM64-F64-GELU-UNIFORM-SMALL-001	go:cpu.erfF64x2GELU	backend/cpu/vgelu_f64_arm64.go	104-140	175bd4afe550bdb8	b30b90e5128103af

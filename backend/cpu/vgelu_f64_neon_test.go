@@ -5,6 +5,7 @@ package cpu
 import (
 	"fmt"
 	"math"
+	"simd/archsimd"
 	"slices"
 	"testing"
 
@@ -57,6 +58,63 @@ func assertGELUF64Close(t *testing.T, got, want float64) {
 	}
 	if math.Abs(got-want) > 1e-12*math.Max(1, math.Abs(want)) {
 		t.Fatalf("got %.17g, want %.17g", got, want)
+	}
+}
+
+func TestErfF64x2GELUUniformSmallPairs(t *testing.T) {
+	prev := func(x float64) float64 { return math.Nextafter(x, math.Inf(-1)) }
+	next := func(x float64) float64 { return math.Nextafter(x, math.Inf(1)) }
+	pairs := [][2]float64{
+		{0.25, -0.75}, {-0.75, 0.25},
+		{0, math.Copysign(0, -1)}, {math.Copysign(0, -1), 0},
+		{math.SmallestNonzeroFloat64, -math.SmallestNonzeroFloat64},
+		{-math.SmallestNonzeroFloat64, math.SmallestNonzeroFloat64},
+		{0.5, 2}, {2, 0.5},
+		{0.5, 7}, {7, 0.5},
+		{-0.5, 2}, {2, -0.5},
+	}
+	for _, boundary := range []float64{-6, -1, 1, 6} {
+		for _, value := range []float64{prev(boundary), boundary, next(boundary)} {
+			pairs = append(pairs, [2]float64{value, -0.25}, [2]float64{-0.25, value})
+		}
+	}
+	for _, pair := range pairs {
+		name := fmt.Sprintf("%016x_%016x", math.Float64bits(pair[0]), math.Float64bits(pair[1]))
+		t.Run(name, func(t *testing.T) {
+			in := archsimd.LoadFloat64x2Array((*[2]float64)(&pair))
+			gotVector := erfF64x2GELU(in)
+			var got [2]float64
+			gotVector.StoreArray(&got)
+			for lane := range pair {
+				assertGELUF64Value(t, got[lane], erfF64GELUPoly(pair[lane]))
+			}
+		})
+	}
+}
+
+func TestVGELUF64NeonSmallBoundaryBodyTail(t *testing.T) {
+	var x []float64
+	for _, y := range []float64{-6, -1, 1, 6} {
+		for _, value := range []float64{
+			math.Nextafter(y, math.Inf(-1)), y, math.Nextafter(y, math.Inf(1)),
+		} {
+			x = append(x, value/geluNeonInvSqrt2)
+		}
+	}
+	x = append(x, 0.25/geluNeonInvSqrt2)
+	g := make([]float64, len(x))
+	for i := range g {
+		g[i] = 0.75
+	}
+	forward, backward := make([]float64, len(x)), make([]float64, len(x))
+	vgeluF64(forward, x)
+	vgeluGradF64(backward, x, g)
+	for i := range x {
+		oneF, oneB := make([]float64, 1), make([]float64, 1)
+		vgeluF64(oneF, x[i:i+1])
+		vgeluGradF64(oneB, x[i:i+1], g[i:i+1])
+		assertGELUF64Value(t, forward[i], oneF[0])
+		assertGELUF64Value(t, backward[i], oneB[0])
 	}
 }
 
