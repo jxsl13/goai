@@ -16,7 +16,7 @@ schema: v1
 - T-01M0GFJMPQE4GANWAQM376TK7B Implement and gate exact arm64 F32 Neg: Shipped exact arm64 F32 Neg sign-bit toggling with a portable exact fallback, a measured 1,048,576-element serial/parallel crossover, and default/SIMD M2 host routing through 16,777,216 elements. Every frozen CPU and Metal promotion cell passed across three count-7 campaigns. Evidence lives at internal/benchcompare/leadership/evidence/m2-arm64-neg-acceleration-20260820/README.md; perfscan issue 78 [body truncated at tombstone retention cap]
 - T-01KYJREHNVE9QS89QB05TW5SWV Memoize kernel resolution in Execute and stop Metal re-entering the dispatcher: Implemented a generation-aware dense Execute resolution cache keyed by exact registered backend identity, operation, and dtype. The registry publishes immutable atomic identity tables; generation changes from Register, RegisterReference, RegisterDefault, or SetPreference invalidate warmed entries. Dynamic opBackends routes and unregistered or same-name wrappers deliberately remain live and uncache [body truncated at tombstone retention cap]
 
-## MEASURED-METAL-UNARY-ROUTE-001 {applies: go:metal.unaryF32,backend/metal/unary_route_arm64_default.go}
+## MEASURED-METAL-UNARY-ROUTE-001 {applies: go:metal.unaryF32,go:metal.measuredHostUnaryMaxElements}
 WHEN a contiguous offset-zero F32 unary other than Abs is requested, the backend SHALL route Neg through CPU up to 16,777,216 elements, ReLU/Sqrt through CPU up to 4,194,304, and Exp/Log/Tanh/Sigmoid through CPU up to 2,048; otherwise use direct Metal.
 
 Rationale: Three independent 100x count-7 M2 campaigns measure exact CPU Neg 3.14x-3.98x faster than direct Metal through 16,777,216 elements; all other unary ceilings remain unchanged.
