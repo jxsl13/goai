@@ -455,10 +455,10 @@ SCALAR-F64-GELU-DIRECT-SEMANTICS-001	go:cpu.activationBackwardF64	backend/cpu/ac
 METAL-PREFILL-SHORT-001	go:metal.TestPrefillOpCosts	backend/metal/prefill_ops_bench_test.go	65-134	5c817a02c84d1f7c	17224aa7e77b167a
 METAL-MHA-DECODE-SHORT-001-001	go:metal.TestMHADecodeCost	backend/metal/mha_decode_bench_test.go	36-98	cbfdf09e96300879	33388eb4c1c079ec
 CLASSIC-FIT-SHORT-001	go:classic.TestClassicFitTimeGuard	classic/fit_time_guard_test.go	65-138	ec20a1d4a3ec4b72	f65cbf4c71757e89
-UNARY-BCE-EXACT-001	go:autograd.unaryVJP	autograd/vjp_elementwise.go	18-50	a498b9083fb431b4	b354ef2af4378282
-UNARY-BCE-EXACT-001	go:autograd.reluVJP	autograd/vjp_elementwise.go	112-148	60c82c25f3b736e6	b354ef2af4378282
-UNARY-BCE-EXACT-001	go:autograd.tanhVJP	autograd/vjp_elementwise.go	155-176	d499c5b3fd45443b	b354ef2af4378282
-UNARY-BCE-EXACT-001	go:autograd.sigmoidVJP	autograd/vjp_elementwise.go	195-216	629480a7cf6758d8	b354ef2af4378282
+UNARY-BCE-EXACT-001	go:autograd.unaryVJP	autograd/vjp_elementwise.go	18-50	a498b9083fb431b4	4ae78b7defc746f3
+UNARY-BCE-EXACT-001	go:autograd.reluVJP	autograd/vjp_elementwise.go	112-148	60c82c25f3b736e6	4ae78b7defc746f3
+UNARY-BCE-EXACT-001	go:autograd.tanhVJP	autograd/vjp_elementwise.go	155-176	d499c5b3fd45443b	4ae78b7defc746f3
+UNARY-BCE-EXACT-001	go:autograd.sigmoidVJP	autograd/vjp_elementwise.go	195-216	629480a7cf6758d8	4ae78b7defc746f3
 UNARY-BCE-PERF-001	go:autograd.unaryVJP	autograd/vjp_elementwise.go	18-50	a498b9083fb431b4	854738ba127edcf2
 UNARY-BCE-PERF-001	go:autograd.reluVJP	autograd/vjp_elementwise.go	112-148	60c82c25f3b736e6	854738ba127edcf2
 UNARY-BCE-PERF-001	go:autograd.tanhVJP	autograd/vjp_elementwise.go	155-176	d499c5b3fd45443b	854738ba127edcf2
