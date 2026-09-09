@@ -35,16 +35,6 @@ targets: backend/cpu/gemm_amx_bench_test.go
 
 Add benchmark-only cells for score shapes 128x64x128 and 512x64x512 plus output shapes 128x128x64 and 512x512x64 to the existing ADR-0027 path harness. Measure NEON and Accelerate in alternating count-seven physical-M2 campaigns from one exact binary. Advance to stride-aware binding and full MHA only if Accelerate is at least 1.35x faster in every head GEMM cell, providing margin for per-head cgo calls and causal overcompute; otherwise reject the proposal without production changes.
 
-## R-01M23Q8QJDE3Y878N2CZBNPAWJ Diagnose repeated parallel control allocation-byte movement without rescoring rejected GELU V2
-kind: research
-state: active
-created: 2026-09-09
-parent: P-01M23BZPZNF9VV3FF326AQX28E
-refs: R-01M23B9YZ1E16ANNE778WX5G7T
-targets: backend/cpu/bench_test.go
-
-READ-ONLY bounded research after rejected V2 T-01M23JPZT8FDM. Existing full campaigns cannot be resampled/rescored and immutable gelu-old.test/V1/gelu-v2.test and shared harness stay unchanged. First server research pack did not identify cause. Independent audit all24largepublictargets2.058–3.924x and48smallcells pass, but parallel Softplus B/op medians2097482→2097484,2097481→2097484,2097482→2097484 repeat3/3 despite unchangedallocs and nonsignificant per-campaign p. SiLUBackward2/3 +4,+1; noGELU B/op increase. Determine whether source/runtime accounting evidence explains these bytes or shows actual candidate allocation path changes. Research ONLY: no code/lifecycle writes, commits/pushes or benchmark/test/profile/build launches. Read .claude/commands/spectackle.md, get this item, then use find/get code nodes before known-file reads. Inspect raw controls and adaptively selected N; Go1.27.1 local SDK testing/benchmark.go and runtime allocation accounting; compare old dd1e779e and V2 runtime361955ac source and emitted relevant functions if useful. Get exact allocation/call path of BenchmarkSoftplusF64_256K_cpu via benchOn/public Execute/unary parallel scheduler; include Sigmoid/SiLU differences. Identify deterministic source deltas vs probabilistic process-wide effects; do NOT assert causality from nonsignificance or manufacture threshold. Draft minimal predeclared diagnostic protocol with old-old negative control, equal fixed iteration counts, raw total bytes/allocations if needed, exact source/binary pins, serialized heavy runs, independent verify and no original gate relaxation. Recommend evidence needed before any V3 implementation or benchmark-contract revision, which needs a new reviewed task. Use fresh cheap researcher. Output report via apply_patch /private/tmp/goai-m2-f64-gelu-neon-26BhJN/v2-allocation-research.txt with exact sources/commands/results/uncertainties. Root owns evidence/docs/lifecycle; generalizable substantive finding must be filed/deduped in perfscan. No external/model leadership claim.
-
 ## T-01M23QYMYVE0MSHXZMCARBFDN2 Capture exact fixed-count control allocation totals with identical-binary negative controls
 kind: task
 state: active
