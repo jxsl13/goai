@@ -3979,7 +3979,7 @@ Base b9c05946 on Apple M2 Pro, exact Go1.27.1. R-01M23B9YZ1E16 confirms scalar F
 
 ## R-01M23VWNB5FRP85PW5NSQWY5QA Design allocation-site attribution for repeated fixed-count control differences
 kind: research
-state: draft
+state: active
 created: 2026-09-09
 parent: P-01M23BZPZNF9VV3FF326AQX28E
 refs: T-01M23QYMYVE0MSHXZMCARBFDN2
