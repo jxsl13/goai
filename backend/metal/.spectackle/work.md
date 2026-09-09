@@ -45,7 +45,7 @@ Post-merge CI34394770011 at fe7a9bfcc1b4f6b589aa65bf3d61bbe2998a87ae failed unch
 
 ## T-01M23TWGZ5F2EBJRR0CTPCXGZ6 Honor short mode in MHA decode timing test while retaining four operation smoke cases
 kind: task
-state: draft
+state: active
 created: 2026-09-09
 parent: P-01M23TTRCAFA4TFBHCJ0BWE4F2
 targets: go:metal.TestMHADecodeCost
