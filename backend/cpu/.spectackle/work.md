@@ -41,6 +41,7 @@ state: draft
 created: 2026-09-09
 parent: P-01M23BZPZNF9VV3FF326AQX28E
 refs: R-01M23B9YZ1E16ANNE778WX5G7T
+grilled: 2026-09-09 open=2
 targets: backend/cpu/vgelu_f64_arm64.go, backend/cpu/vgelu_f64_neon_test.go, backend/cpu/vgelu_f64_bench_test.go, backend/cpu/vexp_arm64.go, backend/cpu/vexp_amd64.go, backend/cpu/vexp_default.go, backend/cpu/elementwise.go, backend/cpu/activation_bwd_f64.go, backend/cpu/gelu_f32policy_arm64simd_test.go, backend/cpu/gelu_bwd_direct_test.go, backend/cpu/cpu_test.go
 
 Implement ONE approved task under P-01M23BZPZNF9V using R-01M23B9YZ1E16 and the six ARM64-F64-GELU contracts. Root owns spec lifecycle, docs/evidence, performance campaigns and promotion; implementer owns the declared CPU Go files only. Worktree /private/tmp/goai-m2-f64-gelu-neon-26BhJN/repo; baseline b9c05946. Read .claude/commands/spectackle.md fully, get this task and parent; work start item=<id> (if serving-root-only item cannot start a main worktree, report exact result and use this assigned isolated branch; never create another repository). Never read/edit .spectackle bytes. All file edits use apply_patch. No concurrent benchmarks with parent. No pushes or PRs.
