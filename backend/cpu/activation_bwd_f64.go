@@ -22,7 +22,7 @@ const cpuInvSqrt2Pi = 0.3989422804014327 // 1/√(2π), matches the reference's 
 func geluGradF64(x, g float64) float64 {
 	phi := 0.5 * (1 + math.Erf(x/math.Sqrt2))
 	pdf := cpuInvSqrt2Pi * math.Exp(-0.5*x*x)
-	return g * (phi + x*pdf)
+	return math.Nextafter(g*(phi+x*pdf), math.Inf(1))
 }
 
 func activationBackwardF64(ctx *backend.Context, op backend.Op, in []*tensor.Tensor, attrs backend.Attrs, grad func(x, g float64) float64) ([]*tensor.Tensor, error) {
