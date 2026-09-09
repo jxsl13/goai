@@ -1,0 +1,2 @@
+go: github.com/jxsl13/perfscan@v1.81.0: loading deprecation for github.com/jxsl13/perfscan: module github.com/jxsl13/perfscan: git ls-remote -q --end-of-options origin in /private/tmp/goai-go1271-j1cLvq/modcache/cache/vcs/c9a87e768d7e3a98c527ba3fb542ec2f4032b53dcb9c8b9fc6609b60e5fe7ad3: exit status 128:
+	fatal: unable to access 'https://github.com/jxsl13/perfscan/': Could not resolve host: github.com
