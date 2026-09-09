@@ -47,7 +47,7 @@ READ-ONLY bounded research after rejected V2 T-01M23JPZT8FDM. Existing full camp
 
 ## T-01M23QYMYVE0MSHXZMCARBFDN2 Capture exact fixed-count control allocation totals with identical-binary negative controls
 kind: task
-state: draft
+state: active
 created: 2026-09-09
 parent: P-01M23BZPZNF9VV3FF326AQX28E
 refs: R-01M23Q8QJDE3Y878N2CZBNPAWJ
