@@ -1,6 +1,6 @@
 # M2 F64 GELU intrinsic experiment — September 9, 2026
 
-Status: control and candidate frozen; correctness verified, measurement pending. No candidate speedup or production
+Status: control and candidate frozen; correctness verified, full measurement pending. No validated speedup or production
 promotion is claimed by this record.
 
 ## Scope and pins
@@ -49,6 +49,13 @@ concurrently with the GELU measurements.
 This internal comparison is not an external-library leadership claim. The
 previous scalar callback experiment was rejected; its profile is only motivation
 for investigating the transcendental cost here.
+
+The short two-pair, 200 ms [pilot](pilot.txt) uses [pilot.sh](pilot.sh), includes
+only the four large public targets, and observed faster candidate samples in
+both arm orders. It is diagnostic, not statistical promotion evidence. macOS
+background services were consuming multiple cores before it ran; no Go builds,
+tests, profiles, or other agent benchmark runs overlapped it. The full campaigns
+and non-target controls remain required, with all samples retained.
 
 ## Verification record
 
