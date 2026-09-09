@@ -200,3 +200,6 @@ WHEN TestCPUControlAllocationSites is enabled, the diagnostic SHALL record exact
 
 ## CPU-ALLOC-SITE-RAW-001 {applies: go:cpu_test.formatAllocationSiteSnapshot,go:cpu_test.TestCPUControlAllocationSites}
 WHEN allocation-site evidence is serialized, the diagnostic SHALL preserve every raw MemProfileRecord and ordered CallersFrames entry, write pprof after raw post capture, and keep tail counters separate.
+
+## CPU-ALLOC-SITE-LIFETIME-001 {applies: go:cpu_test.TestCPUControlAllocationSites}
+WHEN allocation-site artifacts are serialized, the capture SHALL call runtime.KeepAlive for both raw record buffers after the final tail JSON write and artifact closes.
