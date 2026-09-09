@@ -452,3 +452,4 @@ SCALAR-F64-GELU-DIRECT-CONTROLS-001	go:cpu.geluBackwardF64KernelCPU	backend/cpu/
 SCALAR-F64-GELU-DIRECT-PERF-001	go:cpu_test.BenchmarkGELUBackwardF64DirectDispatch	backend/cpu/gelu_bwd_direct_test.go	205-223	7049117ebf3b03c1	a5f9eaf2416ef63e
 SCALAR-F64-GELU-DIRECT-CONTROLS-001	go:cpu_test.BenchmarkGELUBackwardF64DirectDispatch	backend/cpu/gelu_bwd_direct_test.go	205-223	7049117ebf3b03c1	342fd18b1a5aef43
 SCALAR-F64-GELU-DIRECT-SEMANTICS-001	go:cpu.activationBackwardF64	backend/cpu/activation_bwd_f64.go	28-41	183b03ea7aa2017a	8cf03eefc74e6956
+METAL-PREFILL-SHORT-001	go:metal.TestPrefillOpCosts	backend/metal/prefill_ops_bench_test.go	65-125	46edb0dcb3ad5cef	17224aa7e77b167a
