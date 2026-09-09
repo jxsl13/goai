@@ -38,6 +38,7 @@ choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4
 kind: proposal
 state: draft
 created: 2026-09-09
+grilled: 2026-09-09 open=0
 targets: go:metal.TestMHADecodeCost
 
 Post-merge CI34394770011 at fe7a9bfcc1b4f6b589aa65bf3d61bbe2998a87ae failed unchanged TestMHADecodeCost: llama7b dk128 sk512817.7us exceeds600us under -short on shared hosted macOS. PR1250 pre-merge all16jobs and executedsteps passed; the repaired prefill test did not fail. Apply existing TIMING-ASSERTIONS-SKIP-ON-RUNNERS-001 to this separate test. Short mode must still execute one recorded MHA operation for each4 model/context combinations with existing recorder/MHA error checks, Commit/Wait/Free and buffers. Full mode retains exact25repetitions, meas32/meas256 slope, four geometries and600us ceiling. No production/workflow changes, no threshold increase, no timing/performance gain claim. Fresh implementer and verifier must execute real Metal short/full default+SIMD; explicit no-Metal skips are not successful execution. Retain CI failure and full evidence, report generalized followup to existing perfscan868, create properPR, merge only when alljobs/steps succeed, then delete exact remote merged branch. Existing user authorization covers valid test correction and publication.
