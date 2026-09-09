@@ -21,7 +21,7 @@ WHEN a contiguous offset-zero F32 unary other than Abs is requested, the backend
 
 Rationale: Three independent 100x count-7 M2 campaigns measure exact CPU Neg 3.14x-3.98x faster than direct Metal through 16,777,216 elements; all other unary ceilings remain unchanged.
 
-## MEASURED-METAL-SIMD-UNARY-ROUTE-001 {applies: go:metal.unaryF32,backend/metal/unary_route_arm64simd.go}
+## MEASURED-METAL-SIMD-UNARY-ROUTE-001 {applies: go:metal.unaryF32,go:metal.measuredHostUnaryMaxElements~2}
 WHEN a contiguous offset-zero F32 unary other than Abs is requested under GOEXPERIMENT=simd, the backend SHALL route Neg through CPU up to 16,777,216 elements and Exp/Log/Tanh/ReLU/Sigmoid/Sqrt through CPU up to 4,194,304; otherwise use direct Metal.
 
 Rationale: Three independent 100x count-7 M2 SIMD campaigns measure exact CPU Neg 3.01x-3.76x faster than direct Metal through 16,777,216 elements; all other unary ceilings remain unchanged.
