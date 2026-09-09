@@ -1,0 +1,348 @@
+Independent verification report
+
+Verdict: PASS
+
+Scope
+
+- Task: T-01M23Y32PDEKB
+- Proposal: P-01M23Y1K1TEXF
+- PR: 1252
+- Detached verifier worktree: /private/tmp/goai-classic-short-verify-v4mNwu/repo
+- Verified HEAD: 5f60d52b1beb7fc45179723be73e0d74bbdb27e6
+- Comparison base: 4f17f5a4df8957c1521e5a5a4575440f2a87f853
+- Go source delta from base: classic/fit_time_guard_test.go only
+- Original/final source SHA-256: 91b4c285b42cc399d83b195497026c33220e326d65226d1cd0f270f4aa10ac57
+- Original/final Git blob: 34c77766ecf06752cc9dbc7813eaf7f180945464
+
+Independent source review
+
+The actual source diff from the stated base was reviewed without consulting an implementer report. The only Go-file delta is classic/fit_time_guard_test.go. The five original Fit closures remain in the original serial order and retain the original constructors, options, seeds, 4000x20 data, three classes, labels, and ceilings. The Fit invocation and fatal error check remain unconditional and precede the short-mode branch. Short mode emits one per-model smoke log and continues before elapsed-time reporting and ceiling evaluation. Full mode retains the five literal ceilings (50/300/800/60/10 ms), elapsed reporting, arm64 failure, and non-arm64 report-only behavior. The changed prose does not claim that a shared-runner overrun proves an algorithmic cause. No production code changed and this report makes no production or performance claim.
+
+$ git rev-parse HEAD
+5f60d52b1beb7fc45179723be73e0d74bbdb27e6
+EXIT_STATUS=0
+
+$ git diff --stat 4f17f5a4df8957c1521e5a5a4575440f2a87f853 --
+ .spectackle/anchors.tsv                            |   3 +-
+ classic/.spectackle/journal.ndjson                 |   9 +
+ classic/.spectackle/spec.md                        |   3 +
+ classic/.spectackle/work.md                        |  26 +++
+ classic/fit_time_guard_test.go                     |  13 +-
+ .../m2-classic-fit-short-20260909/README.md        |  28 +++
+ .../ci-failure-excerpt.txt                         |  20 ++
+ .../implementation.txt                             | 221 +++++++++++++++++++++
+ 8 files changed, 318 insertions(+), 5 deletions(-)
+EXIT_STATUS=0
+
+$ git diff --name-only 4f17f5a4df8957c1521e5a5a4575440f2a87f853 -- '*.go'
+classic/fit_time_guard_test.go
+EXIT_STATUS=0
+
+$ git diff 4f17f5a4df8957c1521e5a5a4575440f2a87f853 -- classic/fit_time_guard_test.go
+diff --git a/classic/fit_time_guard_test.go b/classic/fit_time_guard_test.go
+index db3762c7..34c77766 100644
+--- a/classic/fit_time_guard_test.go
++++ b/classic/fit_time_guard_test.go
+@@ -18,8 +18,9 @@ import (
+ //
+ // The ceilings are deliberately ~10x the times measured on an M2 Pro (DecisionTree 4.6, RandomForest
+ // 27.7, GradientBoosting 78, SVC_rbf 5.6, GaussianNB 0.3 ms). That is far too loose to be a
+-// benchmark and is not meant to be one: it is an order-of-magnitude tripwire that survives slower CI
+-// hardware and a loaded machine, while a 1600x regression fails it by two orders.
++// benchmark and is not meant to be one: it is an order-of-magnitude tripwire for controlled full-test
++// runs, while shared-runner short tests retain only the Fit smoke checks. A 1600x regression fails the
++// full guard by two orders.
+ //
+ // Build tier does not affect these numbers. backend/cpu has three matmul tiers (plain Go, NEON, and
+ // Accelerate, the latter two behind goexperiment.simd, worth 11-18x on raw matmul), so the obvious
+@@ -113,6 +114,10 @@ func TestClassicFitTimeGuard(t *testing.T) {
+ 		if err := c.fit(); err != nil {
+ 			t.Fatalf("%s: %v", c.name, err)
+ 		}
++		if testing.Short() {
++			t.Logf("FITGUARD %s Fit smoke passed; timing ceiling not enforced in short mode", c.name)
++			continue
++		}
+ 		el := time.Since(start)
+ 		fmt.Printf("FITGUARD %-20s %7.2f ms (ceiling %.0f ms)\n", c.name,
+ 			float64(el.Microseconds())/1000, float64(c.ceiling.Milliseconds()))
+@@ -126,8 +131,8 @@ func TestClassicFitTimeGuard(t *testing.T) {
+ 					runtime.GOOS, runtime.GOARCH)
+ 				continue
+ 			}
+-			t.Errorf("%s fit took %v, over the %v order-of-magnitude ceiling — a regression this "+
+-				"large is a convergence or algorithmic failure, not machine noise", c.name, el, c.ceiling)
++			t.Errorf("%s fit took %v, over the %v order-of-magnitude ceiling — investigate "+
++				"convergence, algorithmic regressions, and local run conditions", c.name, el, c.ceiling)
+ 		}
+ 	}
+ }
+EXIT_STATUS=0
+
+Declared VERIFY rerun
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go version
+go version go1.27.1 darwin/arm64
+EXIT_STATUS=0
+
+$ git diff --check
+EXIT_STATUS=0
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go test ./classic -run '^TestClassicFitTimeGuard$' -short -count=1 -v
+=== RUN   TestClassicFitTimeGuard
+    fit_time_guard_test.go:118: FITGUARD DecisionTree Fit smoke passed; timing ceiling not enforced in short mode
+    fit_time_guard_test.go:118: FITGUARD RandomForest100 Fit smoke passed; timing ceiling not enforced in short mode
+    fit_time_guard_test.go:118: FITGUARD GradientBoosting100 Fit smoke passed; timing ceiling not enforced in short mode
+    fit_time_guard_test.go:118: FITGUARD SVC_rbf Fit smoke passed; timing ceiling not enforced in short mode
+    fit_time_guard_test.go:118: FITGUARD GaussianNB Fit smoke passed; timing ceiling not enforced in short mode
+--- PASS: TestClassicFitTimeGuard (0.12s)
+PASS
+ok  	github.com/jxsl13/goai/classic	0.615s
+EXIT_STATUS=0
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go test ./classic -run '^TestClassicFitTimeGuard$' -count=1 -v
+=== RUN   TestClassicFitTimeGuard
+FITGUARD DecisionTree            4.35 ms (ceiling 50 ms)
+FITGUARD RandomForest100        26.12 ms (ceiling 300 ms)
+FITGUARD GradientBoosting100    80.06 ms (ceiling 800 ms)
+FITGUARD SVC_rbf                 4.29 ms (ceiling 60 ms)
+FITGUARD GaussianNB              0.37 ms (ceiling 10 ms)
+--- PASS: TestClassicFitTimeGuard (0.12s)
+PASS
+ok  	github.com/jxsl13/goai/classic	0.359s
+EXIT_STATUS=0
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd go test ./classic -run '^TestClassicFitTimeGuard$' -short -count=1 -v
+=== RUN   TestClassicFitTimeGuard
+    fit_time_guard_test.go:118: FITGUARD DecisionTree Fit smoke passed; timing ceiling not enforced in short mode
+    fit_time_guard_test.go:118: FITGUARD RandomForest100 Fit smoke passed; timing ceiling not enforced in short mode
+    fit_time_guard_test.go:118: FITGUARD GradientBoosting100 Fit smoke passed; timing ceiling not enforced in short mode
+    fit_time_guard_test.go:118: FITGUARD SVC_rbf Fit smoke passed; timing ceiling not enforced in short mode
+    fit_time_guard_test.go:118: FITGUARD GaussianNB Fit smoke passed; timing ceiling not enforced in short mode
+--- PASS: TestClassicFitTimeGuard (0.11s)
+PASS
+ok  	github.com/jxsl13/goai/classic	0.464s
+EXIT_STATUS=0
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd go test ./classic -run '^TestClassicFitTimeGuard$' -count=1 -v
+=== RUN   TestClassicFitTimeGuard
+FITGUARD DecisionTree            2.62 ms (ceiling 50 ms)
+FITGUARD RandomForest100        25.84 ms (ceiling 300 ms)
+FITGUARD GradientBoosting100    75.46 ms (ceiling 800 ms)
+FITGUARD SVC_rbf                 3.48 ms (ceiling 60 ms)
+FITGUARD GaussianNB              0.42 ms (ceiling 10 ms)
+--- PASS: TestClassicFitTimeGuard (0.11s)
+PASS
+ok  	github.com/jxsl13/goai/classic	0.351s
+EXIT_STATUS=0
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go test ./classic -short -count=1
+ok  	github.com/jxsl13/goai/classic	0.954s
+EXIT_STATUS=0
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd go test ./classic -short -count=1
+ok  	github.com/jxsl13/goai/classic	0.935s
+EXIT_STATUS=0
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go vet ./classic
+EXIT_STATUS=0
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd go vet ./classic
+EXIT_STATUS=0
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=1 go test -race ./classic -short -count=1
+ok  	github.com/jxsl13/goai/classic	13.057s
+EXIT_STATUS=0
+
+Focused-output checks
+
+- Default short: exactly five Fit smoke logs, no SKIP, exit 0.
+- Default full: exactly five timing lines, exit 0.
+- SIMD short: exactly five Fit smoke logs, no SKIP, exit 0.
+- SIMD full: exactly five timing lines, exit 0.
+
+Controlled mutation proof 1: ceiling branch
+
+Only these bytes were changed with apply_patch:
+
+*** Begin Patch
+*** Update File: /private/tmp/goai-classic-short-verify-v4mNwu/repo/classic/fit_time_guard_test.go
+@@
+-		if el > c.ceiling {
++		if el > 0 {
+*** End Patch
+
+apply_patch result: {}
+
+$ git diff -- classic/fit_time_guard_test.go
+diff --git a/classic/fit_time_guard_test.go b/classic/fit_time_guard_test.go
+index 34c77766..481e7907 100644
+--- a/classic/fit_time_guard_test.go
++++ b/classic/fit_time_guard_test.go
+@@ -121,7 +121,7 @@ func TestClassicFitTimeGuard(t *testing.T) {
+ 		el := time.Since(start)
+ 		fmt.Printf("FITGUARD %-20s %7.2f ms (ceiling %.0f ms)\n", c.name,
+ 			float64(el.Microseconds())/1000, float64(c.ceiling.Milliseconds()))
+-		if el > c.ceiling {
++		if el > 0 {
+ 			// The ceilings are calibrated on darwin/arm64. On other architectures this REPORTS
+ 			// rather than fails, because it currently finds a pre-existing defect it did not cause:
+ 			// see the KNOWN AMD64 DEFECT note above.
+EXIT_STATUS=0
+
+$ shasum -a 256 classic/fit_time_guard_test.go
+8aa279e7d41af846eb2ed471f5848e62f3d4f84b74f6737d1157e2b9eeecf300  classic/fit_time_guard_test.go
+EXIT_STATUS=0
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go test -c ./classic -o /private/tmp/goai-classic-short-verify-v4mNwu/ceiling-mutant.test
+EXIT_STATUS=0
+
+$ shasum -a 256 /private/tmp/goai-classic-short-verify-v4mNwu/ceiling-mutant.test
+9716eec342b9b40724c72c32719726095255c0aa42bdc6bd7584ccce13b00a59  /private/tmp/goai-classic-short-verify-v4mNwu/ceiling-mutant.test
+EXIT_STATUS=0
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 /private/tmp/goai-classic-short-verify-v4mNwu/ceiling-mutant.test -test.run '^TestClassicFitTimeGuard$' -test.short -test.count=1 -test.v
+=== RUN   TestClassicFitTimeGuard
+    fit_time_guard_test.go:118: FITGUARD DecisionTree Fit smoke passed; timing ceiling not enforced in short mode
+    fit_time_guard_test.go:118: FITGUARD RandomForest100 Fit smoke passed; timing ceiling not enforced in short mode
+    fit_time_guard_test.go:118: FITGUARD GradientBoosting100 Fit smoke passed; timing ceiling not enforced in short mode
+    fit_time_guard_test.go:118: FITGUARD SVC_rbf Fit smoke passed; timing ceiling not enforced in short mode
+    fit_time_guard_test.go:118: FITGUARD GaussianNB Fit smoke passed; timing ceiling not enforced in short mode
+--- PASS: TestClassicFitTimeGuard (0.12s)
+PASS
+EXIT_STATUS=0
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 /private/tmp/goai-classic-short-verify-v4mNwu/ceiling-mutant.test -test.run '^TestClassicFitTimeGuard$' -test.count=1 -test.v
+=== RUN   TestClassicFitTimeGuard
+FITGUARD DecisionTree            2.19 ms (ceiling 50 ms)
+    fit_time_guard_test.go:134: DecisionTree fit took 2.189792ms, over the 50ms order-of-magnitude ceiling — investigate convergence, algorithmic regressions, and local run conditions
+FITGUARD RandomForest100        18.52 ms (ceiling 300 ms)
+    fit_time_guard_test.go:134: RandomForest100 fit took 18.52ms, over the 300ms order-of-magnitude ceiling — investigate convergence, algorithmic regressions, and local run conditions
+FITGUARD GradientBoosting100    73.90 ms (ceiling 800 ms)
+    fit_time_guard_test.go:134: GradientBoosting100 fit took 73.897708ms, over the 800ms order-of-magnitude ceiling — investigate convergence, algorithmic regressions, and local run conditions
+FITGUARD SVC_rbf                 4.16 ms (ceiling 60 ms)
+    fit_time_guard_test.go:134: SVC_rbf fit took 4.162792ms, over the 60ms order-of-magnitude ceiling — investigate convergence, algorithmic regressions, and local run conditions
+FITGUARD GaussianNB              0.30 ms (ceiling 10 ms)
+    fit_time_guard_test.go:134: GaussianNB fit took 302.084µs, over the 10ms order-of-magnitude ceiling — investigate convergence, algorithmic regressions, and local run conditions
+--- FAIL: TestClassicFitTimeGuard (0.10s)
+FAIL
+EXIT_STATUS=1
+
+Outcome: the mutant compiled. Short mode passed and all five Fit closures ran, while full mode failed and emitted all five forced ceiling assertions. This is the expected discriminating outcome.
+
+Restoration used apply_patch with exactly these bytes:
+
+*** Begin Patch
+*** Update File: /private/tmp/goai-classic-short-verify-v4mNwu/repo/classic/fit_time_guard_test.go
+@@
+-		if el > 0 {
++		if el > c.ceiling {
+*** End Patch
+
+apply_patch result: {}
+
+$ shasum -a 256 classic/fit_time_guard_test.go
+91b4c285b42cc399d83b195497026c33220e326d65226d1cd0f270f4aa10ac57  classic/fit_time_guard_test.go
+EXIT_STATUS=0
+
+$ git diff -- classic/fit_time_guard_test.go
+EXIT_STATUS=0
+
+$ git diff --check
+EXIT_STATUS=0
+
+Controlled mutation proof 2: Fit error remains active
+
+Only these bytes were changed with apply_patch:
+
+*** Begin Patch
+*** Update File: /private/tmp/goai-classic-short-verify-v4mNwu/repo/classic/fit_time_guard_test.go
+@@
+ 		{"DecisionTree", 50 * time.Millisecond, func() error {
+-			return NewDecisionTreeClassifier(WithMaxDepth(12)).Fit(X, y)
++			return fmt.Errorf("synthetic Fit error")
+ 		}},
+*** End Patch
+
+apply_patch result: {}
+
+$ git diff -- classic/fit_time_guard_test.go
+diff --git a/classic/fit_time_guard_test.go b/classic/fit_time_guard_test.go
+index 34c77766..bb81fa3f 100644
+--- a/classic/fit_time_guard_test.go
++++ b/classic/fit_time_guard_test.go
+@@ -94,7 +94,7 @@ func TestClassicFitTimeGuard(t *testing.T) {
+ 		fit     func() error
+ 	}{
+ 		{"DecisionTree", 50 * time.Millisecond, func() error {
+-			return NewDecisionTreeClassifier(WithMaxDepth(12)).Fit(X, y)
++			return fmt.Errorf("synthetic Fit error")
+ 		}},
+ 		{"RandomForest100", 300 * time.Millisecond, func() error {
+ 			return NewRandomForestClassifier(WithNumTrees(100), WithSeed(42)).Fit(X, y)
+EXIT_STATUS=0
+
+$ shasum -a 256 classic/fit_time_guard_test.go
+1775eacba05ba2888a8a6f9602f7bc9e4d183b188557d7fd2309473fe65d4bfd  classic/fit_time_guard_test.go
+EXIT_STATUS=0
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go test -c ./classic -o /private/tmp/goai-classic-short-verify-v4mNwu/fit-error-mutant.test
+EXIT_STATUS=0
+
+$ shasum -a 256 /private/tmp/goai-classic-short-verify-v4mNwu/fit-error-mutant.test
+f4971831ebd766d47bb07441efa7aa334e00f18c963abbdfa30db107e5df4d92  /private/tmp/goai-classic-short-verify-v4mNwu/fit-error-mutant.test
+EXIT_STATUS=0
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 /private/tmp/goai-classic-short-verify-v4mNwu/fit-error-mutant.test -test.run '^TestClassicFitTimeGuard$' -test.short -test.count=1 -test.v
+=== RUN   TestClassicFitTimeGuard
+    fit_time_guard_test.go:115: DecisionTree: synthetic Fit error
+--- FAIL: TestClassicFitTimeGuard (0.00s)
+FAIL
+EXIT_STATUS=1
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 /private/tmp/goai-classic-short-verify-v4mNwu/fit-error-mutant.test -test.run '^TestClassicFitTimeGuard$' -test.count=1 -test.v
+=== RUN   TestClassicFitTimeGuard
+    fit_time_guard_test.go:115: DecisionTree: synthetic Fit error
+--- FAIL: TestClassicFitTimeGuard (0.00s)
+FAIL
+EXIT_STATUS=1
+
+Outcome: the mutant compiled. Both short and full modes exited 1 on the synthetic DecisionTree Fit error before any later-case smoke or timing output. This proves the Fit error check remains active in both modes.
+
+Restoration used apply_patch with exactly these bytes:
+
+*** Begin Patch
+*** Update File: /private/tmp/goai-classic-short-verify-v4mNwu/repo/classic/fit_time_guard_test.go
+@@
+ 		{"DecisionTree", 50 * time.Millisecond, func() error {
+-			return fmt.Errorf("synthetic Fit error")
++			return NewDecisionTreeClassifier(WithMaxDepth(12)).Fit(X, y)
+ 		}},
+*** End Patch
+
+apply_patch result: {}
+
+Final restoration and cleanliness proof
+
+$ shasum -a 256 classic/fit_time_guard_test.go
+91b4c285b42cc399d83b195497026c33220e326d65226d1cd0f270f4aa10ac57  classic/fit_time_guard_test.go
+EXIT_STATUS=0
+
+$ git hash-object classic/fit_time_guard_test.go
+34c77766ecf06752cc9dbc7813eaf7f180945464
+EXIT_STATUS=0
+
+$ git diff --check
+EXIT_STATUS=0
+
+$ git diff --exit-code -- classic/fit_time_guard_test.go
+EXIT_STATUS=0
+
+$ git status --short
+EXIT_STATUS=0
+
+Ran versus not run
+
+Ran every command in the T VERIFY block: pinned Go version, four focused modes, both complete classic short suites, both classic vet modes, CGO-enabled default short race, initial and final diff checks, source hashes, and both compiled mutation proofs. No declared gate failed. Expected mutation failures are retained above and are proof outcomes, not gate failures. Inspected full source and base diff. Did not run unrelated packages, benchmarks, production workloads, or a non-arm64 binary. Non-arm64 report-only behavior was verified by unchanged source diff rather than dynamic execution. Did not rely on CI status or an implementer report, and made no production/performance claim.
+
+Heavy test/build window: CLOSED. No additional heavy verifier command remains running.
