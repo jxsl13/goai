@@ -36,7 +36,7 @@ choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4
 
 ## P-01M23TTRCAFA4TFBHCJ0BWE4F2 Keep decode-attention smoke checks in short CI and reserve timing ceilings for full local runs
 kind: proposal
-state: draft
+state: active
 created: 2026-09-09
 grilled: 2026-09-09 open=0
 targets: go:metal.TestMHADecodeCost
