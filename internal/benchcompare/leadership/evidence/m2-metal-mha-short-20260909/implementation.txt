@@ -1,0 +1,55 @@
+Implementation commands used pinned Go1.27.1, CGO_ENABLED=1, GOTOOLCHAIN=local, GOCACHE=/private/tmp/gocache-goai and GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache. Commands completed sequentially; all exit0. Focused commands: go test ./backend/metal -run '^TestMHADecodeCost$' -count=1 -v, with/without -short and GOEXPERIMENT=simd. Package commands: go test ./backend/metal -short -count=1 -timeout 20m, default/SIMD. Vet: go vet ./backend/metal, default/SIMD. Formatting: gofmt -d backend/metal/mha_decode_bench_test.go. Whitespace: git diff --check. Empty log sections represent literal empty output, not omitted logs.
+
+## implement-focused-short-default.log
+=== RUN   TestMHADecodeCost
+    mha_decode_bench_test.go:81: MHA decode smoke complete: model=tinyllama dk=64 sk=36
+    mha_decode_bench_test.go:81: MHA decode smoke complete: model=tinyllama dk=64 sk=512
+    mha_decode_bench_test.go:81: MHA decode smoke complete: model=llama7b dk=128 sk=36
+    mha_decode_bench_test.go:81: MHA decode smoke complete: model=llama7b dk=128 sk=512
+--- PASS: TestMHADecodeCost (0.02s)
+PASS
+ok  	github.com/jxsl13/goai/backend/metal	0.581s
+
+## implement-focused-short-simd.log
+=== RUN   TestMHADecodeCost
+    mha_decode_bench_test.go:81: MHA decode smoke complete: model=tinyllama dk=64 sk=36
+    mha_decode_bench_test.go:81: MHA decode smoke complete: model=tinyllama dk=64 sk=512
+    mha_decode_bench_test.go:81: MHA decode smoke complete: model=llama7b dk=128 sk=36
+    mha_decode_bench_test.go:81: MHA decode smoke complete: model=llama7b dk=128 sk=512
+--- PASS: TestMHADecodeCost (0.02s)
+PASS
+ok  	github.com/jxsl13/goai/backend/metal	0.438s
+
+## implement-focused-full-default.log
+=== RUN   TestMHADecodeCost
+MHA decode tinyllama  dk= 64 sk=  36  13.22 us/op
+MHA decode tinyllama  dk= 64 sk= 512  16.24 us/op
+MHA decode llama7b    dk=128 sk=  36  66.84 us/op
+MHA decode llama7b    dk=128 sk= 512  278.52 us/op
+--- PASS: TestMHADecodeCost (2.83s)
+PASS
+ok  	github.com/jxsl13/goai/backend/metal	3.148s
+
+## implement-focused-full-simd.log
+=== RUN   TestMHADecodeCost
+MHA decode tinyllama  dk= 64 sk=  36  12.71 us/op
+MHA decode tinyllama  dk= 64 sk= 512  15.38 us/op
+MHA decode llama7b    dk=128 sk=  36  63.97 us/op
+MHA decode llama7b    dk=128 sk= 512  278.36 us/op
+--- PASS: TestMHADecodeCost (2.82s)
+PASS
+ok  	github.com/jxsl13/goai/backend/metal	3.135s
+
+## implement-package-short-default.log
+ok  	github.com/jxsl13/goai/backend/metal	40.501s
+
+## implement-package-short-simd.log
+ok  	github.com/jxsl13/goai/backend/metal	40.572s
+
+## implement-vet-default.log
+
+## implement-vet-simd.log
+
+## implement-gofmt-d.log
+
+## implement-diff-check.log

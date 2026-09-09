@@ -1,0 +1,44 @@
+VERDICT: PASS
+TASK: T-01M23TWGZ5F2E
+PARENT: P-01M23TTRCAFA4
+HEAVY_WINDOW: CLOSED
+
+Independent scope review
+- Reviewed the actual tracked diff in backend/metal/mha_decode_bench_test.go and the root-owned untracked evidence README at internal/benchcompare/leadership/evidence/m2-metal-mha-short-20260909/README.md.
+- git status showed only the scoped test file plus the root-owned evidence directory; no production runtime or workflow file changed.
+- Short mode sets repeats=1, invokes meas(1) once for each of the existing four model/context geometries, logs model/dk/sk, and continues before slope calculation and the 600 us ceiling.
+- The existing Available() skip remains. NewRecorder and MHA errors, Commit, Wait, elapsed-time read, recorder Free, and device-buffer Release lifetimes remain on the executed paths.
+- Full mode retains repeats=25, meas(32), meas(256), the original slope expression, four geometries, and the unchanged 600 us ceiling.
+- The evidence README accurately distinguishes operation smoke from numerical parity and says unavailable-Metal skips are not execution proof. Its pending status is appropriately left for the root owner to update.
+
+Independent real-Metal focused matrix (pinned Go 1.27.1, GOTOOLCHAIN=local, CGO_ENABLED=1, -count=1 -v)
+- short/default: PASS, exit 0, exactly 4 smoke-complete lines, no SKIP.
+- short/GOEXPERIMENT=simd: PASS, exit 0, exactly 4 smoke-complete lines, no SKIP.
+- full/default: PASS, exit 0, exactly 4 timing lines, no SKIP; 12.10, 16.22, 65.65, 278.34 us/op.
+- full/GOEXPERIMENT=simd: PASS, exit 0, exactly 4 timing lines, no SKIP; 11.93, 16.37, 66.17, 279.51 us/op.
+
+Lightweight independent checks
+- gofmt -d backend/metal/mha_decode_bench_test.go: exit 0, empty output.
+- git diff --check -- backend/metal/mha_decode_bench_test.go: exit 0, empty output.
+- git diff --check: exit 0, empty output.
+- SHA-256 backend/metal/mha_decode_bench_test.go: 5bd34b91fe3e64e9dafa9c43037c247f84c5eeb4a7575ecb30f8f572a040337c (matches expected).
+
+Deliberate non-repetition
+- Full backend/metal package and vet default/SIMD were not repeated because the independent diff audit found no code concern and the verifier brief explicitly made those repetitions optional. Implementer evidence was not used as proof for this verdict.
+
+Raw logs
+- verifier-focused-short-default.log
+- verifier-focused-short-simd.log
+- verifier-focused-full-default.log
+- verifier-focused-full-simd.log
+- verifier-gofmt-d.log
+- verifier-diff-check-scoped.log
+- verifier-diff-check-all.log
+- verifier-source-sha256.log
+- verifier-scope-diff.log
+- verifier-evidence-readme.log
+- verifier-source-audit.log
+- verifier-protocol.log
+- verifier-spectackle.log
+
+No implementation, lifecycle, Git, or repository-owned evidence edits were made by this verifier. Only verifier-*.log and this report.txt were created outside the repository with apply_patch.
