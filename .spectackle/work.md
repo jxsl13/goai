@@ -3966,12 +3966,3 @@ option: Resize hidden scratch for every Step shape
 option: Retain the capacity-wide unary control
 blocks: P-01M0SKYF35FYGB3RPMP0DDPCAW
 choice: One bounded BiasGELU recorder dispatch
-
-## P-01M234HF6DF2JB1Y3X1BPKMK7Z Rebuild current main with the pinned Go 1.27.1 patch toolchain
-kind: proposal
-state: active
-created: 2026-09-09
-grilled: 2026-09-09 open=0
-targets: .
-
-Upgrade the coordinated live toolchain declarations from Go 1.27.0/1.27.x to pinned Go 1.27.1. The module floor, README and CI are one repository-wide build contract GO127-LIVE-TOOLCHAIN-001. Prior research and measurements are archived in P-01M0V9AJGTFXNTP2BSGMQ2XGTN and internal/benchcompare/leadership/evidence/go127-toolchain-rebuild-20260825. Current main is 640160379b3d7199dfe716e3a7dc21ae17f4a809. Official go.dev archive SHA256 is verified. Preserve numerical behavior, all current kernels, safe GGUF OpenRaw ownership and external perfscan direct integration. Close stale PR 1246 as superseded, explaining its use-after-unmap defect; retain its unmerged branch for audit. VERIFY: nine alternating frozen-binary Go 1.27.0/1.27.1 pairs using identical current-main source for SVD 128x128, Eigh VJP 128 and MoECombineBackward at GOMAXPROCS 1 and 12; record medians, pair direction, allocations, raw samples and honest regressions. Run full pure-Go build/vet/short tests at timeout 1800s, perfscan gates via GOPROXY=direct, native plain/SIMD, full Linux AMD64 SIMD cross-build and test compile, Metal tests, tidy, changed Markdown lint, independent verification and complete PR CI. User has explicitly authorized update, commit, push, PR, merge after CI and deletion of merged feature branches. No kernel speedup or broad performance leadership claim follows from a patch release.
