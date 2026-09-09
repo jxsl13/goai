@@ -48,6 +48,7 @@ kind: task
 state: draft
 created: 2026-09-09
 parent: P-01M23R1VJNEJJA8QB17ET720FM
+grilled: 2026-09-09 open=1
 targets: backend/metal/prefill_ops_bench_test.go
 
 OWNERSHIP onefile only backend/metal/prefill_ops_bench_test.go in /private/tmp/goai-prefill-ci-O70L2w/repo branchcodex/metal-prefill-timing-short-20260909 baseb9c05946. Follow .claude/commands/spectackle.md; CLI getparent/task. Root owns docs/evidence/lifecycle/commits/push/PR. No runtime,CIworkflow, thresholds, separatecorrectness tests or unrelatedfiles edited. apply_patch only. No mutations/lifecycle/commits/heavywork until root permission. First return implementation diff and proposedverification commands; root schedules heavyM2 checks to avoid allocationdiagnostic overlap.
