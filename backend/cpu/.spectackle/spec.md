@@ -158,7 +158,7 @@ WHEN scalar F64 GELU backward executes, the CPU backend SHALL preserve finite-re
 
 Rationale: R-01M236QP4YEFD and DEVIRTUALIZING-REMOVES-AN-FMA-BARRIER-001 require a one-ulp mutation before specialization; the current ARM64 scalar reference tolerance remains zero and no SIMD capability is enabled.
 
-## SCALAR-F64-GELU-DIRECT-PERF-001 {applies: go:cpu.geluBackwardF64KernelCPU,go:cpu_test.BenchmarkGELUBackwardF64_256K_cpu}
+## SCALAR-F64-GELU-DIRECT-PERF-001 {applies: go:cpu.geluBackwardF64KernelCPU,go:cpu_test.BenchmarkGELUBackwardF64DirectDispatch}
 WHEN three alternating count-seven M2 Pro Go1.27.1 campaigns measure 262144-element GELU backward at GOMAXPROCS1, the promotion gate SHALL require at least 1.05x median improvement with p below 0.05 in every campaign.
 
 Rationale: This is an attribution experiment before a SIMD redesign; scalar erf and exp still dominate. PROC-INTERLEAVE-001 requires small effects to exceed within-arm noise. An inconclusive experiment is rejected without a speedup claim, with all raw campaigns retained.
