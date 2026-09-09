@@ -3978,7 +3978,7 @@ Upgrade the coordinated live toolchain declarations from Go 1.27.0/1.27.x to pin
 
 ## T-01M234MSKYE6D8NGMMEYBJG4GZ Pin and validate Go 1.27.1 on current main
 kind: task
-state: draft
+state: active
 created: 2026-09-09
 parent: P-01M234HF6DF2JB1Y3X1BPKMK7Z
 targets: .
