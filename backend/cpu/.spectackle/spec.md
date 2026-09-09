@@ -183,3 +183,6 @@ WHEN three paired count-seven M2 Pro Go1.27.1 campaigns measure 262144-element f
 
 ## ARM64-F64-GELU-EXP-ORDER-001 {applies: go:cpu.geluBackwardF64KernelCPU}
 WHEN the ARM64 SIMD backward kernel evaluates the erfc and PDF factors, the exponential composition SHALL evaluate the independently rounded negative squared scaled input and negative half squared input separately instead of assuming their bit patterns are equal.
+
+## ARM64-F64-GELU-CONTROLS-001 {applies: go:cpu.geluKernelCPU,go:cpu.geluBackwardF64KernelCPU}
+WHEN the GELU candidate is benchmarked at 2048 elements or against non-target controls, the promotion gate SHALL reject reproducible time regressions above 3 percent or allocation increases across 3 paired campaigns.
