@@ -495,6 +495,9 @@ func TestCPUControlAllocationSites(t *testing.T) {
 	if err := closeAllocationSiteClosers(artifacts.capture, artifacts.tail, artifacts.profile); err != nil {
 		ioErrors = append(ioErrors, fmt.Errorf("close artifacts: %w", err))
 	}
+	// Keep the fixed raw buffers live through all serialization and artifact closes.
+	runtime.KeepAlive(preRecords)
+	runtime.KeepAlive(postRecords)
 	for _, err := range ioErrors {
 		t.Error(err)
 	}
