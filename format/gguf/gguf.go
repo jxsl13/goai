@@ -481,6 +481,42 @@ type RawFile struct {
 	Tensors  map[string]QuantTensor // name → still-quantized tensor
 }
 
+// ReadRawFile parses a GGUF file from disk into quantized tensors.
+//
+// For regular non-empty files on supported platforms, the data section is mapped read-only and parsed
+// in-place. The mapped file is unmapped only after all quantized views are detached into their final
+// ownership form.
+func ReadRawFile(path string) (*RawFile, error) { return readRawFile(path, true) }
+
+func readRawFile(path string, allowMmap bool) (*RawFile, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if allowMmap {
+		if fi, statErr := f.Stat(); statErr == nil && fi.Mode().IsRegular() && fi.Size() > 0 &&
+			fi.Size() <= int64(^uint(0)>>1) {
+			if mapped, ok := mmapFileReadOnly(f, int(fi.Size())); ok {
+				p, parseErr := parseMapped(mapped)
+				var out *RawFile
+				if parseErr == nil {
+					out, parseErr = readRawParsed(p)
+				}
+				unmapErr := munmapFile(mapped)
+				if parseErr != nil {
+					return nil, parseErr
+				}
+				if unmapErr != nil {
+					return nil, fmt.Errorf("gguf: unmap %q: %w", path, unmapErr)
+				}
+				return out, nil
+			}
+		}
+	}
+	return ReadRaw(bufio.NewReaderSize(f, 1<<20))
+}
+
 // ReadRaw parses a GGUF stream KEEPING each tensor quantized (QuantTensor) — the inverse of the
 // eager dequantization Read does, so a quantized model can be loaded without ever materializing
 // full-precision weights.
@@ -494,6 +530,10 @@ func ReadRaw(r io.Reader) (*RawFile, error) {
 	if err != nil {
 		return nil, err
 	}
+	return readRawParsed(p)
+}
+
+func readRawParsed(p *parsed) (*RawFile, error) {
 	out := &RawFile{Version: p.version, Metadata: p.meta, Tensors: make(map[string]QuantTensor, len(p.infos))}
 	for _, ti := range p.infos {
 		need, err := byteSize(ti.ggType, ti.shape.Numel())

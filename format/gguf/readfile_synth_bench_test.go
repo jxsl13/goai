@@ -187,6 +187,23 @@ func BenchmarkReadRawSynth(b *testing.B) {
 	}
 }
 
+// BenchmarkReadRawFileSynth measures the new zero-copy mmap-backed quantized load path,
+// which keeps tensor bytes as read-only aliases into the mmapped section and avoids the
+// extra copy implied by bytes.Reader input.
+func BenchmarkReadRawFileSynth(b *testing.B) {
+	path := writeSynthModel(b, 64, 512, 512)
+	if _, err := ReadRawFile(path); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := ReadRawFile(path); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // TestReadRawViewMatchesCopiedBytes pins the contract of handing out views into one shared buffer:
 // every tensor's bytes still decode, and no tensor can reach into its neighbor.
 //
