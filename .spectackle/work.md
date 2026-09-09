@@ -3994,7 +3994,7 @@ DELIVER: one bounded research report (prefer <=2500 words) with exact source pat
 
 ## T-01M241R5P3EH886EVW1AGTD3EA Implement strict collision-safe per-invocation allocation-site analyzer
 kind: task
-state: draft
+state: active
 created: 2026-09-09
 parent: P-01M23BZPZNF9VV3FF326AQX28E
 refs: R-01M23VWNB5FRP85PW5NSQWY5QA
