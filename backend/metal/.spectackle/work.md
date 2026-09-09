@@ -36,7 +36,7 @@ choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4
 
 ## P-01M23R1VJNEJJA8QB17ET720FM Keep prefill operation smoke checks in short CI while reserving timing ceilings for local runs
 kind: proposal
-state: draft
+state: active
 created: 2026-09-09
 grilled: 2026-09-09 open=0
 targets: go:metal.TestPrefillOpCosts, TIMING-ASSERTIONS-SKIP-ON-RUNNERS-001
