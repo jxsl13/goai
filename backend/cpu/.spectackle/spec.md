@@ -194,3 +194,6 @@ WHEN an ARM64 F64 GELU wrapper selects vector arithmetic, the preflight SHALL re
 
 ## ARM64-F64-GELU-UNIFORM-SMALL-001 {applies: go:cpu.erfF64x2GELU}
 WHEN ARM64 GELU erf bypasses exp/P/Q, the erfF64x2GELU shortcut SHALL require 2 lanes with abs(y)<1 and return bit-identical erfSmall, preserving the complete path for every other pair.
+
+## CPU-ALLOC-SITE-CAPTURE-001 {applies: backend/cpu/control_alloc_sites_test.go}
+WHEN TestCPUControlAllocationSites is enabled, the diagnostic SHALL record exactly 1024 Softplus calls between MemStats boundaries using two fixed 65536-record buffers, with 0 runtime kernel changes.
