@@ -156,3 +156,8 @@ Rationale: Go 1.26 quiets signaling NaNs in the scalar conversion oracle.
 WHEN scalar F64 OpGELUBackward is selected, the scalar F64 GELU backward CPU kernel SHALL preserve all finite and signed-zero reference result bits, NaN and infinity classes, input immutability, existing validation and fallback behavior, and the unchanged geluGradF64 expression with zero per-element function-value dispatch after promotion.
 
 Rationale: R-01M236QP4YEFD and DEVIRTUALIZING-REMOVES-AN-FMA-BARRIER-001 require a one-ulp mutation before specialization; the current ARM64 scalar reference tolerance remains zero and no SIMD capability is enabled.
+
+## SCALAR-F64-GELU-DIRECT-PERF-001 {applies: go:cpu.geluBackwardF64KernelCPU,go:cpu_test.BenchmarkGELUBackwardF64_256K_cpu}
+WHEN three independent count-seven alternating M2 Pro Go 1.27.1 campaigns measure the complete CPU operation, the direct-call F64 GELU backward promotion gate SHALL retain the candidate only when the 262144-element GOMAXPROCS1 target improves by at least 1.05x in every campaign with p below 0.05, the 2048-element GOMAXPROCS1 and12 and 262144-element GOMAXPROCS12 controls have no reproducible regression above 3 percent, and allocations do not increase.
+
+Rationale: This is an attribution experiment before a SIMD redesign; scalar erf and exp still dominate. PROC-INTERLEAVE-001 requires small effects to exceed within-arm noise. An inconclusive experiment is rejected without a speedup claim, with all raw campaigns retained.
