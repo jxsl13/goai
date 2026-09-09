@@ -21,6 +21,8 @@ Rationale: This path accumulates in f32, so it amends the general f64-accumulati
 - T-01M0P8NQ57E4JSBEDA31381MD7 Split exact ARM64 Abs kernels by Go release: Cross-toolchain probes proved Go 1.26.6 maps signaling NaN 0x7f800001 to 0x7fc00001 while Go 1.27.0 preserves 0x7f800001. Added release-tagged ARM64 assembly: Go 1.26 retains the incumbent 32-line NaN-quieting kernel unchanged; Go 1.27 and newer select the measured 16-line sign-clear kernel. Restored tests to the scalar math.Abs oracle. Edge, tail, unaligned, and in-place tests plus the complete b [body truncated at tombstone retention cap]
 - P-01M0P8N6D6EEWAEKVACVNS21M6 Preserve version-specific ARM64 F32 Abs semantics: Published a release-aware ARM64 Abs design: preserve Go 1.26 exact signaling-NaN quieting and apply the 1.518x Go 1.27 sign-clear leaf only where the scalar oracle changed. Both supported toolchains pass full backend/cpu validation and AMD64 cross-compilation. The exact behavior, assembly attribution, statistical controls, and perfscan follow-up are durable in internal/benchcompare/leadership/evid [body truncated at tombstone retention cap]
 - P-01M0TYHVNWF91A29YTTFVS98ZT Interleave exact CPU MoECombine output accumulators: Consumed by archived task T-01M0TYMJGMFMQ. The measured four-output exact interleave shipped with 1.4387x to 2.0359x M2 gains across six cells, unchanged allocation counts, full numerical gates, and perfscan issues #906 and #907; width 8 was rejected by high-expert F64 measurements.
+- R-01M236QP4YEFDABMQ07MC43EHH Establish the M2 F64 GELU vectorization gate after the Go 1.27.1 rebuild: Consumed by P-01M237J19FFE5 and T-01M237QTE7E8E plus three SCALAR-F64-GELU-DIRECT contracts. Retained 36 unchanged baseline records in internal/benchcompare/leadership/evidence/m2-f64-gelu-direct-20260909/baseline.txt: backward262144 medians3954529ns/GMP1 and800383ns/GMP12; forward256x2048 medians5267461ns and961250ns. Go1.27.1 ARM64 SIMD CGO0, same runtime source137b3355 as merged06993c9e, frozen [body truncated at tombstone retention cap]
+- P-01M237J19FFE5SYSTMV3442H6H Measure direct-call scalar F64 GELU backward before a wider SIMD redesign: Measurement objective complete with rejected child T-01M237QTE7E8E; no production runtime change survives. ResearchR-01M236QP4YEFD consumed. Retained common benchmark harness, stronger exact GELU oracles, all168 alternatingrecords and36initialbaseline records, pre-rewrite one-ULP failures, full stats and reproduction under internal/benchcompare/leadership/evidence/m2-f64-gelu-direct-20260909. Thre [body truncated at tombstone retention cap]
 
 ## FANOUT-SIZING-PAYS-ONLY-AT-HIGH-CALL-FREQUENCY-001
 IF a fan-out helper serves large operations called a few times rather than small ones called thousands of times, THEN the work-sizing transform of SIZE-THE-FANOUT-TO-THE-WORK-001 SHALL not be applied, because it measures neutral there and neutral is not a reason to add a knob.
@@ -151,3 +153,18 @@ Rationale: Go 1.27 preserves signaling-NaN payload bits in the scalar conversion
 WHEN F32 Abs compiles on arm64 with Go 1.26, the CPU backend SHALL select the NaN-quieting assembly so signaling NaNs set bit 22 while all other magnitude bits remain unchanged.
 
 Rationale: Go 1.26 quiets signaling NaNs in the scalar conversion oracle.
+
+## SCALAR-F64-GELU-DIRECT-SEMANTICS-001 {applies: go:cpu.activationBackwardF64,go:cpu.geluBackwardF64KernelCPU,go:cpu.geluGradF64,go:cpu_test.TestActivationBackwardF64CPUMatchesRef}
+WHEN scalar F64 GELU backward executes, the CPU backend SHALL preserve finite-result and signed-zero bits, nonfinite classes, validation, reference fallback, and input immutability while retaining the unchanged geluGradF64 expression.
+
+Rationale: R-01M236QP4YEFD and DEVIRTUALIZING-REMOVES-AN-FMA-BARRIER-001 require a one-ulp mutation before specialization; the current ARM64 scalar reference tolerance remains zero and no SIMD capability is enabled.
+
+## SCALAR-F64-GELU-DIRECT-PERF-001 {applies: go:cpu.geluBackwardF64KernelCPU,go:cpu_test.BenchmarkGELUBackwardF64DirectDispatch}
+WHEN three alternating count-seven M2 Pro Go1.27.1 campaigns measure 262144-element GELU backward at GOMAXPROCS1, the promotion gate SHALL require at least 1.05x median improvement with p below 0.05 in every campaign.
+
+Rationale: This is an attribution experiment before a SIMD redesign; scalar erf and exp still dominate. PROC-INTERLEAVE-001 requires small effects to exceed within-arm noise. An inconclusive experiment is rejected without a speedup claim, with all raw campaigns retained.
+
+## SCALAR-F64-GELU-DIRECT-CONTROLS-001 {applies: go:cpu.geluBackwardF64KernelCPU,go:cpu_test.BenchmarkGELUBackwardF64DirectDispatch}
+WHEN three campaigns measure 2048-element GOMAXPROCS1/12 and 262144-element GOMAXPROCS12 controls, the direct-call GELU promotion gate SHALL reject reproducible time regressions above 3 percent or allocation increases.
+
+Rationale: Retain all raw samples, discarded warmup boundaries, frozen binary hashes and build flags; small effects must satisfy PROC-INTERLEAVE-001. Preserve the AMD64 SIMD route and do not enable the ARM64 GELU SIMD gate.

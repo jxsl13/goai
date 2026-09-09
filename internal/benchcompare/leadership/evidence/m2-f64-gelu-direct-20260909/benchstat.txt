@@ -1,0 +1,77 @@
+campaign: 1
+                                         │      old      │                 new                 │
+                                         │    sec/op     │    sec/op      vs base              │
+GELUBackwardF64DirectDispatch/n2048        29.34µ ± 197%   29.10µ ±   6%       ~ (p=0.053 n=7)
+GELUBackwardF64DirectDispatch/n262144      4.038m ±  14%   3.992m ±  13%       ~ (p=0.383 n=7)
+GELUBackwardF64DirectDispatch/n2048-12     29.50µ ±  12%   29.45µ ±  31%       ~ (p=0.620 n=7)
+GELUBackwardF64DirectDispatch/n262144-12   988.7µ ±  85%   907.7µ ± 287%       ~ (p=0.209 n=7)
+geomean                                    242.5µ          236.1µ         -2.64%
+
+                                         │     old      │                new                 │
+                                         │     B/op     │     B/op      vs base              │
+GELUBackwardF64DirectDispatch/n2048        16.32Ki ± 0%   16.30Ki ± 0%  -0.10% (p=0.001 n=7)
+GELUBackwardF64DirectDispatch/n262144      2.000Mi ± 0%   2.000Mi ± 0%  -0.00% (p=0.001 n=7)
+GELUBackwardF64DirectDispatch/n2048-12     16.32Ki ± 0%   16.30Ki ± 0%  -0.10% (p=0.001 n=7)
+GELUBackwardF64DirectDispatch/n262144-12   2.000Mi ± 0%   2.000Mi ± 0%  -0.00% (p=0.036 n=7)
+geomean                                    182.8Ki        182.7Ki       -0.05%
+
+                                         │    old     │                new                 │
+                                         │ allocs/op  │ allocs/op   vs base                │
+GELUBackwardF64DirectDispatch/n2048        5.000 ± 0%   5.000 ± 0%       ~ (p=1.000 n=7) ¹
+GELUBackwardF64DirectDispatch/n262144      5.000 ± 0%   5.000 ± 0%       ~ (p=1.000 n=7) ¹
+GELUBackwardF64DirectDispatch/n2048-12     5.000 ± 0%   5.000 ± 0%       ~ (p=1.000 n=7) ¹
+GELUBackwardF64DirectDispatch/n262144-12   6.000 ± 0%   6.000 ± 0%       ~ (p=1.000 n=7) ¹
+geomean                                    5.233        5.233       +0.00%
+¹ all samples are equal
+
+campaign: 2
+                                         │     old      │                new                 │
+                                         │    sec/op    │    sec/op     vs base              │
+GELUBackwardF64DirectDispatch/n2048        29.57µ ±  7%   28.88µ ±  5%       ~ (p=0.053 n=7)
+GELUBackwardF64DirectDispatch/n262144      4.032m ± 44%   4.013m ±  8%       ~ (p=0.710 n=7)
+GELUBackwardF64DirectDispatch/n2048-12     29.74µ ±  2%   28.92µ ±  2%  -2.76% (p=0.007 n=7)
+GELUBackwardF64DirectDispatch/n262144-12   907.2µ ± 16%   765.4µ ± 29%       ~ (p=0.128 n=7)
+geomean                                    238.2µ         225.0µ        -5.51%
+
+                                         │     old      │                new                 │
+                                         │     B/op     │     B/op      vs base              │
+GELUBackwardF64DirectDispatch/n2048        16.32Ki ± 0%   16.30Ki ± 0%  -0.10% (p=0.001 n=7)
+GELUBackwardF64DirectDispatch/n262144      2.000Mi ± 0%   2.000Mi ± 0%  -0.00% (p=0.001 n=7)
+GELUBackwardF64DirectDispatch/n2048-12     16.32Ki ± 0%   16.30Ki ± 0%  -0.10% (p=0.001 n=7)
+GELUBackwardF64DirectDispatch/n262144-12   2.000Mi ± 0%   2.000Mi ± 0%  -0.00% (p=0.001 n=7)
+geomean                                    182.8Ki        182.7Ki       -0.05%
+
+                                         │    old     │                new                 │
+                                         │ allocs/op  │ allocs/op   vs base                │
+GELUBackwardF64DirectDispatch/n2048        5.000 ± 0%   5.000 ± 0%       ~ (p=1.000 n=7) ¹
+GELUBackwardF64DirectDispatch/n262144      5.000 ± 0%   5.000 ± 0%       ~ (p=1.000 n=7) ¹
+GELUBackwardF64DirectDispatch/n2048-12     5.000 ± 0%   5.000 ± 0%       ~ (p=1.000 n=7) ¹
+GELUBackwardF64DirectDispatch/n262144-12   6.000 ± 0%   6.000 ± 0%       ~ (p=1.000 n=7) ¹
+geomean                                    5.233        5.233       +0.00%
+¹ all samples are equal
+
+campaign: 3
+                                         │      old       │                new                 │
+                                         │     sec/op     │    sec/op     vs base              │
+GELUBackwardF64DirectDispatch/n2048         32.82µ ± 118%   30.18µ ± 87%       ~ (p=0.383 n=7)
+GELUBackwardF64DirectDispatch/n262144       4.267m ±   8%   4.103m ± 40%       ~ (p=0.620 n=7)
+GELUBackwardF64DirectDispatch/n2048-12      31.49µ ±   8%   28.96µ ± 73%       ~ (p=0.456 n=7)
+GELUBackwardF64DirectDispatch/n262144-12   1037.0µ ±  37%   937.1µ ± 44%       ~ (p=0.620 n=7)
+geomean                                     260.0µ          240.8µ        -7.42%
+
+                                         │     old      │                new                 │
+                                         │     B/op     │     B/op      vs base              │
+GELUBackwardF64DirectDispatch/n2048        16.32Ki ± 0%   16.30Ki ± 0%  -0.10% (p=0.001 n=7)
+GELUBackwardF64DirectDispatch/n262144      2.000Mi ± 0%   2.000Mi ± 0%  -0.00% (p=0.001 n=7)
+GELUBackwardF64DirectDispatch/n2048-12     16.32Ki ± 0%   16.30Ki ± 0%  -0.10% (p=0.001 n=7)
+GELUBackwardF64DirectDispatch/n262144-12   2.000Mi ± 0%   2.000Mi ± 0%  -0.00% (p=0.004 n=7)
+geomean                                    182.8Ki        182.7Ki       -0.05%
+
+                                         │    old     │                new                 │
+                                         │ allocs/op  │ allocs/op   vs base                │
+GELUBackwardF64DirectDispatch/n2048        5.000 ± 0%   5.000 ± 0%       ~ (p=1.000 n=7) ¹
+GELUBackwardF64DirectDispatch/n262144      5.000 ± 0%   5.000 ± 0%       ~ (p=1.000 n=7) ¹
+GELUBackwardF64DirectDispatch/n2048-12     5.000 ± 0%   5.000 ± 0%       ~ (p=1.000 n=7) ¹
+GELUBackwardF64DirectDispatch/n262144-12   6.000 ± 0%   6.000 ± 0%       ~ (p=1.000 n=7) ¹
+geomean                                    5.233        5.233       +0.00%
+¹ all samples are equal
