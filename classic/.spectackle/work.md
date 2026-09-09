@@ -53,7 +53,7 @@ NOTE ON PS4002: math.Exp at :179 is a scalar transcendental in a hot loop and a 
 
 ## P-01M23Y1K1TEXFRBNNGT4R58W4E Keep classic Fit smoke checks in short CI and reserve time ceilings for full runs
 kind: proposal
-state: draft
+state: active
 created: 2026-09-09
 grilled: 2026-09-09 open=0
 targets: go:classic.TestClassicFitTimeGuard
