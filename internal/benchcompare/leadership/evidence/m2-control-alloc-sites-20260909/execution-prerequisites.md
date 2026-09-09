@@ -1,8 +1,8 @@
 # Allocation-site execution prerequisites
 
 No live preflight or matrix has run. The capture and per-invocation analyzer are
-being implemented under `T-01M24137G7EHM` and `T-01M241R5P3EH8`; their task
-completion does not satisfy the execution prerequisites below.
+independently verified under `T-01M24137G7EHM` and `T-01M241R5P3EH8`; implementation
+completion does not satisfy the remaining execution prerequisites below.
 
 1. Independently review and rerun each implementation's declared pure tests.
    Bind prospective rules to actual indexed symbols. Preserve initial failures

@@ -1,0 +1,238 @@
+T-01M241R5P3EH8 non-finite parser fix independent follow-up
+Date: 2026-09-10
+Worktree: /private/tmp/goai-alloc-sites-nonfinite-verify-U60ss4/repo
+Reviewed HEAD: e57d49aafa700e6428a1fcb6f2fad7b95a95e1ae
+Baseline analyzer commit: 9c1250abdb4133eede2c9c7ff9e5a2c75d099540
+
+FINAL VERDICT: PASS
+
+Per-lens verdict
+================
+
+[scope] PASS
+The fix commit e57d49a^..e57d49a changes exactly the two intended Ruby files:
+analyze_sites.rb and analyze_sites_test.rb. The review against 9c1250ab was
+restricted to those two target paths. The wider 9c1250ab..e57d49a repository
+history contains separately owned committed work and was not treated as parser-fix
+scope. No source, lifecycle, .spectackle, or Git state was written by this verifier.
+
+[correctness] PASS
+AllocationSites.parse still uses the duplicate-key rejecting UniqueObject,
+create_additions:false, and allow_nan:false. It now recursively traverses the
+parsed root, every array element, and every object value, rejecting each non-finite
+Float with a path-aware AllocationSites::Invalid. The walk returns the original
+object and does not mutate it. Root positive/negative exponent overflow, array and
+mixed deeply nested object cases were independently rejected. Finite floats,
+including exponent notation and negative zero, remain parseable; analyze continues
+to reject a Float where the exact schema requires an Integer. The correction does
+not alter analyzer arithmetic, schema, aggregation, grouping, CLI, or output.
+
+[testing] PASS
+The complete declared gate passed on required Ruby 2.6.10: both syntax checks,
+20 committed tests with 290 assertions, diff check, and exact hashes. The exact
+supplemental test that previously exposed the bug was copied outside the repository
+unchanged and rerun against the new analyzer; all 7 tests and 77 assertions passed.
+Its other independent collision, arithmetic, contributor, grouping, immutability,
+range, type/key/status, empty-group, and CLI checks therefore also remain green.
+An additional direct probe checked both signs at root and nested positions and
+finite boundary examples.
+
+[refutation] PASS
+This does not rely on analyze later rejecting a non-integer schema field: parse
+itself now rejects non-finite results as required. It does not overreject finite
+Float JSON values, relax any integer schema field, infer anything from a transcript,
+or make profiling/runtime/performance claims. No remaining counterexample was found
+within the narrow parser contract.
+
+Patch review
+============
+
+The source change is:
+
+    parsed = JSON.parse(text, object_class: UniqueObject,
+                       create_additions: false, allow_nan: false)
+    reject_nonfinite!(parsed, '$')
+    parsed
+
+reject_nonfinite! branches on Float, Hash, and Array. Float#finite? is available on
+the pinned Ruby. Hash values and array members recurse with deterministic diagnostic
+paths. JSON parsing yields only these containers and JSON primitives, so no valid
+parsed branch is missed. AllocationSites::Invalid raised by the recursive check is
+not swallowed by the JSON::ParserError rescue. The committed tests cover finite
+floats, root +/- overflow, nested +/- overflow, diagnostic paths, and downstream
+integer-schema rejection.
+
+Source identity and diff transcript
+===================================
+
+COMMAND: git rev-parse HEAD
+OUTPUT:
+e57d49aafa700e6428a1fcb6f2fad7b95a95e1ae
+EXIT_CODE=0
+
+COMMAND: git rev-parse e57d49a^
+OUTPUT:
+5f7defb7a4a2f4ad1570b00f6bc4051b59d6ad87
+EXIT_CODE=0
+
+COMMAND: git diff --name-status e57d49a^ e57d49a
+OUTPUT:
+M\tinternal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb
+M\tinternal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+EXIT_CODE=0
+
+COMMAND: git diff --name-status 9c1250ab e57d49aa -- internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb && git diff --check 9c1250ab e57d49aa -- internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+OUTPUT:
+M\tinternal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb
+M\tinternal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+EXIT_CODE=0
+
+COMMAND: shasum -a 256 internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+OUTPUT:
+9a19e1c13de703013048ca228be993952ba76e33a17bb2adba6c54c26f8c42eb  internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb
+38cd111df95fff9e97b5e7bb63bd67cf4134678d5ae3e19d8b2bd95a49da92e4  internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+EXIT_CODE=0
+
+Both values exactly match the supplied expected hashes.
+
+Declared VERIFY transcript
+==========================
+
+COMMAND: ruby --version
+OUTPUT:
+ruby 2.6.10p210 (2022-04-12 revision 67958) [universal.arm64e-darwin25]
+EXIT_CODE=0
+
+COMMAND: ruby -c internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb
+OUTPUT:
+Syntax OK
+EXIT_CODE=0
+
+COMMAND: ruby -c internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+OUTPUT:
+Syntax OK
+EXIT_CODE=0
+
+COMMAND: ruby internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+OUTPUT:
+Run options: --seed 9423
+
+# Running:
+
+....................
+
+Finished in 0.925570s, 21.6083 runs/s, 313.3204 assertions/s.
+
+20 runs, 290 assertions, 0 failures, 0 errors, 0 skips
+EXIT_CODE=0
+
+COMMAND: git diff --check
+OUTPUT:
+<empty>
+EXIT_CODE=0
+
+COMMAND: shasum -a 256 internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+OUTPUT:
+9a19e1c13de703013048ca228be993952ba76e33a17bb2adba6c54c26f8c42eb  internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb
+38cd111df95fff9e97b5e7bb63bd67cf4134678d5ae3e19d8b2bd95a49da92e4  internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+EXIT_CODE=0
+
+Preserved supplemental test transcript
+======================================
+
+The prior independent test was copied byte-for-byte outside the new repository.
+The local analyze_sites.rb beside it is only a symlink to the reviewed source.
+
+FINAL SUPPLEMENT PATH:
+/private/tmp/goai-alloc-sites-nonfinite-verify-U60ss4/supplement/independent_verify_test.rb
+
+FINAL SUPPLEMENT SHA-256:
+ee2a1ea023ae01752aea825973f70b3c15a4b2617f5bc6a133a006b6518dd5f6
+
+COMMAND: mkdir -p /private/tmp/goai-alloc-sites-nonfinite-verify-U60ss4/supplement && cp /private/tmp/goai-alloc-sites-analysis-verify-BtEOXL/independent_verify_test.rb /private/tmp/goai-alloc-sites-nonfinite-verify-U60ss4/supplement/independent_verify_test.rb && ln -s /private/tmp/goai-alloc-sites-nonfinite-verify-U60ss4/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb /private/tmp/goai-alloc-sites-nonfinite-verify-U60ss4/supplement/analyze_sites.rb && shasum -a 256 /private/tmp/goai-alloc-sites-nonfinite-verify-U60ss4/supplement/independent_verify_test.rb && ruby -c /private/tmp/goai-alloc-sites-nonfinite-verify-U60ss4/supplement/independent_verify_test.rb && ruby /private/tmp/goai-alloc-sites-nonfinite-verify-U60ss4/supplement/independent_verify_test.rb
+OUTPUT:
+ee2a1ea023ae01752aea825973f70b3c15a4b2617f5bc6a133a006b6518dd5f6  /private/tmp/goai-alloc-sites-nonfinite-verify-U60ss4/supplement/independent_verify_test.rb
+Syntax OK
+Run options: --seed 45215
+
+# Running:
+
+.......
+
+Finished in 0.221140s, 31.6542 runs/s, 348.1957 assertions/s.
+
+7 runs, 77 assertions, 0 failures, 0 errors, 0 skips
+EXIT_CODE=0
+
+Independent root/nested non-finite probe
+========================================
+
+COMMAND: ruby -I internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909 -ranalyze_sites -e 'cases = { %q(1e999) => %q($: nonfinite JSON number), %q(-1e999) => %q($: nonfinite JSON number), %q([1e999]) => %q($[0]: nonfinite JSON number), %q([0,{"n":-1e999}]) => %q($[1]["n"]: nonfinite JSON number), %q({"a":{"b":[true,null,1e999]}}) => %q($["a"]["b"][2]: nonfinite JSON number) }; cases.each { |json, expected| begin; AllocationSites.parse(json); abort("ACCEPTED #{json}"); rescue AllocationSites::Invalid => e; abort("WRONG #{json}: #{e.message}") unless e.message == expected; puts "REJECT #{json} => #{e.message}"; end }; finite = [%q(0.0), %q(-0.0), %q(1e2), %q(1e308), %q({"x":[-0.25,6.25e12]})]; finite.each { |json| value = AllocationSites.parse(json); puts "ACCEPT #{json} => #{value.inspect}" }'
+OUTPUT:
+REJECT 1e999 => $: nonfinite JSON number
+REJECT -1e999 => $: nonfinite JSON number
+REJECT [1e999] => $[0]: nonfinite JSON number
+REJECT [0,{"n":-1e999}] => $[1]["n"]: nonfinite JSON number
+REJECT {"a":{"b":[true,null,1e999]}} => $["a"]["b"][2]: nonfinite JSON number
+ACCEPT 0.0 => 0.0
+ACCEPT -0.0 => -0.0
+ACCEPT 1e2 => 100.0
+ACCEPT 1e308 => 1.0e+308
+ACCEPT {"x":[-0.25,6.25e12]} => {"x"=>[-0.25, 6250000000000.0]}
+EXIT_CODE=0
+
+Original failure preservation
+=============================
+
+COMMAND: git -C /private/tmp/goai-alloc-sites-analysis-verify-BtEOXL/repo rev-parse HEAD
+OUTPUT:
+9c1250abdb4133eede2c9c7ff9e5a2c75d099540
+EXIT_CODE=0
+
+COMMAND: git -C /private/tmp/goai-alloc-sites-analysis-verify-BtEOXL/repo status --short --branch
+OUTPUT:
+## HEAD (no branch)
+EXIT_CODE=0
+
+COMMAND: shasum -a 256 /private/tmp/goai-alloc-sites-analysis-verify-BtEOXL/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb /private/tmp/goai-alloc-sites-analysis-verify-BtEOXL/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+OUTPUT:
+2ce3d5d84f067601c559f46be2e3eb76d0d1a797824f83318d46155da92c1302  /private/tmp/goai-alloc-sites-analysis-verify-BtEOXL/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb
+5261c243cd7bda1051d3ea38e471785a6309d904f62471196e02bc3ce62c0a70  /private/tmp/goai-alloc-sites-analysis-verify-BtEOXL/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+EXIT_CODE=0
+
+COMMAND: wc -l /private/tmp/goai-alloc-sites-analysis-verify-BtEOXL/verification.txt
+OUTPUT:
+     236 /private/tmp/goai-alloc-sites-analysis-verify-BtEOXL/verification.txt
+EXIT_CODE=0
+
+COMMAND: shasum -a 256 /private/tmp/goai-alloc-sites-analysis-verify-BtEOXL/verification.txt /private/tmp/goai-alloc-sites-analysis-verify-BtEOXL/independent_verify_test.rb
+OUTPUT:
+0dedfc32dc69ca6ef58cdc2e8da705f053b1cd132534bd289a690ce191736410  /private/tmp/goai-alloc-sites-analysis-verify-BtEOXL/verification.txt
+ee2a1ea023ae01752aea825973f70b3c15a4b2617f5bc6a133a006b6518dd5f6  /private/tmp/goai-alloc-sites-analysis-verify-BtEOXL/independent_verify_test.rb
+EXIT_CODE=0
+
+The authoritative original report SHA-256 is
+0dedfc32dc69ca6ef58cdc2e8da705f053b1cd132534bd289a690ce191736410.
+Root independently read that hash before this follow-up and imported those exact
+bytes. A different full suffix mentioned in follow-up scratch communication was a
+transcription mismatch, not evidence of mutation. Two repeated fresh hash reads,
+the 236-line length, original source hashes, original detached HEAD, and original
+clean status confirm the preserved artifact and source tree used here.
+
+Final cleanliness transcript
+============================
+
+COMMAND: git status --short --branch
+OUTPUT:
+## HEAD (no branch)
+EXIT_CODE=0
+
+The new detached verifier worktree is clean. The supplement and this report are
+outside the repository.
+
+Explicit limits
+===============
+
+This is implementation-only verification. No Go command, build, test, live capture,
+profiling, pprof decoding, benchmark, matrix, runtime attribution, causality,
+equivalence, performance, or qualification claim was run or made.

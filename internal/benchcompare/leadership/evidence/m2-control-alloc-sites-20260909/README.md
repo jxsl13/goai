@@ -1,10 +1,10 @@
 # Prospective control allocation-site investigation
 
 Status: corrected prospective protocol independently reviewed, PASS for design.
-The guarded Go capture is implemented at `f6ea1353`. Initial independent review
-found a raw-buffer lifetime blocker despite passing tests; an explicit KeepAlive
-fix and re-verification are in progress. The offline analyzer is being verified
-separately.
+The guarded Go capture and per-invocation Ruby analyzer have each passed separate
+independent implementation verification. Initial reviews found a raw-buffer
+lifetime blocker and an overflowed-JSON-exponent parser blocker; both original
+FAIL reports are retained alongside the narrow fixes and follow-up PASS reports.
 No enabled site capture, preflight, profile or matrix has run. Spectackle research
 `R-01M23VWNB5FRP` is consumed by implementation tasks `T-01M24137G7EHM` and
 `T-01M241R5P3EH8` and follows the
@@ -55,6 +55,37 @@ default/SIMD tests, disabled diagnostic skips with no artifacts, full CPU short
 suites, both vet modes, and focused race. The initial numeric-token test failure
 and subsequent fixes are retained byte-identically in `capture-implementation.txt`
 (SHA256 `c29dc9e5f251d58bbb5d1b788ba5be086570987294144fc264ee7b0d8b10a0fa`).
-These passing tests do not override the independent lifetime finding: the raw
-buffers must be kept live until all serialization finishes. No runtime kernel
-change or speedup is part of this diagnostic implementation.
+The initial tests did not override the independent lifetime finding. Commit
+`3eb438b28dd0ac68a469848d5b3d72ab7ca305ea` adds explicit KeepAlive calls for both
+raw buffers after final artifact serialization and close attempts. The complete
+pinned verification was independently rerun and passed. Source SHA256 is
+`b6583b360128ba53ef87f71bff0b705dbdb549e1de78a5115774aeab14017352`.
+
+The analyzer initially passed 19 tests/272 assertions, but independent review
+showed that Ruby 2.6.10 parses `1e999` as Infinity despite `allow_nan: false`.
+Commit `e57d49aafa700e6428a1fcb6f2fad7b95a95e1ae` adds recursive finite-value
+validation without weakening exact-integer schema fields. Follow-up independent
+verification passed 20 tests/290 assertions and the original independent suite
+(7 tests/77 assertions). `independent_verify_test.rb` preserves that supplemental
+suite byte-identically; run it with Ruby from this directory.
+
+Preserved review trail:
+
+| Artifact | Verdict / purpose |
+| --- | --- |
+| `capture-verification-fail.txt` | Original independent lifetime FAIL |
+| `capture-keepalive-fix.txt` | Narrow fix and full implementer rerun |
+| `capture-verification-pass.txt` | Independent full follow-up PASS |
+| `analysis-implementation.txt` | Initial implementation, failures and corrections |
+| `analysis-verification-fail.txt` | Original independent nonfinite-parser FAIL |
+| `analysis-nonfinite-fix.txt` | Narrow fix and full implementer rerun |
+| `analysis-verification-pass.txt` | Independent full follow-up PASS |
+
+The capture follow-up transcript contains literal Git diff context: leading
+space-before-tab and a space-only context line are preserved, not source defects.
+Its evidence-only diff check used `core.whitespace=-space-before-tab,-blank-at-eol`;
+all other staged files passed the ordinary check. No repository configuration or
+source whitespace policy was weakened.
+
+These are implementation-only results. No runtime kernel change, measured speedup,
+live profile, allocation-site attribution or GELU qualification is claimed.
