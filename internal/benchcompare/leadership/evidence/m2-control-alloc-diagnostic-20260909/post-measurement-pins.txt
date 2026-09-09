@@ -1,0 +1,21 @@
+Both serialized phases returned exit 0. No failed invocation or replacement.
+Both new matched diagnostic binary hashes and all three original qualification
+binary hashes were rechecked after measurement and remained identical:
+
+fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec old.test
+a5317a3eecbce6c66e2f02768d39cdd6f1a2cc068072d8a62d090a93163fff63 v2.test
+c95691bc1a7289094bc523250fde7a9cae614756635b78701e9c306962b246cb gelu-old.test
+045826effd7c6aab639a1b4c9e0e162e4eca03b6aaef56761291c248492301d7 gelu-new.test
+b768ca10228a7487aad1cbef3a658c99cb21078b5059b815fa690b0d9bcc7614 gelu-v2.test
+
+2026-09-09T19:36:04Z unprivileged thermal query was unavailable:
+Error:Failed to get thermal warning level with error code 0xe00002bc
+Error: Failed to get performance warning level with error code 0xe00002bc
+Error: No CPU power status with error code 0xe00002bc
+
+2026-09-09T19:37:02Z escalated read-only thermal snapshot:
+Note: No thermal warning level has been recorded
+Note: No performance warning level has been recorded
+Note: No CPU power status has been recorded
+
+These point-in-time readings are not continuous thermal/idleness proof.

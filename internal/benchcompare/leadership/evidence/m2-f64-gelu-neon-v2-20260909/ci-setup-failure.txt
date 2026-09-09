@@ -1,0 +1,51 @@
+CI setup failure — run34383399053, head bd8faf5f69eb53bd3f0f696438b1671e8e625834
+https://github.com/jxsl13/goai/actions/runs/34383399053
+
+The completed CUDA and Vulkan Ubuntu jobs failed at apt-get update BEFORE
+GoAI compilation. Both reported the same Google Chrome repository package-index
+hash mismatch. No source patch or integrity-check bypass was applied. These
+failed jobs are not counted as passing; final CI must succeed before merge.
+Raw job logs were retrieved through GitHub's per-job logs endpoint while the
+rest of the workflow was still running. ANSI escape codes are stripped below.
+
+Attempt 2 retried only failed jobs and completed with the same setup failures.
+The root read the failed logs via gh run view --attempt 2 --log-failed.
+At 17:44:21Z (Vulkan) and 17:44:31Z (CUDA), the expected SHA256 remained
+233e56de019b57db89238fa7bcc3647718dbbea3a40c2dc1c633a8c8952aa9e9
+and the received SHA256 remained
+bc1428ab27c6d76ee9bb76de07f1ded0ddb4aaabd958fc72855634ef5894a4b3.
+Both exited100 before compilation. No immediate repeated retry was requested.
+
+Job 102573871083:
+2026-09-09T17:32:43.4560940Z E: Failed to fetch https://dl.google.com/linux/chrome-stable/deb/dists/stable/main/binary-amd64/Packages.gz  Hash Sum mismatch
+2026-09-09T17:32:43.4561883Z    Hashes of expected file:
+2026-09-09T17:32:43.4562227Z     - Filesize:1405 [weak]
+2026-09-09T17:32:43.4562777Z     - SHA256:233e56de019b57db89238fa7bcc3647718dbbea3a40c2dc1c633a8c8952aa9e9
+2026-09-09T17:32:43.4563406Z     - SHA1:f25f722f552dc3fd510081e6b65a0e7174ec9321 [weak]
+2026-09-09T17:32:43.4563904Z     - MD5Sum:2fc39e32c7bdf718a907c390338392ea [weak]
+2026-09-09T17:32:43.4564300Z    Hashes of received file:
+2026-09-09T17:32:43.4564842Z     - SHA256:bc1428ab27c6d76ee9bb76de07f1ded0ddb4aaabd958fc72855634ef5894a4b3
+2026-09-09T17:32:43.4565501Z     - SHA1:f601c49edc3ea059583213f0be1589cb0fa6e2e5 [weak]
+2026-09-09T17:32:43.4566387Z     - MD5Sum:2ce0a26fc7a49a488341fc13c6d05b52 [weak]
+2026-09-09T17:32:43.4567178Z     - Filesize:1405 [weak]
+2026-09-09T17:32:43.4567620Z    Last modification reported: Wed, 09 Sep 2026 09:41:12 +0000
+2026-09-09T17:32:43.4568392Z    Release file created at: Wed, 09 Sep 2026 17:16:59 +0000
+2026-09-09T17:32:43.4569204Z E: Some index files failed to download. They have been ignored, or old ones used instead.
+2026-09-09T17:32:43.4593454Z ##[error]Process completed with exit code 100.
+
+Job 102573870982:
+2026-09-09T17:32:46.5477778Z E: Failed to fetch https://dl.google.com/linux/chrome-stable/deb/dists/stable/main/binary-amd64/Packages.gz  Hash Sum mismatch
+2026-09-09T17:32:46.5478867Z    Hashes of expected file:
+2026-09-09T17:32:46.5479319Z     - Filesize:1405 [weak]
+2026-09-09T17:32:46.5479750Z     - SHA256:233e56de019b57db89238fa7bcc3647718dbbea3a40c2dc1c633a8c8952aa9e9
+2026-09-09T17:32:46.5480270Z     - SHA1:f25f722f552dc3fd510081e6b65a0e7174ec9321 [weak]
+2026-09-09T17:32:46.5480658Z     - MD5Sum:2fc39e32c7bdf718a907c390338392ea [weak]
+2026-09-09T17:32:46.5481972Z    Hashes of received file:
+2026-09-09T17:32:46.5482419Z     - SHA256:bc1428ab27c6d76ee9bb76de07f1ded0ddb4aaabd958fc72855634ef5894a4b3
+2026-09-09T17:32:46.5482925Z     - SHA1:f601c49edc3ea059583213f0be1589cb0fa6e2e5 [weak]
+2026-09-09T17:32:46.5483845Z     - MD5Sum:2ce0a26fc7a49a488341fc13c6d05b52 [weak]
+2026-09-09T17:32:46.5484274Z     - Filesize:1405 [weak]
+2026-09-09T17:32:46.5484966Z    Last modification reported: Wed, 09 Sep 2026 09:41:12 +0000
+2026-09-09T17:32:46.5485622Z    Release file created at: Wed, 09 Sep 2026 17:16:59 +0000
+2026-09-09T17:32:46.5486345Z E: Some index files failed to download. They have been ignored, or old ones used instead.
+2026-09-09T17:32:46.5503562Z ##[error]Process completed with exit code 100.

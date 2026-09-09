@@ -1,0 +1,7 @@
+analyze.rb:83:in `block in parse': Missing PASS (RuntimeError)
+	from analyze.rb:82:in `each'
+	from analyze.rb:82:in `parse'
+	from analyze.rb:93:in `block in <main>'
+	from analyze.rb:92:in `each'
+	from analyze.rb:92:in `each_with_index'
+	from analyze.rb:92:in `<main>'

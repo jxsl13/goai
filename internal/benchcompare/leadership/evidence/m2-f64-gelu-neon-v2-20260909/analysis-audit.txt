@@ -1,0 +1,7 @@
+Validated internal/benchcompare/leadership/evidence/m2-f64-gelu-neon-v2-20260909/paired.txt: 84 invocations, 1344 records
+Validated internal/benchcompare/leadership/evidence/m2-f64-gelu-neon-v2-20260909/controls.txt: 84 invocations, 252 records
+Large public targets passing: 24/24 (expected 24)
+Controls with significant >3% time-increase flags: 0; repeated in at least two campaigns: 0
+Allocation metric/cell increase flags: 0; repeated in at least two campaigns: 0
+All flagged rows require independent interpretation; no control or allocation pass is inferred from these descriptive counts.
+This protocol audit is not a substitute for independent review or external-library leadership evidence.

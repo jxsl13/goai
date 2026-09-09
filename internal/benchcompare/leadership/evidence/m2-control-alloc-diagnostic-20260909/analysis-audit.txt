@@ -1,0 +1,4 @@
+Validated old-old: 84 invocations, 252 records, fixed N=1024
+Validated old-v2: 84 invocations, 252 records, fixed N=1024
+All 36 comparison cells retained; every paired raw-total delta and quotient/remainder is reported.
+Descriptive diagnostic only: no equivalence assertion, noise subtraction, V2 rescoring, promotion or external leadership claim.

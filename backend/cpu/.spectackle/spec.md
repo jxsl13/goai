@@ -23,6 +23,9 @@ Rationale: This path accumulates in f32, so it amends the general f64-accumulati
 - P-01M0TYHVNWF91A29YTTFVS98ZT Interleave exact CPU MoECombine output accumulators: Consumed by archived task T-01M0TYMJGMFMQ. The measured four-output exact interleave shipped with 1.4387x to 2.0359x M2 gains across six cells, unchanged allocation counts, full numerical gates, and perfscan issues #906 and #907; width 8 was rejected by high-expert F64 measurements.
 - R-01M236QP4YEFDABMQ07MC43EHH Establish the M2 F64 GELU vectorization gate after the Go 1.27.1 rebuild: Consumed by P-01M237J19FFE5 and T-01M237QTE7E8E plus three SCALAR-F64-GELU-DIRECT contracts. Retained 36 unchanged baseline records in internal/benchcompare/leadership/evidence/m2-f64-gelu-direct-20260909/baseline.txt: backward262144 medians3954529ns/GMP1 and800383ns/GMP12; forward256x2048 medians5267461ns and961250ns. Go1.27.1 ARM64 SIMD CGO0, same runtime source137b3355 as merged06993c9e, frozen [body truncated at tombstone retention cap]
 - P-01M237J19FFE5SYSTMV3442H6H Measure direct-call scalar F64 GELU backward before a wider SIMD redesign: Measurement objective complete with rejected child T-01M237QTE7E8E; no production runtime change survives. ResearchR-01M236QP4YEFD consumed. Retained common benchmark harness, stronger exact GELU oracles, all168 alternatingrecords and36initialbaseline records, pre-rewrite one-ULP failures, full stats and reproduction under internal/benchcompare/leadership/evidence/m2-f64-gelu-direct-20260909. Thre [body truncated at tombstone retention cap]
+- R-01M23Q8QJDE3Y878N2CZBNPAWJ Diagnose repeated parallel control allocation-byte movement without rescoring rejected GELU V2: Consumed by T-01M23QYMYVE0M and retained allocation-research.txt at050ebf55. Unchanged control source plus Go1.27.1 process-wide integer allocation accounting suggests diagnostic need, not causal proof or V2 waiver. New reviewed task captures exact fixed1024 totals with identical-old control and matchedoldV2; original measurements and rejection immutable.
+- T-01M23QYMYVE0MSHXZMCARBFDN2 Capture exact fixed-count control allocation totals with identical-binary negative controls: validated pass by allocdiag-data-verifier no attributed diff (15c26bbed646 binds the target list, not code) :: Diagnostic evidence PASS only. Serving validation pack says source none/absent; actual committed source166fc8eb, complete implementation/matched-build raw proof and fresh independent data report were manually inspected. Initial analyzer zero-total mismatch corrected with retained FAIL+sup [body truncated at tombstone retention cap]
+- T-01M24137G7EHMASPJH0JA8ZZKS Implement guarded raw Softplus allocation-site capture with exact artifact schema: validated pass by root no attributed diff (7365208428e0 binds the target list, not code) :: [evidence] Pack source diff is absent because code was committed. Root reviewed the exact f6ea1353 implementation and 3eb438b28dd0ac68a469848d5b3d72ab7ca305ea three-line fix, matching source SHA b6583b360128ba53ef87f71bff0b705dbdb549e1de78a5115774aeab14017352. [correctness] Explicit KeepAlive for both fixed [body truncated at tombstone retention cap]
 
 ## FANOUT-SIZING-PAYS-ONLY-AT-HIGH-CALL-FREQUENCY-001
 IF a fan-out helper serves large operations called a few times rather than small ones called thousands of times, THEN the work-sizing transform of SIZE-THE-FANOUT-TO-THE-WORK-001 SHALL not be applied, because it measures neutral there and neutral is not a reason to add a knob.
@@ -168,3 +171,36 @@ Rationale: This is an attribution experiment before a SIMD redesign; scalar erf 
 WHEN three campaigns measure 2048-element GOMAXPROCS1/12 and 262144-element GOMAXPROCS12 controls, the direct-call GELU promotion gate SHALL reject reproducible time regressions above 3 percent or allocation increases.
 
 Rationale: Retain all raw samples, discarded warmup boundaries, frozen binary hashes and build flags; small effects must satisfy PROC-INTERLEAVE-001. Preserve the AMD64 SIMD route and do not enable the ARM64 GELU SIMD gate.
+
+## ARM64-F64-GELU-NUMERIC-001 {applies: go:cpu.vgeluF64~3,go:cpu.vgeluGradF64~3}
+WHEN ARM64 SIMD evaluates eligible finite F64 GELU forward or backward, the dedicated GELU route SHALL match the exact-erf reference within 1e-12 times max(1,abs(reference)) and preserve bit-identical vector and scalar-tail results for eligible spans.
+
+## ARM64-F64-GELU-SCOPE-001 {applies: go:cpu.geluKernelCPU,go:cpu.geluBackwardF64KernelCPU,go:cpu.vexpF64Fast~2}
+WHEN F64 GELU selects the experimental ARM64 implementation, the CPU backend SHALL use a dedicated GELU capability, keep global vexpF64Fast false, and preserve default, AMD64, F32, reference, and unrelated operation arithmetic.
+
+## ARM64-F64-GELU-FALLBACK-001 {applies: go:cpu.vgeluF64~3,go:cpu.vgeluGradF64~3}
+WHEN an ARM64 GELU wrapper call contains any lane outside the declared eligibility domain, the entire wrapper call SHALL match scalar finite result bits and NaN classes, keep TestGELUBackwardF64DirectSpecialValues active, and modify 0 input elements.
+
+## ARM64-F64-GELU-PERF-001 {applies: go:cpu.geluKernelCPU,go:cpu.geluBackwardF64KernelCPU}
+WHEN three paired count-seven M2 Go1.27.1 campaigns measure 262144-element GELU forward and backward, the promotion gate SHALL require 1.25x serial and 1.05x parallel public-operation speedup with p below 0.05 in every campaign.
+
+## ARM64-F64-GELU-EXP-ORDER-001 {applies: go:cpu.vgeluGradF64~3}
+WHEN the ARM64 SIMD backward kernel evaluates the erfc and PDF factors, the exponential composition SHALL evaluate exp(-y*y) and exp(-0.5*x*x) separately with y=x*invSqrt2, preserving each rounded argument.
+
+## ARM64-F64-GELU-CONTROLS-001 {applies: go:cpu.geluKernelCPU,go:cpu.geluBackwardF64KernelCPU}
+WHEN the GELU candidate is benchmarked at 2048 elements or against non-target controls, the promotion gate SHALL reject reproducible time regressions above 3 percent or allocation increases across 3 paired campaigns.
+
+## ARM64-F64-GELU-DOMAIN-001 {applies: go:cpu.vgeluF64~3,go:cpu.vgeluGradF64~3}
+WHEN an ARM64 F64 GELU wrapper selects vector arithmetic, the preflight SHALL require every x to be finite with abs(x)<=32 and every backward g to be zero or finite with 1e-150<=abs(g)<=8.
+
+## ARM64-F64-GELU-UNIFORM-SMALL-001 {applies: go:cpu.erfF64x2GELU}
+WHEN ARM64 GELU erf bypasses exp/P/Q, the erfF64x2GELU shortcut SHALL require 2 lanes with abs(y)<1 and return bit-identical erfSmall, preserving the complete path for every other pair.
+
+## CPU-ALLOC-SITE-CAPTURE-001 {applies: go:cpu_test.TestCPUControlAllocationSites}
+WHEN TestCPUControlAllocationSites is enabled, the diagnostic SHALL record exactly 1024 Softplus calls between MemStats boundaries using two fixed 65536-record buffers, with 0 runtime kernel changes.
+
+## CPU-ALLOC-SITE-RAW-001 {applies: go:cpu_test.formatAllocationSiteSnapshot,go:cpu_test.TestCPUControlAllocationSites}
+WHEN allocation-site evidence is serialized, the diagnostic SHALL preserve every raw MemProfileRecord and ordered CallersFrames entry, write pprof after raw post capture, and keep tail counters separate.
+
+## CPU-ALLOC-SITE-LIFETIME-001 {applies: go:cpu_test.TestCPUControlAllocationSites}
+WHEN allocation-site artifacts are serialized, the capture SHALL call runtime.KeepAlive for both raw record buffers after the final tail JSON write and artifact closes.

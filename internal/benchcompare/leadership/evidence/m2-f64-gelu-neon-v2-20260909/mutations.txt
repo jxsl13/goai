@@ -1,0 +1,285 @@
+V2 serialized mutation audit
+
+The root paused all commits, pushes, and Spectackle writes throughout the
+implementer's exclusive mutation window. The parent independently read both
+complete assertion-failure logs and the restored focused PASS, and checked
+runtime/test/harness/control/V1 binary hashes after restoration.
+
+Restored runtime SHA-256: 72c79a0bf18257f19c38206ae6f206f8aa1227803d8e881fc65d068192075c35
+Restored test SHA-256: 05f8c65f89d8c009829fdfb5b68c9aceb3c6de3069f24c00da8c254c693eacc0
+After the window closed, a gofmt import-order-only repair changed the final
+test SHA-256 to cc87da8e6407080c7d931a9917b364adbdbff82698a631f30b16cb6e30abf7ca.
+The runtime SHA remained unchanged. Full verification uses the formatted file.
+Unchanged harness SHA-256: b53599699510a31f3a2d086f08f1b11b968b9ad1f25941e75c8a1f62fc49c9f3
+Unchanged control SHA-256: c95691bc1a7289094bc523250fde7a9cae614756635b78701e9c306962b246cb
+Unchanged V1 binary SHA-256: 045826effd7c6aab639a1b4c9e0e162e4eca03b6aaef56761291c248492301d7
+
+=== v2-mutation-erfsmall-offset-fail.log ===
+=== RUN   TestErfF64x2GELUUniformSmallPairs
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3fd0000000000000_bfe8000000000000
+    vgelu_f64_neon_test.go:89: got 0.2763264001682369 (3fd1af54ecef9d79), want 0.2763263901682369 (3fd1af54e232d608)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfe8000000000000_3fd0000000000000
+    vgelu_f64_neon_test.go:89: got -0.71115562365351503 (bfe6c1c9703eaaa6), want -0.71115563365351508 (bfe6c1c9759d0e5f)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/0000000000000000_8000000000000000
+    vgelu_f64_neon_test.go:89: got 1e-08 (3e45798ee2308c3a), want 0 (0000000000000000)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/8000000000000000_0000000000000000
+    vgelu_f64_neon_test.go:89: got 1e-08 (3e45798ee2308c3a), want -0 (8000000000000000)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/0000000000000001_8000000000000001
+    vgelu_f64_neon_test.go:89: got 1e-08 (3e45798ee2308c3a), want 4.9406564584124654e-324 (0000000000000001)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/8000000000000001_0000000000000001
+    vgelu_f64_neon_test.go:89: got 1e-08 (3e45798ee2308c3a), want -4.9406564584124654e-324 (8000000000000001)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3fe0000000000000_4000000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/4000000000000000_3fe0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3fe0000000000000_401c000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/401c000000000000_3fe0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfe0000000000000_4000000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/4000000000000000_bfe0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/c018000000000001_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c018000000000001
+=== RUN   TestErfF64x2GELUUniformSmallPairs/c018000000000000_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c018000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/c017ffffffffffff_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c017ffffffffffff
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bff0000000000001_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bff0000000000001
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bff0000000000000_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bff0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfefffffffffffff_bfd0000000000000
+    vgelu_f64_neon_test.go:89: got -0.84270078294971473 (bfeaf767a1e2a4d1), want -0.84270079294971478 (bfeaf767a741088a)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bfefffffffffffff
+    vgelu_f64_neon_test.go:89: got -0.27632638016823691 (bfd1af54d7760e97), want -0.2763263901682369 (bfd1af54e232d608)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3fefffffffffffff_bfd0000000000000
+    vgelu_f64_neon_test.go:89: got 0.84270080294971483 (3feaf767ac9f6c43), want 0.84270079294971478 (3feaf767a741088a)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3fefffffffffffff
+    vgelu_f64_neon_test.go:89: got -0.27632638016823691 (bfd1af54d7760e97), want -0.2763263901682369 (bfd1af54e232d608)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3ff0000000000000_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3ff0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3ff0000000000001_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3ff0000000000001
+=== RUN   TestErfF64x2GELUUniformSmallPairs/4017ffffffffffff_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4017ffffffffffff
+=== RUN   TestErfF64x2GELUUniformSmallPairs/4018000000000000_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4018000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/4018000000000001_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4018000000000001
+--- FAIL: TestErfF64x2GELUUniformSmallPairs (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/3fd0000000000000_bfe8000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/bfe8000000000000_3fd0000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/0000000000000000_8000000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/8000000000000000_0000000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/0000000000000001_8000000000000001 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/8000000000000001_0000000000000001 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/3fe0000000000000_4000000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/4000000000000000_3fe0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/3fe0000000000000_401c000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/401c000000000000_3fe0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfe0000000000000_4000000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/4000000000000000_bfe0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/c018000000000001_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c018000000000001 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/c018000000000000_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c018000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/c017ffffffffffff_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c017ffffffffffff (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bff0000000000001_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bff0000000000001 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bff0000000000000_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bff0000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/bfefffffffffffff_bfd0000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bfefffffffffffff (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/3fefffffffffffff_bfd0000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3fefffffffffffff (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/3ff0000000000000_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3ff0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/3ff0000000000001_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3ff0000000000001 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/4017ffffffffffff_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4017ffffffffffff (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/4018000000000000_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4018000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/4018000000000001_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4018000000000001 (0.00s)
+FAIL
+FAIL	github.com/jxsl13/goai/backend/cpu	0.402s
+FAIL
+
+=== v2-mutation-any-small-or-fail.log ===
+=== RUN   TestErfF64x2GELUUniformSmallPairs
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3fd0000000000000_bfe8000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfe8000000000000_3fd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/0000000000000000_8000000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/8000000000000000_0000000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/0000000000000001_8000000000000001
+=== RUN   TestErfF64x2GELUUniformSmallPairs/8000000000000001_0000000000000001
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3fe0000000000000_4000000000000000
+    vgelu_f64_neon_test.go:89: got 0.9953220946726461 (3fefd9adb8b35e0d), want 0.99532226501895271 (3fefd9ae142795e3)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/4000000000000000_3fe0000000000000
+    vgelu_f64_neon_test.go:89: got 0.9953220946726461 (3fefd9adb8b35e0d), want 0.99532226501895271 (3fefd9ae142795e3)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3fe0000000000000_401c000000000000
+    vgelu_f64_neon_test.go:89: got 0.91366732413526563 (3fed3cc34192b6a9), want 1 (3ff0000000000000)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/401c000000000000_3fe0000000000000
+    vgelu_f64_neon_test.go:89: got 0.91366732413526563 (3fed3cc34192b6a9), want 1 (3ff0000000000000)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfe0000000000000_4000000000000000
+    vgelu_f64_neon_test.go:89: got 0.9953220946726461 (3fefd9adb8b35e0d), want 0.99532226501895271 (3fefd9ae142795e3)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/4000000000000000_bfe0000000000000
+    vgelu_f64_neon_test.go:89: got 0.9953220946726461 (3fefd9adb8b35e0d), want 0.99532226501895271 (3fefd9ae142795e3)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/c018000000000001_bfd0000000000000
+    vgelu_f64_neon_test.go:89: got -0.9541847336081849 (bfee88ae6c26116b), want -1 (bff0000000000000)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c018000000000001
+    vgelu_f64_neon_test.go:89: got -0.9541847336081849 (bfee88ae6c26116b), want -1 (bff0000000000000)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/c018000000000000_bfd0000000000000
+    vgelu_f64_neon_test.go:89: got -0.95418473360818479 (bfee88ae6c26116a), want -1 (bff0000000000000)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c018000000000000
+    vgelu_f64_neon_test.go:89: got -0.95418473360818479 (bfee88ae6c26116a), want -1 (bff0000000000000)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/c017ffffffffffff_bfd0000000000000
+    vgelu_f64_neon_test.go:89: got -0.95418473360818512 (bfee88ae6c26116d), want -1 (bff0000000000000)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c017ffffffffffff
+    vgelu_f64_neon_test.go:89: got -0.95418473360818512 (bfee88ae6c26116d), want -1 (bff0000000000000)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bff0000000000001_bfd0000000000000
+    vgelu_f64_neon_test.go:89: got -0.84270079294971489 (bfeaf767a741088b), want -0.84270079294971501 (bfeaf767a741088c)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bff0000000000001
+    vgelu_f64_neon_test.go:89: got -0.84270079294971489 (bfeaf767a741088b), want -0.84270079294971501 (bfeaf767a741088c)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bff0000000000000_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bff0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfefffffffffffff_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bfefffffffffffff
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3fefffffffffffff_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3fefffffffffffff
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3ff0000000000000_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3ff0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3ff0000000000001_bfd0000000000000
+    vgelu_f64_neon_test.go:89: got 0.84270079294971489 (3feaf767a741088b), want 0.84270079294971501 (3feaf767a741088c)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3ff0000000000001
+    vgelu_f64_neon_test.go:89: got 0.84270079294971489 (3feaf767a741088b), want 0.84270079294971501 (3feaf767a741088c)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/4017ffffffffffff_bfd0000000000000
+    vgelu_f64_neon_test.go:89: got 0.95418473360818512 (3fee88ae6c26116d), want 1 (3ff0000000000000)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4017ffffffffffff
+    vgelu_f64_neon_test.go:89: got 0.95418473360818512 (3fee88ae6c26116d), want 1 (3ff0000000000000)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/4018000000000000_bfd0000000000000
+    vgelu_f64_neon_test.go:89: got 0.95418473360818479 (3fee88ae6c26116a), want 1 (3ff0000000000000)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4018000000000000
+    vgelu_f64_neon_test.go:89: got 0.95418473360818479 (3fee88ae6c26116a), want 1 (3ff0000000000000)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/4018000000000001_bfd0000000000000
+    vgelu_f64_neon_test.go:89: got 0.9541847336081849 (3fee88ae6c26116b), want 1 (3ff0000000000000)
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4018000000000001
+    vgelu_f64_neon_test.go:89: got 0.9541847336081849 (3fee88ae6c26116b), want 1 (3ff0000000000000)
+--- FAIL: TestErfF64x2GELUUniformSmallPairs (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/3fd0000000000000_bfe8000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfe8000000000000_3fd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/0000000000000000_8000000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/8000000000000000_0000000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/0000000000000001_8000000000000001 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/8000000000000001_0000000000000001 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/3fe0000000000000_4000000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/4000000000000000_3fe0000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/3fe0000000000000_401c000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/401c000000000000_3fe0000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/bfe0000000000000_4000000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/4000000000000000_bfe0000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/c018000000000001_bfd0000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c018000000000001 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/c018000000000000_bfd0000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c018000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/c017ffffffffffff_bfd0000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c017ffffffffffff (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/bff0000000000001_bfd0000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bff0000000000001 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bff0000000000000_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bff0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfefffffffffffff_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bfefffffffffffff (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/3fefffffffffffff_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3fefffffffffffff (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/3ff0000000000000_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3ff0000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/3ff0000000000001_bfd0000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3ff0000000000001 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/4017ffffffffffff_bfd0000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4017ffffffffffff (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/4018000000000000_bfd0000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4018000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/4018000000000001_bfd0000000000000 (0.00s)
+    --- FAIL: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4018000000000001 (0.00s)
+FAIL
+FAIL	github.com/jxsl13/goai/backend/cpu	0.368s
+FAIL
+
+=== v2-restored-focused-pass.log ===
+=== RUN   TestErfF64x2GELUUniformSmallPairs
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3fd0000000000000_bfe8000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfe8000000000000_3fd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/0000000000000000_8000000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/8000000000000000_0000000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/0000000000000001_8000000000000001
+=== RUN   TestErfF64x2GELUUniformSmallPairs/8000000000000001_0000000000000001
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3fe0000000000000_4000000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/4000000000000000_3fe0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3fe0000000000000_401c000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/401c000000000000_3fe0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfe0000000000000_4000000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/4000000000000000_bfe0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/c018000000000001_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c018000000000001
+=== RUN   TestErfF64x2GELUUniformSmallPairs/c018000000000000_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c018000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/c017ffffffffffff_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c017ffffffffffff
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bff0000000000001_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bff0000000000001
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bff0000000000000_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bff0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfefffffffffffff_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bfefffffffffffff
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3fefffffffffffff_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3fefffffffffffff
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3ff0000000000000_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3ff0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3ff0000000000001_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3ff0000000000001
+=== RUN   TestErfF64x2GELUUniformSmallPairs/4017ffffffffffff_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4017ffffffffffff
+=== RUN   TestErfF64x2GELUUniformSmallPairs/4018000000000000_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4018000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/4018000000000001_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4018000000000001
+--- PASS: TestErfF64x2GELUUniformSmallPairs (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/3fd0000000000000_bfe8000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfe8000000000000_3fd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/0000000000000000_8000000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/8000000000000000_0000000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/0000000000000001_8000000000000001 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/8000000000000001_0000000000000001 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/3fe0000000000000_4000000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/4000000000000000_3fe0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/3fe0000000000000_401c000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/401c000000000000_3fe0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfe0000000000000_4000000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/4000000000000000_bfe0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/c018000000000001_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c018000000000001 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/c018000000000000_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c018000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/c017ffffffffffff_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c017ffffffffffff (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bff0000000000001_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bff0000000000001 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bff0000000000000_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bff0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfefffffffffffff_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bfefffffffffffff (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/3fefffffffffffff_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3fefffffffffffff (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/3ff0000000000000_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3ff0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/3ff0000000000001_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3ff0000000000001 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/4017ffffffffffff_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4017ffffffffffff (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/4018000000000000_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4018000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/4018000000000001_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4018000000000001 (0.00s)
+=== RUN   TestVGELUF64NeonSmallBoundaryBodyTail
+--- PASS: TestVGELUF64NeonSmallBoundaryBodyTail (0.00s)
+PASS
+ok  	github.com/jxsl13/goai/backend/cpu	0.238s

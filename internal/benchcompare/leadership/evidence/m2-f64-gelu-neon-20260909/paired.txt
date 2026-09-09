@@ -1,0 +1,2106 @@
+protocol: three alternating count-seven campaigns; one-second samples
+boundary: leaf is preallocated; Execute includes output allocation
+fixtures: forward/backward; active/mixed; n2048/n262144
+warmup: one second per arm and cell before each campaign; excluded
+old-sha256: c95691bc1a7289094bc523250fde7a9cae614756635b78701e9c306962b246cb
+new-sha256: 045826effd7c6aab639a1b4c9e0e162e4eca03b6aaef56761291c248492301d7
+campaign: 1
+pair: 1
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	  122019	      8403 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	  113829	      9238 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   42589	     28178 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   40548	     29222 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   40892	     28940 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   39390	     30225 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   24896	     48135 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   24172	     49842 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     460	   2619788 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     450	   2640521 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     303	   3941862 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     297	   3986253 ns/op	 2097480 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     217	   5459058 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     217	   5476421 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     160	   7419795 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     159	   7488593 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 1
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	   79587	     15028 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	   75097	     16173 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   53511	     22205 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   51019	     23422 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   80058	     15014 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   74247	     16207 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   54123	     22173 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   50944	     23402 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     610	   1919620 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     607	   1970751 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     418	   2860344 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     411	   2896628 ns/op	 2097464 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     621	   1943197 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     607	   1963866 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     420	   2857331 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     409	   2889366 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 1
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	  106838	      9592 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	  118946	      9131 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   42586	     28200 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   40690	     29184 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   40179	     29064 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   39466	     30140 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   24727	     48823 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   23937	     49594 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     462	   2595922 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2296	    526855 ns/op	 2097492 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     303	   3944951 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1446	    740582 ns/op	 2097517 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     219	   5460854 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    1270	    933420 ns/op	 2097487 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     160	   7422166 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	     956	   1190628 ns/op	 2097519 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 1
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	   79614	     15029 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	   70658	     16623 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   53512	     22264 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   50481	     23558 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   79914	     15030 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   73952	     16724 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   53371	     22306 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   50743	     23632 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     624	   1930644 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2900	    415366 ns/op	 2097491 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     416	   2857525 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1929	    539672 ns/op	 2097501 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     624	   1928305 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    2857	    421295 ns/op	 2097480 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     414	   2857469 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    1935	    536932 ns/op	 2097496 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 2
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	   79639	     15023 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	   75294	     15996 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   54112	     22209 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   50352	     23407 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   80023	     15016 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   74552	     16153 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   54096	     22210 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   49323	     23560 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     624	   1922019 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     603	   1968346 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     416	   2855298 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     411	   2903620 ns/op	 2097464 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     624	   1922007 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     606	   1978820 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     420	   2853841 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     411	   2893592 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 2
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	  142473	      8855 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	  108804	      9621 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   42450	     28084 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   40606	     29348 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   40251	     29079 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   39217	     30543 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   24698	     48043 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   24008	     49694 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     464	   2590057 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     453	   2642474 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     304	   3969387 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     298	   4010874 ns/op	 2097480 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     219	   5476990 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     218	   5470198 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     160	   7419828 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     159	   7469803 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 2
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	   79341	     15040 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	   73215	     16278 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   53979	     22216 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   51042	     23484 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   79999	     14989 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   72402	     16288 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   53997	     22203 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   50791	     23652 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     620	   1924453 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2875	    412014 ns/op	 2097486 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     417	   2905236 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    2238	    538451 ns/op	 2097497 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     621	   1925296 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    2455	    439524 ns/op	 2097483 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     415	   2900158 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    2036	    535697 ns/op	 2097497 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 2
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	  114656	      8934 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	  116839	      9411 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   42402	     28369 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   39292	     29572 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   40177	     29015 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   38673	     30405 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   24718	     48393 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   24030	     50489 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     457	   2611131 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2085	    531015 ns/op	 2097493 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     302	   3956484 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1634	    753892 ns/op	 2097523 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     218	   5464984 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    1202	    929151 ns/op	 2097480 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     160	   7419007 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    1033	   1195614 ns/op	 2097512 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 3
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	  122133	      8790 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	  112747	      9330 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   42451	     28318 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   40656	     29393 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   39763	     28997 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   39601	     29929 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   24514	     47955 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   24050	     49861 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     464	   2584293 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     453	   2640614 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     304	   3927117 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     298	   3986705 ns/op	 2097480 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     219	   5457376 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     218	   5482469 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     160	   7401646 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     158	   7485492 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 3
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	   79437	     15016 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	   74128	     16208 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   54070	     22201 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   51282	     23505 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   79545	     15011 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   74418	     16232 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   52098	     22336 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   51034	     23622 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     618	   1922773 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     607	   1994791 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     414	   2856500 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     411	   2893426 ns/op	 2097464 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     619	   1940183 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     602	   1974130 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     417	   2853582 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     412	   2885869 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 3
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	  127359	      9464 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	  112077	      9477 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   42184	     28360 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   40389	     29644 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   40846	     28582 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   38709	     30389 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   24518	     47966 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   23660	     50109 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     458	   2594784 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2287	    520456 ns/op	 2097488 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     296	   3948155 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1632	    756868 ns/op	 2097522 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     218	   5466674 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    1321	    947845 ns/op	 2097481 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     160	   7424138 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	     961	   1201474 ns/op	 2097520 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 3
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	   79162	     15053 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	   73185	     16333 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   53745	     22275 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   50781	     23639 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   78590	     15088 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   73154	     16313 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   54020	     22304 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   50786	     23531 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     621	   1928629 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2836	    416552 ns/op	 2097492 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     417	   2855819 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1935	    533988 ns/op	 2097504 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     624	   1928406 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    2798	    419402 ns/op	 2097482 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     420	   2850725 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    1944	    556679 ns/op	 2097497 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 4
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	   79772	     15085 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	   74714	     16221 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   54014	     22266 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   50779	     23511 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   79851	     15061 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   74581	     16165 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   54067	     22278 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   51261	     23443 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     625	   1932143 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     603	   1971837 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     420	   2863874 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     412	   2891305 ns/op	 2097464 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     624	   1926807 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     607	   1962004 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     420	   2856456 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     414	   2893202 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 4
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	  143493	      8550 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	  117162	      9530 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   42543	     28174 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   40374	     29201 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   40530	     29310 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   39712	     30097 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   24529	     48318 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   23960	     49739 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     445	   2617395 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     444	   2640781 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     304	   3930760 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     298	   3994190 ns/op	 2097480 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     218	   5452692 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     218	   5495497 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     160	   7409698 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     159	   7487837 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 4
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	   79171	     15018 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	   72493	     16338 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   54103	     22269 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   50896	     23530 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   80041	     15012 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   72696	     16291 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   53778	     22250 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   50954	     23579 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     624	   1924648 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2888	    419485 ns/op	 2097484 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     420	   2850534 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    2193	    538890 ns/op	 2097503 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     619	   1926793 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    2906	    417651 ns/op	 2097486 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     421	   2857692 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    2179	    540991 ns/op	 2097496 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 4
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	  136047	      8743 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	  117894	      9373 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   42244	     28169 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   40191	     29559 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   40652	     29049 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   39014	     30346 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   24350	     48754 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   23916	     50072 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     458	   2586874 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2275	    523488 ns/op	 2097496 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     303	   3971310 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1610	    746663 ns/op	 2097517 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     219	   5468817 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    1266	    940742 ns/op	 2097484 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     160	   7421732 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    1028	   1205073 ns/op	 2097510 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 5
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	  133231	      7915 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	  108015	      9685 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   42279	     28048 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   40717	     29308 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   39572	     28996 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   39886	     30235 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   24632	     48187 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   24096	     49601 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     446	   2658483 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     451	   2640250 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     303	   3934628 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     297	   3997296 ns/op	 2097480 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     218	   5463918 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     216	   5577009 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     160	   7446807 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     158	   7489225 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 5
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	   77362	     15270 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	   74659	     16177 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   54049	     22250 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   50917	     23395 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   80134	     15063 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   74136	     16307 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   53157	     22288 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   50940	     23470 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     616	   1937003 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     594	   1964796 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     421	   2852432 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     411	   2895195 ns/op	 2097464 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     621	   1922172 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     606	   1966298 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     418	   2851041 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     411	   2897630 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 5
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	  136777	      8543 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	  118716	      9525 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   41997	     28421 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   39625	     29604 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   40069	     28963 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   39409	     30366 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   24574	     48561 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   23620	     50037 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     462	   2720731 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    1808	    626654 ns/op	 2097491 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     292	   3996836 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1222	    976815 ns/op	 2097521 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     216	   5457904 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    1335	    955302 ns/op	 2097493 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     159	   7501550 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    1000	   1190112 ns/op	 2097512 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 5
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	   79492	     15029 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	   72913	     17410 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   53095	     22509 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   50019	     23899 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   79737	     15051 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   73528	     16476 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   53635	     22295 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   51068	     23822 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     613	   1930568 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2701	    415079 ns/op	 2097480 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     418	   2859955 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    2234	    542934 ns/op	 2097504 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     619	   1920176 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    2816	    422444 ns/op	 2097485 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     418	   2858555 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    2239	    541265 ns/op	 2097493 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 6
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	   78968	     15000 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	   74220	     16206 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   53677	     22247 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   51130	     23524 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   79984	     15031 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   73839	     16223 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   53761	     22224 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   50968	     23440 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     621	   1934282 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     598	   1965836 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     420	   2871582 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     411	   2893556 ns/op	 2097464 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     624	   1932574 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     606	   1989626 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     418	   2896047 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     404	   2888512 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 6
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	  146059	      8470 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	  110404	      9700 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   42604	     28214 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   39610	     29480 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   41167	     29004 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   39709	     30085 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   24739	     48771 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   24000	     49541 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     462	   2591453 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     453	   2644182 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     300	   3942700 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     294	   3980572 ns/op	 2097480 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     219	   5460099 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     218	   5460732 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     158	   7402706 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     159	   7505897 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 6
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	   79332	     15012 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	   73393	     16188 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   53842	     22222 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   50964	     23450 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   79681	     15032 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   73641	     16287 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   54114	     22248 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   50924	     23500 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     621	   1930297 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2882	    411934 ns/op	 2097492 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     418	   2860527 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    2210	    538629 ns/op	 2097498 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     620	   1921390 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    2787	    417432 ns/op	 2097483 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     417	   2852580 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    2212	    541408 ns/op	 2097502 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 6
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	  144876	      9163 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	  119018	      9158 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   42348	     28609 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   39776	     30162 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   40828	     29212 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   38494	     30237 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   24316	     48983 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   23617	     50579 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     463	   2593334 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2352	    528276 ns/op	 2097497 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     304	   3932640 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1460	    742322 ns/op	 2097521 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     219	   5515677 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    1318	    914630 ns/op	 2097483 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     160	   7461573 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	     992	   1200705 ns/op	 2097528 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 7
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	  118004	      8772 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	  107157	      9575 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   42522	     28061 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   40698	     29406 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   41140	     28955 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   39918	     30128 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   24820	     48661 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   24022	     49614 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     463	   2590046 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     453	   2636247 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     304	   3932264 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     298	   3994461 ns/op	 2097480 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     219	   5444299 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     218	   5468334 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     160	   7423920 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     159	   7479077 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 7
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	   79406	     14996 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	   74575	     16108 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   53686	     22250 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   51316	     23402 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   80038	     15014 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   72727	     16173 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   54084	     22170 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   51350	     23430 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     625	   1919349 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     604	   1983293 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     420	   2888993 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     412	   2900204 ns/op	 2097464 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     621	   1926980 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     606	   1966649 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     420	   2851085 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     414	   2891472 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 7
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	  125932	      8077 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	  114188	      9336 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   42356	     28379 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   40656	     29574 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   39446	     28682 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   39121	     30254 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   24501	     48250 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   24080	     49971 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     459	   2588175 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2067	    519715 ns/op	 2097496 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     302	   3934648 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1630	    751237 ns/op	 2097521 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     219	   5447048 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    1213	    919810 ns/op	 2097484 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     159	   7448200 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    1040	   1288426 ns/op	 2097515 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 7
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	   78253	     15213 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	   72272	     16517 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   53338	     22515 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   50005	     23457 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   79845	     15013 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   73058	     16377 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   53486	     22234 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   50529	     23653 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     624	   1925967 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2901	    413853 ns/op	 2097484 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     414	   2882911 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1740	    639250 ns/op	 2097502 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     618	   1938083 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    2413	    535480 ns/op	 2097479 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     414	   2863751 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    2212	    535518 ns/op	 2097503 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 1
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	   79461	     15023 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	   70454	     16683 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   53355	     22310 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   50868	     23461 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   80134	     14994 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   73629	     16272 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   53536	     22132 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   50736	     23381 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     625	   1921050 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2868	    409789 ns/op	 2097487 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     420	   2852116 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1944	    535988 ns/op	 2097501 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     625	   1921968 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    2846	    411657 ns/op	 2097479 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     420	   2847315 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    1936	    541229 ns/op	 2097497 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 1
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	  102211	     10724 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	  120104	      9297 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   42613	     28053 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   40788	     29326 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   40203	     29491 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   37495	     30223 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   24717	     48863 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   24076	     49461 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     460	   2584606 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2221	    524392 ns/op	 2097491 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     301	   3955192 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1590	    740035 ns/op	 2097520 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     218	   5449420 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    1332	    934531 ns/op	 2097489 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     160	   7405516 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    1035	   1188493 ns/op	 2097518 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 1
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	   79903	     15010 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	   74764	     16162 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   53444	     22232 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   50294	     23398 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   78812	     15094 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   74078	     16084 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   53822	     22225 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   51187	     23442 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     620	   1921890 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     607	   1987174 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     420	   2857172 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     412	   2892427 ns/op	 2097464 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     625	   1922867 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     608	   1966794 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     416	   2866497 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     411	   2881840 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 1
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	  105842	     10652 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	  108748	     10087 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   42520	     28112 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   40826	     29324 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   41022	     28963 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   39194	     30486 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   24614	     48459 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   23851	     49744 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     464	   2585811 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     454	   2639336 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     304	   3929157 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     298	   3978100 ns/op	 2097480 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     219	   5439680 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     218	   5510592 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     159	   7472959 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     159	   7471135 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 2
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	  108817	     10339 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	  113988	      9096 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   42674	     28236 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   41065	     29259 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   40706	     29523 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   39207	     29984 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   24499	     48380 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   24384	     49175 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     463	   2592527 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2008	    517790 ns/op	 2097494 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     304	   3937005 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1502	    735350 ns/op	 2097518 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     219	   5474986 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	     970	   1223193 ns/op	 2097486 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     159	   7418770 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    1036	   1186326 ns/op	 2097520 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 2
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	   80071	     15015 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	   73095	     16333 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   54109	     22142 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   50552	     23602 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   80053	     14984 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   73147	     16377 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   54170	     22137 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   51144	     23530 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     626	   1917180 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2401	    418757 ns/op	 2097492 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     420	   2849735 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    2194	    537539 ns/op	 2097500 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     620	   1923113 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    2914	    416887 ns/op	 2097480 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     421	   2847677 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    2212	    537822 ns/op	 2097500 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 2
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	  117309	      9718 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	  107522	      9471 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   42522	     28248 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   40934	     29281 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   41143	     29208 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   39619	     30409 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   24860	     48596 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   23948	     49746 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     460	   2586246 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     452	   2631584 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     303	   3939554 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     298	   4013389 ns/op	 2097480 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     218	   5454289 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     217	   5485256 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     162	   7399009 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     159	   7484250 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 2
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	   79944	     14986 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	   74516	     16135 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   52976	     22129 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   51109	     23454 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   80080	     14979 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   74162	     16144 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   54235	     22110 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   51147	     23388 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     625	   1916045 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     609	   1972066 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     417	   2851769 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     414	   2887834 ns/op	 2097464 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     626	   1926587 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     602	   1961887 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     421	   2854541 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     414	   2884025 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 3
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	   80266	     15009 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	   74646	     16080 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   54067	     22141 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   51487	     23171 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   80138	     14985 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   74791	     16057 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   54412	     22143 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   51289	     23240 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     625	   1916673 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2610	    415360 ns/op	 2097493 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     421	   2847689 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1914	    537248 ns/op	 2097499 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     625	   1919521 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    2926	    412103 ns/op	 2097483 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     420	   2847820 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    1959	    558807 ns/op	 2097496 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 3
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	  119282	      9549 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	  120229	      9451 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   42204	     28365 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   40480	     29226 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   38144	     29577 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   40141	     29918 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   24304	     49144 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   24004	     49461 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     464	   2592361 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2306	    527137 ns/op	 2097496 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     304	   3934483 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1449	    770410 ns/op	 2097515 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     219	   5446931 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    1178	    932009 ns/op	 2097481 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     162	   7425614 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	     955	   1174757 ns/op	 2097518 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 3
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	   79987	     15010 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	   75502	     16056 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   53811	     22324 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   51033	     23297 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   79698	     15123 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   74068	     16178 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   54255	     22136 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   51175	     23406 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     625	   1919165 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     608	   1973550 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     420	   2849428 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     414	   2888665 ns/op	 2097464 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     625	   1919572 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     609	   1963925 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     421	   2847194 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     414	   2922769 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 3
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	  146712	      7960 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	  112886	      9551 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   42382	     28069 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   40840	     29255 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   40296	     29649 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   39780	     30160 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   24734	     48520 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   24148	     50026 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     464	   2584893 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     447	   2631713 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     301	   3929183 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     298	   3972362 ns/op	 2097480 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     219	   5448341 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     218	   5469766 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     160	   7389133 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     159	   7468753 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 4
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	  112798	      9896 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	  114898	      9225 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   42798	     28136 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   41260	     28928 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   37989	     30762 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   40153	     29433 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   24724	     48356 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   24534	     48496 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     463	   2587048 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2044	    525610 ns/op	 2097492 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     304	   3960949 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1246	    969317 ns/op	 2097517 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     218	   5452084 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    1210	    941075 ns/op	 2097485 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     162	   7416116 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    1038	   1182051 ns/op	 2097515 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 4
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	   79995	     15010 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	   73284	     16238 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   54217	     22237 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   51406	     23286 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   79600	     15051 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   73538	     16175 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   54219	     22115 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   51025	     23393 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     625	   1917461 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2862	    418873 ns/op	 2097485 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     418	   2852939 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    2244	    533674 ns/op	 2097498 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     625	   1919913 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    2906	    418697 ns/op	 2097486 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     420	   2864923 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    2211	    539778 ns/op	 2097497 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 4
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	  110602	      9977 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	  110073	     10615 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   42444	     28171 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   40879	     29288 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   40942	     29160 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   39009	     30240 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   24757	     48793 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   24025	     49585 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     462	   2593026 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     456	   2628117 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     304	   3935081 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     300	   3977312 ns/op	 2097480 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     218	   5438532 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     218	   5479492 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     162	   7399307 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     159	   7480968 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 4
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	   79598	     14977 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	   74374	     16195 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   54178	     22182 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   51272	     23443 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   80342	     14974 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   74368	     16148 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   53988	     22277 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   50834	     23380 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     616	   1920928 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     609	   1970049 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     420	   2896925 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     409	   2884584 ns/op	 2097464 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     622	   1923046 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     608	   1955557 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     422	   2852142 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     414	   2882968 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 5
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	   80239	     14979 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	   74464	     16052 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   54140	     22216 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   51507	     23227 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   79004	     15027 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   74422	     16100 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   54024	     22395 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   50017	     23275 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     622	   1925582 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2750	    416809 ns/op	 2097490 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     420	   2856172 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1921	    539804 ns/op	 2097500 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     622	   1946359 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    2242	    536485 ns/op	 2097483 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     416	   2871003 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    1938	    538585 ns/op	 2097500 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 5
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	  127096	      9328 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	  119994	      9228 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   42070	     28407 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   40278	     29566 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   40389	     29223 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   39492	     30345 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   24212	     48202 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   23704	     49879 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     463	   2599865 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2083	    528436 ns/op	 2097493 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     300	   3979079 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1455	    775095 ns/op	 2097517 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     218	   5466736 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    1324	    932592 ns/op	 2097484 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     159	   7505547 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	     952	   1203113 ns/op	 2097507 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 5
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	   79089	     15033 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	   73794	     16212 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   54032	     22236 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   51013	     23465 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   79584	     15070 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   74440	     16153 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   54076	     22228 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   50850	     23386 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     622	   1927874 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     606	   1965986 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     420	   2851572 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     409	   2896808 ns/op	 2097464 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     619	   1923663 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     608	   1969759 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     418	   2857160 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     412	   2907133 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 5
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	  113953	      9309 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	  109362	      9467 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   42207	     28366 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   40388	     29654 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   41409	     30103 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   36572	     31524 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   24787	     48674 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   24066	     49605 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     463	   2595007 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     452	   2642833 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     304	   3926529 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     298	   4010255 ns/op	 2097480 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     219	   5455425 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     219	   5472575 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     160	   7422779 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     159	   7500951 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 6
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	  119904	      8622 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	  119775	      9134 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   42294	     28078 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   40605	     29347 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   39141	     29011 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   39200	     30473 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   24800	     48117 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   23696	     49506 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     462	   2598507 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2053	    517890 ns/op	 2097493 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     302	   3943726 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1573	    757675 ns/op	 2097521 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     218	   5455138 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    1192	    932285 ns/op	 2097482 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     160	   7413074 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    1018	   1190726 ns/op	 2097518 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 6
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	   79051	     15017 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	   73033	     16357 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   53065	     22555 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   50444	     23613 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   79984	     15019 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   73350	     16346 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   53841	     22474 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   51387	     23353 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     618	   1946445 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2942	    416866 ns/op	 2097485 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     414	   2865373 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    2226	    540511 ns/op	 2097498 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     622	   1926075 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    2390	    424875 ns/op	 2097486 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     420	   2869235 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    2227	    607014 ns/op	 2097495 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 6
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	  136420	      8063 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	  117859	      9508 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   42056	     27970 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   40689	     29279 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   40381	     28814 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   39674	     30286 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   24609	     48152 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   24078	     49973 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     463	   2590960 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     452	   2633356 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     302	   3937030 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     298	   4005010 ns/op	 2097480 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     216	   5470873 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     217	   5501755 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     160	   7423608 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     158	   7483097 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 6
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	   78050	     15120 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	   73971	     16248 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   54058	     22181 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   51201	     23430 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   78949	     15019 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   73760	     16250 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   54025	     22185 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   51237	     23467 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     620	   1925482 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     602	   1970127 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     420	   2847289 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     414	   2897609 ns/op	 2097464 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     618	   1926962 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     606	   1965482 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     418	   2862868 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     414	   2887281 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 7
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	   79334	     15130 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	   73639	     16194 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   54064	     22295 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   50910	     23570 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   79681	     15018 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   73813	     16250 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   53998	     22228 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   50576	     23463 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     618	   1930827 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2907	    416972 ns/op	 2097488 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     418	   2860888 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    2257	    536617 ns/op	 2097501 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     620	   1921306 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    2829	    418714 ns/op	 2097482 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     418	   2853965 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    2145	    541818 ns/op	 2097494 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 7
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	  116774	      9021 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	  116914	      9252 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   42565	     28205 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   40311	     29351 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   40456	     29223 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   39150	     31628 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   23869	     47788 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   23926	     50096 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     457	   2591985 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2194	    522913 ns/op	 2097494 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     301	   3975543 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1609	    747189 ns/op	 2097521 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     218	   5470575 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    1333	    942240 ns/op	 2097489 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     159	   7490965 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	     732	   1647694 ns/op	 2097516 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 7
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	   79664	     15015 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	   74114	     16132 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   54075	     22230 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   51151	     23441 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   79924	     15010 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   74386	     16176 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   54112	     22237 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   51027	     23414 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     624	   1922086 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     606	   1972648 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     421	   2877027 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     408	   2887776 ns/op	 2097464 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     621	   1926619 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     608	   1968106 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     417	   2852136 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     412	   2893510 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 7
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	  133272	      8773 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	  108786	      9448 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   42489	     27977 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   40168	     29334 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   40856	     28901 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   39075	     29973 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   24566	     47824 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   23967	     49973 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     463	   2593656 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     448	   2635368 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     302	   3925567 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     296	   3981995 ns/op	 2097480 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     219	   5454128 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     217	   5520767 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     160	   7415790 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     159	   7478312 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 1
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	  115537	      8953 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	  110983	      9424 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   42584	     28281 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   40778	     29200 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   40290	     29391 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   39687	     30111 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   24856	     48115 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   24134	     49510 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     460	   2594325 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     454	   2626154 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     304	   3931665 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     298	   3982107 ns/op	 2097480 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     218	   5456230 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     218	   5452526 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     158	   7414756 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     159	   7488771 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 1
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	   79550	     15021 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	   73958	     16157 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   53504	     22188 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   50904	     23423 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   80005	     14994 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   74347	     16208 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   54135	     22221 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   50966	     23452 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     622	   1925443 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     606	   1970125 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     420	   2853644 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     411	   2899211 ns/op	 2097464 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     622	   1925484 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     607	   1964242 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     420	   2853644 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     410	   2887292 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 1
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	  112622	      9416 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	  118710	      9229 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   42116	     28429 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   39728	     29479 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   40789	     28752 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   38684	     30175 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   24530	     48506 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   23527	     49477 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     462	   2592454 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2270	    526753 ns/op	 2097497 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     301	   3984481 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1592	    737407 ns/op	 2097521 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     219	   5448765 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    1183	    921433 ns/op	 2097486 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     159	   7479756 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    1036	   1184310 ns/op	 2097507 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 1
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	   79809	     15010 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	   73712	     16303 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   53858	     22199 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   50862	     23537 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   79299	     14993 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   72372	     16280 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   53872	     22198 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   50826	     23696 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     619	   1922389 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2806	    412884 ns/op	 2097492 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     418	   2856608 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    2227	    537951 ns/op	 2097501 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     624	   1926951 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    2853	    419542 ns/op	 2097480 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     418	   2857535 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    2235	    538350 ns/op	 2097496 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 2
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	   79830	     15016 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	   74078	     16055 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   53803	     22375 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   49567	     23598 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   79690	     14991 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   74648	     16166 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   53947	     22216 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   51314	     23448 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     622	   1922032 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     602	   1970746 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     417	   2855644 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     410	   2891491 ns/op	 2097464 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     622	   1922193 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     607	   1990071 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     416	   2899617 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     406	   2940247 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 2
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	  131223	      9127 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	  113925	     10091 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   42684	     28038 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   40411	     30789 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   40766	     29018 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   39483	     30371 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   24828	     48057 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   23612	     50354 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     454	   2601698 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     452	   2634220 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     303	   3932595 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     298	   4003475 ns/op	 2097480 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     219	   5444895 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     218	   5481433 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     160	   7416539 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     159	   7533984 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 2
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	   79503	     15031 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	   73574	     16291 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   53958	     22211 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   51076	     23501 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   79273	     15023 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   72157	     16278 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   54057	     22166 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   50954	     23548 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     621	   1932336 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2634	    415234 ns/op	 2097496 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     420	   2854927 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    2182	    540834 ns/op	 2097500 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     621	   1924616 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    2786	    412729 ns/op	 2097483 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     416	   2854106 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    2164	    531920 ns/op	 2097496 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 2
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	  107607	      9536 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	  120194	      9225 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   42266	     28156 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   40444	     29372 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   39850	     28964 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   38293	     32389 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   23634	     51639 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   22347	     50325 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     462	   2591325 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2312	    525036 ns/op	 2097492 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     302	   4014605 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1228	    916296 ns/op	 2097519 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     219	   5468066 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    1320	    935461 ns/op	 2097484 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     160	   7417438 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	     946	   1181861 ns/op	 2097515 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 3
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	  120475	      8894 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	  111067	     10636 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   39214	     29972 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   40939	     29402 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   41068	     28709 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   39694	     30134 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   24822	     48272 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   23724	     49363 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     460	   2583241 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     451	   2655025 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     304	   3934090 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     297	   4050969 ns/op	 2097480 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     205	   5874914 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     202	   5696576 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     160	   7418263 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     159	   7470165 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 3
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	   79746	     15017 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	   74166	     16141 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   54050	     22211 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   51242	     23386 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   79870	     15030 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   73564	     16111 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   52495	     23676 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   47930	     25179 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     580	   1950871 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     607	   1968435 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     421	   2849428 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     410	   2890074 ns/op	 2097464 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     621	   1920677 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     603	   1980945 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     420	   2854304 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     414	   2901294 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 3
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	  134762	      9029 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	  109999	      9947 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   39504	     30213 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   39954	     29580 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   40417	     28756 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   38769	     30172 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   24566	     48540 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   23894	     49908 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     446	   2598018 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2085	    516388 ns/op	 2097498 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     304	   3941292 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1627	    764142 ns/op	 2097520 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     217	   5789748 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    1026	   1009385 ns/op	 2097496 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     150	   7480497 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	     978	   1201055 ns/op	 2097512 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 3
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	   79626	     14993 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	   71857	     16414 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   53929	     22197 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   50793	     23599 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   79738	     14996 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   72303	     16368 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   54181	     22192 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   48860	     24437 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     618	   1918504 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2329	    440056 ns/op	 2097490 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     417	   2862598 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    2240	    536205 ns/op	 2097499 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     601	   1926075 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    2197	    503211 ns/op	 2097478 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     417	   2860986 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    2175	    533390 ns/op	 2097504 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 4
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	   79591	     14986 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	   73005	     16487 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   51916	     23136 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   48183	     24501 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   74474	     15996 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   68709	     17126 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   53364	     22242 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   50716	     23809 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     622	   1927854 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     601	   1978738 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     420	   2854411 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     414	   2898356 ns/op	 2097464 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     624	   1925201 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     601	   1967984 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     416	   2849041 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     415	   2917851 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 4
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	  131065	      8228 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	  113148	      9339 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   42488	     28077 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   40611	     29482 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   40956	     29379 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   39435	     30190 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   24804	     48375 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   24146	     49808 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     463	   2583263 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     434	   2653651 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     303	   3934888 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     292	   3993894 ns/op	 2097480 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     219	   5475198 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     217	   5486316 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     162	   7401280 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     159	   7503458 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 4
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	   79405	     15039 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	   73282	     16200 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   54051	     22235 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   50632	     23568 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   79917	     15008 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   73494	     16292 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   53805	     22234 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   50890	     23585 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     621	   1923339 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2830	    409890 ns/op	 2097489 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     417	   2858639 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1957	    530910 ns/op	 2097498 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     616	   1926344 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    2757	    428552 ns/op	 2097478 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     418	   2862225 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    1959	    583357 ns/op	 2097498 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 4
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	  112873	      9488 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	  107898	      9933 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   39548	     29116 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   39531	     30257 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   38296	     29976 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   35391	     32997 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   22924	     51956 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   22138	     53763 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     430	   2776364 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    1980	    580068 ns/op	 2097497 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     302	   3965155 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1378	    738802 ns/op	 2097523 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     218	   5459646 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    1174	    945329 ns/op	 2097491 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     159	   7499854 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    1030	   1180929 ns/op	 2097522 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 5
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	  134082	      8106 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	  111594	      9378 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   42478	     28354 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   39596	     29326 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   40999	     28926 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   39501	     30218 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   24630	     48089 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   24270	     49247 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     463	   2596882 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     451	   2632930 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     304	   3935374 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     300	   3986179 ns/op	 2097480 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     218	   5458607 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     218	   5506061 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     160	   7416316 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     159	   7482086 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 5
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	   79482	     14990 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	   74311	     16235 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   53988	     22206 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   51210	     23417 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   79779	     14992 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   74180	     16159 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   53622	     22392 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   51165	     23368 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     614	   1936932 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     603	   1978546 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     417	   2865400 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     414	   2886514 ns/op	 2097464 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     621	   1927673 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     603	   1959893 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     420	   2852893 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     414	   2887788 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 5
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	  112531	      9343 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	  118945	      9113 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   42194	     28243 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   40412	     29437 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   39562	     29565 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   38642	     30008 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   24276	     48775 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   24138	     49834 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     460	   2601252 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2307	    512879 ns/op	 2097495 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     301	   3977954 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1659	    760110 ns/op	 2097517 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     218	   5557632 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	     968	   1191959 ns/op	 2097485 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     159	   7489678 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    1033	   1196951 ns/op	 2097520 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 5
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	   79556	     15006 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	   72544	     16319 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   54102	     22175 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   50908	     23590 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   79585	     15012 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   73526	     16385 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   54019	     22175 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   50808	     23575 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     620	   1924445 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2902	    415772 ns/op	 2097492 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     420	   2852284 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    2199	    540783 ns/op	 2097502 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     614	   1925380 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    2862	    416671 ns/op	 2097480 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     420	   2854592 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    2215	    537993 ns/op	 2097501 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 6
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	   79364	     15145 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	   73706	     16258 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   54075	     22242 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   50926	     23404 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   79160	     15018 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   73586	     16124 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   54162	     22222 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   50860	     23388 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     621	   1920215 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     606	   1973822 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     421	   2848613 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     412	   2895286 ns/op	 2097464 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     620	   1921993 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     607	   1969810 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     418	   2851295 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     415	   2891708 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 6
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	  122959	      8676 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	  112711	      9172 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   42220	     28165 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   40755	     29374 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   40230	     28744 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   39513	     30857 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   24652	     47946 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   24181	     49858 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     462	   2589928 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     448	   2632830 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     303	   3934244 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     297	   4012371 ns/op	 2097480 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     218	   5484936 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     218	   5511384 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     160	   7455678 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     158	   7507494 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 6
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	   79266	     15097 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	   73156	     16368 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   53704	     22326 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   51170	     23413 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   79615	     15051 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   74197	     16354 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   54139	     22235 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   50719	     23593 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     620	   1932665 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2842	    425050 ns/op	 2097488 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     418	   2862234 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1960	    534134 ns/op	 2097503 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     613	   1935934 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    2836	    412849 ns/op	 2097489 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     417	   2869264 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    1921	    530936 ns/op	 2097498 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 6
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	  127959	      9040 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	  119385	      9185 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   42145	     28449 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   40093	     29614 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   39739	     29405 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   39554	     30312 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   24240	     49087 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   23606	     49807 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     463	   2600771 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2322	    541978 ns/op	 2097491 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     301	   3973447 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1513	    751142 ns/op	 2097520 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     218	   5488553 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    1330	    961957 ns/op	 2097485 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     160	   7451711 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	     956	   1196850 ns/op	 2097513 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 7
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	  117058	      9060 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	  109041	      9398 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   42559	     28179 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   40027	     29505 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   40830	     28711 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   38586	     30636 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   24718	     48075 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   23802	     49719 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     460	   2638294 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     452	   2640330 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     302	   3975960 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     296	   4018659 ns/op	 2097480 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     219	   5480429 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     212	   5534990 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     159	   7472149 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     158	   7517462 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 7
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048         	   79102	     15186 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048      	   73514	     16434 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048        	   53203	     22494 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048     	   50899	     23620 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048          	   79812	     15125 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048       	   73497	     16171 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048         	   53737	     22367 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048      	   50880	     23602 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144       	     621	   1940081 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144    	     598	   1980595 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144      	     418	   2866710 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144   	     411	   2900993 ns/op	 2097464 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144        	     620	   1936605 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144     	     604	   1971852 ns/op	 2097448 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144       	     417	   2862160 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144    	     408	   2899498 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 7
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	  116520	      8966 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	  106773	      9500 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   42616	     28186 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   40414	     29449 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   40898	     28898 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   39057	     30079 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   24273	     47971 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   24325	     49697 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     462	   2602331 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2079	    530693 ns/op	 2097492 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     300	   3949639 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    1633	    772361 ns/op	 2097521 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     219	   5456685 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    1101	    944094 ns/op	 2097483 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     160	   7421079 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    1033	   1212876 ns/op	 2097513 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 7
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048-12         	   78872	     15049 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048-12      	   72633	     16266 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n2048-12        	   53908	     22241 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n2048-12     	   50840	     23465 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          	   78236	     15024 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n2048-12       	   73507	     16203 ns/op	   16680 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         	   53647	     22258 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n2048-12      	   51117	     23433 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n262144-12       	     622	   1933112 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144-12    	    2922	    418130 ns/op	 2097487 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/active/n262144-12      	     416	   2874116 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144-12   	    2215	    546659 ns/op	 2097498 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        	     620	   1929225 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144-12     	    2785	    421135 ns/op	 2097481 B/op	       6 allocs/op
+BenchmarkVGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       	     417	   2864073 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144-12    	    2100	    534196 ns/op	 2097494 B/op	       6 allocs/op
+PASS

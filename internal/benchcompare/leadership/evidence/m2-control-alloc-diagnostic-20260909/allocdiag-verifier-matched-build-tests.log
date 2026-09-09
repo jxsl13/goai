@@ -1,0 +1,27 @@
+COMMAND SHAPE (executed independently for old.test and v2.test with GOAI_ALLOC_DIAGNOSTIC=0)
+helper: -test.run=^Test(AllocationDiagnostic|BenchmarkWithFailure) -test.count=1 -test.v
+guard:  -test.run=^TestCPUControlAllocationDiagnostics$ -test.count=1 -test.v
+
+old.test helper results
+PASS TestAllocationDiagnosticConfig: disabled, valid-serial, valid-parallel, wrong-count, wrong-procs
+PASS TestAllocationDiagnosticResultExactArithmetic
+PASS TestAllocationDiagnosticResultRejectsInvalidResults: invalid-N, invalid-time, bytes-override, allocs-override
+PASS TestAllocationDiagnosticDisabledRunsNoBenchmarks
+PASS TestBenchmarkWithFailurePropagatesNestedFatal
+PASS binary test process
+old.test disabled diagnostic result
+SKIP TestCPUControlAllocationDiagnostics: set GOAI_ALLOC_DIAGNOSTIC=1 with -test.benchtime=1024x and GOMAXPROCS=1 or 12 to run allocation diagnostics
+PASS binary test process
+
+v2.test helper results
+PASS TestAllocationDiagnosticConfig: disabled, valid-serial, valid-parallel, wrong-count, wrong-procs
+PASS TestAllocationDiagnosticResultExactArithmetic
+PASS TestAllocationDiagnosticResultRejectsInvalidResults: invalid-N, invalid-time, bytes-override, allocs-override
+PASS TestAllocationDiagnosticDisabledRunsNoBenchmarks
+PASS TestBenchmarkWithFailurePropagatesNestedFatal
+PASS binary test process
+v2.test disabled diagnostic result
+SKIP TestCPUControlAllocationDiagnostics: set GOAI_ALLOC_DIAGNOSTIC=1 with -test.benchtime=1024x and GOMAXPROCS=1 or 12 to run allocation diagnostics
+PASS binary test process
+
+No opt-in diagnostic or benchmark was run.

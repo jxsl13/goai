@@ -1,0 +1,52 @@
+Independent verification of runtime e766a961 and test repair dc954bc9.
+SDK: /private/tmp/goai-go1271-j1cLvq/go/bin/go (Go 1.27.1)
+GOTOOLCHAIN=local; GOCACHE=/private/tmp/gocache-goai; CGO_ENABLED=0 except race.
+No local benchmark campaign overlapped these gates.
+Logs below are verbatim verifier output; displayed selectors describe one quoted -run argument.
+
+=== verifier-final-cpu-tests.log ===
+$ go test ./backend/cpu
+ok  	github.com/jxsl13/goai/backend/cpu	(cached)
+$ GOEXPERIMENT=simd go test ./backend/cpu
+ok  	github.com/jxsl13/goai/backend/cpu	14.045s
+$ GOMAXPROCS=1 go test ./backend/cpu -run GELU|Gelu|Activation
+ok  	github.com/jxsl13/goai/backend/cpu	0.589s
+$ GOMAXPROCS=1 GOEXPERIMENT=simd go test ./backend/cpu -run GELU|Gelu|Activation
+ok  	github.com/jxsl13/goai/backend/cpu	0.651s
+$ GOMAXPROCS=12 go test ./backend/cpu -run GELU|Gelu|Activation
+ok  	github.com/jxsl13/goai/backend/cpu	0.692s
+$ GOMAXPROCS=12 GOEXPERIMENT=simd go test ./backend/cpu -run GELU|Gelu|Activation
+ok  	github.com/jxsl13/goai/backend/cpu	0.649s
+
+=== verifier-final-build-vet-cross-fmt-rerun.log ===
+$ go build ./...
+go: writing stat cache: open /Users/john/go/pkg/mod/cache/download/github.com/jxsl13/goai/@v/v0.1.1-0.20260909160728-dc954bc9343f.info472214878.tmp: operation not permitted
+rc=0
+$ GOEXPERIMENT=simd go build ./...
+go: writing stat cache: open /Users/john/go/pkg/mod/cache/download/github.com/jxsl13/goai/@v/v0.1.1-0.20260909160728-dc954bc9343f.info916214899.tmp: operation not permitted
+rc=0
+$ go vet ./backend/cpu
+rc=0
+$ GOEXPERIMENT=simd go vet ./backend/cpu
+rc=0
+$ GOARCH=amd64 GOEXPERIMENT=simd go test -c ./backend/cpu
+rc=0
+$ git diff --check b9c05946..HEAD
+rc=0
+$ gofmt changed files
+rc=0
+
+=== verifier-final-race.log ===
+$ go test -race ./backend/cpu -run GELU|Gelu|Activation
+ok  	github.com/jxsl13/goai/backend/cpu	4.084s
+rc=0
+$ GOEXPERIMENT=simd go test -race ./backend/cpu -run GELU|Gelu|Activation
+ok  	github.com/jxsl13/goai/backend/cpu	3.991s
+rc=0
+
+=== numerics-detail.log ===
+=== RUN   TestVGELUF64NeonEligibleAccuracyAndBodyTail
+    vgelu_f64_neon_test.go:193: max_abs_error=4.440892098500626e-16 max_normalized_error=3.318506137718579e-16
+--- PASS: TestVGELUF64NeonEligibleAccuracyAndBodyTail (0.02s)
+PASS
+ok  	github.com/jxsl13/goai/backend/cpu	0.253s

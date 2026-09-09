@@ -1,0 +1,152 @@
+Literal command outputs retained by the independent data verifier
+Date: 2026-09-09
+
+1. Synthetic analyzer suite
+
+$ ruby analyze_test.rb
+Run options: --seed 27399
+
+# Running:
+
+...
+
+Finished in 1.437922s, 2.0863 runs/s, 844.2739 assertions/s.
+
+3 runs, 1214 assertions, 0 failures, 0 errors, 0 skips
+
+2. Fresh analyzer execution and byte comparison with saved analysis.csv
+
+$ ruby -ropen3 -rdigest -e '<capture analyze.rb stdout/stderr; compare with analysis.csv>'
+exit=0
+Validated old-old: 84 invocations, 252 records, fixed N=1024
+Validated old-v2: 84 invocations, 252 records, fixed N=1024
+All 36 comparison cells retained; every paired raw-total delta and quotient/remainder is reported.
+Descriptive diagnostic only: no equivalence assertion, noise subtraction, V2 rescoring, promotion or external leadership claim.
+generated_bytes=16850
+saved_bytes=16850
+generated_sha256=7882142d56db0ab291ca9bbc9a0f2a4ac616ba1d6494f8edb54d932ba8b01f0b
+saved_sha256=7882142d56db0ab291ca9bbc9a0f2a4ac616ba1d6494f8edb54d932ba8b01f0b
+byte_identical=true
+
+3. Fresh strict independent raw parser (not analyze.rb)
+
+$ ruby -rjson -rdigest -e '<independent strict protocol parser and descriptive summaries>' old-old.txt old-v2.txt
+old-old: sha256=7825c104ad77023117a147370059e4c0192fcf7410539023c6962dba1a1b358d lines=1014 invocations=84 records=252 passes=84
+old-v2: sha256=53e1d2b95c5057803e2c6fa8f061903da8563b45b756078f1f0ef1916f76d0df lines=1014 invocations=84 records=252 passes=84
+total: invocations=168 records=504
+validated: exact headers/paths/hashes; exact invocation order; N=1024; integer/nonnegative metrics; positive total_ns; exact quotient/remainder; ordered 3 controls; all standalone PASS; no FAIL/SKIP/panic/fatal markers
+
+Selected literal rows from the independent parser's complete 72 metric-row output:
+phase,campaign,procs,benchmark,metric,A_median,B_median,delta_median,delta_min,delta_max,pos,zero,neg,deltas
+old-old,1,12,SiLUBackwardF64_256K_cpu,bytes,4295391656,4295385800,-6936,-20440,17368,1,0,6,[-6936, -17592, -20440, -48, 17368, -7552, -848]
+old-old,1,12,SigmoidF64_64K_cpu,bytes,537202576,537203344,-368,-1904,3488,3,0,4,[-1184, 1440, -368, 1200, -1424, 3488, -1904]
+old-old,1,12,SoftplusF64_256K_cpu,bytes,2147828016,2147828016,-2880,-8104,10624,2,0,5,[6848, -8104, -2880, -384, 10624, -5568, -4152]
+old-old,2,12,SiLUBackwardF64_256K_cpu,bytes,4295382208,4295382520,-2160,-11440,13560,3,0,4,[-3440, -6128, 13560, 32, -11440, 6136, -2160]
+old-old,2,12,SigmoidF64_64K_cpu,bytes,537204016,537203344,-320,-11032,2464,2,0,5,[-11032, -112, -7448, -2176, 2464, 400, -320]
+old-old,2,12,SoftplusF64_256K_cpu,bytes,2147826056,2147822752,-5848,-8568,10920,1,0,6,[-8416, -5848, -7728, -8568, -3024, 10920, -1232]
+old-old,3,12,SiLUBackwardF64_256K_cpu,bytes,4295383936,4295388744,5384,-5200,21704,5,0,2,[-5200, 9200, 21704, 3192, -4664, 5384, 8992]
+old-old,3,12,SigmoidF64_64K_cpu,bytes,537203072,537203760,480,-704,4160,5,0,2,[736, -704, 480, 384, 2688, 4160, -608]
+old-old,3,12,SoftplusF64_256K_cpu,bytes,2147826240,2147826912,1784,-12704,7080,5,0,2,[672, -2768, 1784, -12704, 7080, 3464, 6888]
+old-v2,1,12,SiLUBackwardF64_256K_cpu,bytes,4295386552,4295384120,-2656,-11392,21648,2,0,5,[-1824, -10752, -11392, -4512, -2656, 21648, 3784]
+old-v2,1,12,SigmoidF64_64K_cpu,bytes,537202400,537203584,1424,-3312,3024,5,0,2,[-224, 1424, 3024, 2736, 288, 1744, -3312]
+old-v2,1,12,SoftplusF64_256K_cpu,bytes,2147826336,2147827488,3264,-13432,9400,5,0,2,[6736, -13432, 9400, -3056, 3264, 2296, 7200]
+old-v2,1,12,SoftplusF64_256K_cpu,allocs,6222,6236,2,-29,61,4,0,3,[61, 2, 43, -29, 30, -21, -17]
+old-v2,2,12,SiLUBackwardF64_256K_cpu,bytes,4295387472,4295385736,-2224,-5584,9496,2,0,5,[-864, -2224, 672, -5272, -5584, -4968, 9496]
+old-v2,2,12,SigmoidF64_64K_cpu,bytes,537203504,537203568,64,-2672,4984,4,0,3,[-672, 4984, 1120, -2672, -1424, 784, 64]
+old-v2,2,12,SoftplusF64_256K_cpu,bytes,2147823608,2147829136,3424,-1552,11200,5,0,2,[-880, 6040, 1040, 3424, -1552, 5624, 11200]
+old-v2,2,12,SoftplusF64_256K_cpu,allocs,6213,6228,9,-13,30,5,0,2,[-9, 15, 7, 30, -13, 9, 17]
+old-v2,3,12,SiLUBackwardF64_256K_cpu,bytes,4295381568,4295389080,8000,-9256,15632,6,0,1,[-9256, 6480, 8000, 15632, 10832, 10608, 7232]
+old-v2,3,12,SigmoidF64_64K_cpu,bytes,537204640,537203968,672,-7240,7112,4,0,3,[7112, 672, 3504, -7240, -3232, -4488, 2352]
+old-v2,3,12,SoftplusF64_256K_cpu,bytes,2147821944,2147828344,10864,-6224,17040,5,0,2,[10864, 13856, -3112, 12064, -6224, 4680, 17040]
+old-v2,3,12,SoftplusF64_256K_cpu,allocs,6199,6220,27,0,70,6,1,0,[14, 39, 18, 27, 28, 0, 70]
+
+4. Independent complete raw-to-CSV cross-check
+
+$ ruby -rjson -rcsv -e '<independent grouping, summaries, arrays, and exact permutation ranks>' old-old.txt old-v2.txt
+analysis_csv_crosscheck=PASS
+raw_groups=36 csv_rows=36 csv_columns=33 pairs_per_arm=7
+checked=medians,ranges,sign_counts,all_paired_deltas,all_quotient_remainder_arrays,all_exact_tied_rank_p_values
+
+5. Independent rounded bytes/op medians, GOMAXPROCS=12
+
+$ ruby -rjson -e '<raw parser and per-arm median bytes_per_op calculation>' old-old.txt old-v2.txt
+old-old
+campaign=1 ASiLUBackwardF64_256K_cpu parallel rounded_Bop_medians=[4194718, 4194712] BminusA=-6
+campaign=1 ASigmoidF64_64K_cpu parallel rounded_Bop_medians=[524611, 524612] BminusA=1
+campaign=1 ASoftplusF64_256K_cpu parallel rounded_Bop_medians=[2097488, 2097488] BminusA=0
+campaign=2 ASiLUBackwardF64_256K_cpu parallel rounded_Bop_medians=[4194709, 4194709] BminusA=0
+campaign=2 ASigmoidF64_64K_cpu parallel rounded_Bop_medians=[524613, 524612] BminusA=-1
+campaign=2 ASoftplusF64_256K_cpu parallel rounded_Bop_medians=[2097486, 2097483] BminusA=-3
+campaign=3 ASiLUBackwardF64_256K_cpu parallel rounded_Bop_medians=[4194710, 4194715] BminusA=5
+campaign=3 ASigmoidF64_64K_cpu parallel rounded_Bop_medians=[524612, 524613] BminusA=1
+campaign=3 ASoftplusF64_256K_cpu parallel rounded_Bop_medians=[2097486, 2097487] BminusA=1
+old-v2
+campaign=1 ASiLUBackwardF64_256K_cpu parallel rounded_Bop_medians=[4194713, 4194711] BminusA=-2
+campaign=1 ASigmoidF64_64K_cpu parallel rounded_Bop_medians=[524611, 524612] BminusA=1
+campaign=1 ASoftplusF64_256K_cpu parallel rounded_Bop_medians=[2097486, 2097487] BminusA=1
+campaign=2 ASiLUBackwardF64_256K_cpu parallel rounded_Bop_medians=[4194714, 4194712] BminusA=-2
+campaign=2 ASigmoidF64_64K_cpu parallel rounded_Bop_medians=[524612, 524612] BminusA=0
+campaign=2 ASoftplusF64_256K_cpu parallel rounded_Bop_medians=[2097483, 2097489] BminusA=6
+campaign=3 ASiLUBackwardF64_256K_cpu parallel rounded_Bop_medians=[4194708, 4194715] BminusA=7
+campaign=3 ASigmoidF64_64K_cpu parallel rounded_Bop_medians=[524613, 524613] BminusA=0
+campaign=3 ASoftplusF64_256K_cpu parallel rounded_Bop_medians=[2097482, 2097488] BminusA=6
+
+6. Frozen hashes and detached matched sources
+
+$ shasum -a 256 <three original binaries> <two matched binaries> <matched sources and scripts>
+c95691bc1a7289094bc523250fde7a9cae614756635b78701e9c306962b246cb  /private/tmp/goai-m2-f64-gelu-neon-26BhJN/gelu-old.test
+045826effd7c6aab639a1b4c9e0e162e4eca03b6aaef56761291c248492301d7  /private/tmp/goai-m2-f64-gelu-neon-26BhJN/gelu-new.test
+b768ca10228a7487aad1cbef3a658c99cb21078b5059b815fa690b0d9bcc7614  /private/tmp/goai-m2-f64-gelu-neon-26BhJN/gelu-v2.test
+fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec  /private/tmp/goai-control-alloc-z9bZ4P/old.test
+a5317a3eecbce6c66e2f02768d39cdd6f1a2cc068072d8a62d090a93163fff63  /private/tmp/goai-control-alloc-z9bZ4P/v2.test
+403c8f44a8200f0b9de6c16c58799bc850ac42de99667965aec295586f482aa8  /private/tmp/goai-control-alloc-z9bZ4P/old/backend/cpu/control_alloc_diagnostic_test.go
+403c8f44a8200f0b9de6c16c58799bc850ac42de99667965aec295586f482aa8  /private/tmp/goai-control-alloc-z9bZ4P/v2/backend/cpu/control_alloc_diagnostic_test.go
+b53599699510a31f3a2d086f08f1b11b968b9ad1f25941e75c8a1f62fc49c9f3  /private/tmp/goai-control-alloc-z9bZ4P/old/backend/cpu/vgelu_f64_bench_test.go
+b53599699510a31f3a2d086f08f1b11b968b9ad1f25941e75c8a1f62fc49c9f3  /private/tmp/goai-control-alloc-z9bZ4P/v2/backend/cpu/vgelu_f64_bench_test.go
+359c67279c482fc428f17b71d68504d5f28691f4e317d28a11d36691957754c4  internal/benchcompare/leadership/evidence/m2-control-alloc-diagnostic-20260909/run.sh
+1f04b88fa03eef39c0efec0681ae0692fead21c9ff413fb2f1542f381dc7804e  internal/benchcompare/leadership/evidence/m2-control-alloc-diagnostic-20260909/analyze.rb
+8f0476de3bfe56f0a195b130bc528696127b81adabfc1cbaa0d147521e25236d  internal/benchcompare/leadership/evidence/m2-control-alloc-diagnostic-20260909/analyze_test.rb
+
+heads/status
+dd1e779eb085bb621ed5dafff0a4351636b6e656
+361955ac35eaada696045f2cf828817b650174ec
+?? backend/cpu/control_alloc_diagnostic_test.go
+?? backend/cpu/control_alloc_diagnostic_test.go
+
+byte comparisons
+diagnostic old/v2 identical: yes
+benchmark old/v2 identical: yes
+
+7. Matched binary build metadata
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH go version -m /private/tmp/goai-control-alloc-z9bZ4P/old.test
+/private/tmp/goai-control-alloc-z9bZ4P/old.test: go1.27.1-X:simd
+	path	github.com/jxsl13/goai/backend/cpu.test
+	mod	github.com/jxsl13/goai	(devel)	
+	build	-buildmode=exe
+	build	-compiler=gc
+	build	CGO_ENABLED=0
+	build	GOARCH=arm64
+	build	GOEXPERIMENT=simd
+	build	GOOS=darwin
+	build	GOARM64=v8.0
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH go version -m /private/tmp/goai-control-alloc-z9bZ4P/v2.test
+/private/tmp/goai-control-alloc-z9bZ4P/v2.test: go1.27.1-X:simd
+	path	github.com/jxsl13/goai/backend/cpu.test
+	mod	github.com/jxsl13/goai	(devel)	
+	build	-buildmode=exe
+	build	-compiler=gc
+	build	CGO_ENABLED=0
+	build	GOARCH=arm64
+	build	GOEXPERIMENT=simd
+	build	GOOS=darwin
+	build	GOARM64=v8.0
+
+8. Final retained artifact hashes observed by this verifier
+
+$ shasum -a 256 old-old.txt old-v2.txt analysis.csv analysis-audit.txt post-measurement-pins.txt
+7825c104ad77023117a147370059e4c0192fcf7410539023c6962dba1a1b358d  internal/benchcompare/leadership/evidence/m2-control-alloc-diagnostic-20260909/old-old.txt
+53e1d2b95c5057803e2c6fa8f061903da8563b45b756078f1f0ef1916f76d0df  internal/benchcompare/leadership/evidence/m2-control-alloc-diagnostic-20260909/old-v2.txt
+7882142d56db0ab291ca9bbc9a0f2a4ac616ba1d6494f8edb54d932ba8b01f0b  internal/benchcompare/leadership/evidence/m2-control-alloc-diagnostic-20260909/analysis.csv
+4d1f07c7c698cebe13025cf7a26db75caa27a8117aafaaf82360a66007fc640e  internal/benchcompare/leadership/evidence/m2-control-alloc-diagnostic-20260909/analysis-audit.txt
+e14da8df25f54741e69f73ab8e5778b54b103f273599b066b8a74480c84215d9  internal/benchcompare/leadership/evidence/m2-control-alloc-diagnostic-20260909/post-measurement-pins.txt

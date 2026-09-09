@@ -8,9 +8,10 @@ import "math"
 // (mhaSoftmaxBandF32 gates on vexpF32Fast; the GELU/SiLU/… activation kernels
 // gate on vexpNeon; driver + numerics in vexp.go). Both are true here.
 const (
-	vexpNeon    = true
-	vexpF32Fast = true
-	vexpF64Fast = false // arm64 F64 tanh/softplus/softcap/GELU keep the scalar exact path
+	vexpNeon     = true
+	vexpF32Fast  = true
+	vexpF64Fast  = false // unrelated ARM64 F64 exp-composite routes keep their existing gates
+	vgeluF64Fast = true  // dedicated ARM64 Float64x2 GELU intrinsic; unrelated F64 exp routes stay closed
 	// vsiluF64Fast is split out from vexpF64Fast so the ONE F64 lane that now has a
 	// NEON implementation on arm64 — SiLU, the SwiGLU FFN activation — can be enabled
 	// without disturbing the other F64 lanes, which stay scalar and exact.
@@ -472,22 +473,5 @@ func vsoftplusGradF64(dst, x, g []float64) {
 	vsigmoidF64(dst, x)
 	for i := range dst {
 		dst[i] *= g[i]
-	}
-}
-
-// vgeluF64 exists only so geluKernelCPU type-checks off the amd64 SIMD build; vexpF64Fast is false
-// here, so it is dead at run time (the scalar exact math.Erf path runs).
-func vgeluF64(dst, src []float64) {
-	const s = math.Sqrt2
-	for i, v := range src {
-		dst[i] = 0.5 * v * (1 + math.Erf(v/s))
-	}
-}
-
-// vgeluGradF64 exists only so geluBackwardF64KernelCPU type-checks off the amd64 SIMD build;
-// vexpF64Fast is false here, so it is dead at run time (the scalar geluGradF64 exact path runs).
-func vgeluGradF64(dst, x, g []float64) {
-	for i := range x {
-		dst[i] = geluGradF64(x[i], g[i])
 	}
 }

@@ -1,0 +1,230 @@
+{
+  "artifacts": [
+    {
+      "path": "current-default.json.gz",
+      "sha256": "539998e2cd6c555abfbea307426292e70c0bcba0363fee8616c92957fb516cc1",
+      "bytes": 116880,
+      "uncompressed_sha256": "161afb91c6114cf97b59ca9f09f71c1153c1d36de482369d21d1e884c5f6d057",
+      "uncompressed_bytes": 1680049
+    },
+    {
+      "path": "current-simd-cpu.json.gz",
+      "sha256": "3e7e8d4d95e8bbfa7e86eb6ea6ae7b449f633fc939be7b780ad7ad2ecb0aa78f",
+      "bytes": 5763,
+      "uncompressed_sha256": "f82cb5fe789501a9db03b9d98b09714659020264a6b800cf5209609077633880",
+      "uncompressed_bytes": 67406
+    },
+    {
+      "path": "pinned-default.json.gz",
+      "sha256": "ade03d896845a78834224d72fb492af04bdf85c2c4d87be945da19c28784bc61",
+      "bytes": 100787,
+      "uncompressed_sha256": "ced176ca6188e02d8d6829dcefe166fb1434bf3fa06c00172781c159c253dc9e",
+      "uncompressed_bytes": 1241959
+    },
+    {
+      "path": "autograd-bce.txt.gz",
+      "sha256": "254a64de118b9abeb39cd1fdb0bcd6489ba5fbbc2918363ba13f96bd98ae766c",
+      "bytes": 9098,
+      "uncompressed_sha256": "a4def1acae1a405cc39a62c36852c9478c5886af6c5347235b5afbfa8b55332c",
+      "uncompressed_bytes": 90665
+    },
+    {
+      "path": "relu-vjp-arm64.asm.gz",
+      "sha256": "cb81972f746e8b291e42e1e8447f61da1dd94903a5cbf0109b217ec9e926013c",
+      "bytes": 3666,
+      "uncompressed_sha256": "8a7f956b24df57a0c92ad4bb1ee73cca17d11eabac75328ad792dc67df88c459",
+      "uncompressed_bytes": 23144
+    }
+  ],
+  "counts": {
+    "current": 2035,
+    "pinned": 1890,
+    "current_cpu": 85,
+    "simd_cpu": 84,
+    "new_locations": 196,
+    "removed_locations": 51,
+    "new_checks": [
+      "PS6086",
+      "PS6093",
+      "PS6092",
+      "PS6088",
+      "PS6083",
+      "PS6080",
+      "PS6095"
+    ],
+    "new_by_check": {
+      "PS6086": 14,
+      "PS6093": 132,
+      "PS4008": 17,
+      "PS6092": 3,
+      "PS6088": 1,
+      "PS6083": 7,
+      "PS6080": 21,
+      "PS6095": 1
+    }
+  },
+  "sourceCommit": "e57d49aafa700e6428a1fcb6f2fad7b95a95e1ae",
+  "sourceScope": "Go/native source, go.mod and perfscan.yaml unchanged through scans; documentation and Spectackle records advanced.",
+  "workdir": "/private/tmp/goai-m2-f64-gelu-neon-26BhJN/repo",
+  "environment": {
+    "PATH_prefix": "/private/tmp/goai-go1271-j1cLvq/go/bin",
+    "GOCACHE": "/private/tmp/gocache-goai",
+    "GOMODCACHE": "/private/tmp/goai-go1271-j1cLvq/modcache",
+    "GOTOOLCHAIN": "local",
+    "CGO_ENABLED": "0",
+    "GOPROXY": "direct",
+    "GOOS": "darwin",
+    "GOARCH": "arm64"
+  },
+  "scanner": {
+    "path": "/Users/john/go/bin/perfscan",
+    "version": "v1.110.0",
+    "buildGoVersion": "go1.27.0",
+    "sha256": "684daa9f3ed062536ed3ad4d68396a6384dbca52e48f20b7cbeb0508653175dd",
+    "packageLoadingGoVersion": "go1.27.1",
+    "configSHA256": "3be04d019434528252096247874cf8fcec1b015daddbbb5ddae6275fd0c47703"
+  },
+  "commands": [
+    {
+      "argv": [
+        "/Users/john/go/bin/perfscan",
+        "check",
+        "--help"
+      ],
+      "environment": "ambient Go (not pinned)",
+      "exit": 2,
+      "status": "toolchain download permission failure; not a scan"
+    },
+    {
+      "argv": [
+        "/Users/john/go/bin/perfscan",
+        "-config",
+        "perfscan.yaml",
+        "-json",
+        "./..."
+      ],
+      "exit": null,
+      "status": "first result unavailable after tool transport serialization failure; not counted"
+    },
+    {
+      "argv": [
+        "/Users/john/go/bin/perfscan",
+        "-config",
+        "perfscan.yaml",
+        "-json",
+        "./..."
+      ],
+      "exit": 1,
+      "stdout": "current-default.json.gz",
+      "stderr": "empty",
+      "status": "2035 advisories"
+    },
+    {
+      "argv": [
+        "make",
+        "perfscan-check"
+      ],
+      "exit": 2,
+      "output": "integration-network-failure.txt",
+      "status": "restricted DNS failure, not a parity verdict"
+    },
+    {
+      "argv": [
+        "make",
+        "perfscan-check"
+      ],
+      "exit": 0,
+      "network": "direct access permitted",
+      "output": "integration-pass.txt"
+    },
+    {
+      "argv": [
+        "/Users/john/go/bin/perfscan",
+        "-config",
+        "perfscan.yaml",
+        "-json",
+        "./backend/cpu"
+      ],
+      "environmentOverrides": {
+        "GOEXPERIMENT": "simd"
+      },
+      "exit": 1,
+      "stdout": "current-simd-cpu.json.gz",
+      "stderr": "empty"
+    },
+    {
+      "argv": [
+        "go",
+        "run",
+        "github.com/jxsl13/perfscan@v1.81.0",
+        "-config",
+        "perfscan.yaml",
+        "-json",
+        "./..."
+      ],
+      "exit": 1,
+      "stderr": "pinned-scan-network-failure.txt",
+      "status": "restricted DNS failure; empty stdout"
+    },
+    {
+      "argv": [
+        "go",
+        "run",
+        "github.com/jxsl13/perfscan@v1.81.0",
+        "-config",
+        "perfscan.yaml",
+        "-json",
+        "./..."
+      ],
+      "exit": 1,
+      "network": "direct access permitted",
+      "stdout": "pinned-default.json.gz",
+      "stderr": "exit status 1\n",
+      "status": "1890 advisories"
+    },
+    {
+      "argv": [
+        "go",
+        "test",
+        "-c",
+        "./autograd",
+        "-gcflags=github.com/jxsl13/goai/autograd=-d=ssa/check_bce/debug=1",
+        "-o",
+        "/private/tmp/goai-perfscan-check-Z1ox7G/autograd.test"
+      ],
+      "exit": 0,
+      "output": "autograd-bce.txt.gz",
+      "binarySHA256": "9395ebeace609aad95957c1225fe0dfde41f9227a40756332cd127520f497204",
+      "status": "compile only; no tests or benchmark executed"
+    },
+    {
+      "argv": [
+        "go",
+        "tool",
+        "objdump",
+        "-s",
+        "github.com/jxsl13/goai/autograd.reluVJP$",
+        "/private/tmp/goai-perfscan-check-Z1ox7G/autograd.test"
+      ],
+      "exit": 0,
+      "stdout": "relu-vjp-arm64.asm.gz"
+    },
+    {
+      "argv": [
+        "spectackle",
+        "call",
+        "check",
+        "{\"path\":\"backend/cpu\",\"budget\":20000,\"fix\":false}"
+      ],
+      "exit": 0,
+      "output": "spectackle-check.txt",
+      "warnings": 136,
+      "errors": 2,
+      "status": "inherited context errors; no new drift or anchors"
+    }
+  ],
+  "artifactValidation": {
+    "status": "all five gzip files byte-identical to original raw outputs",
+    "initialFailure": "Ruby UTF-8 gzip text compared to ASCII-8BIT File.binread falsely reported mismatch twice; raw SHA256 matched; binary String#b comparison then passed. No artifact altered."
+  }
+}

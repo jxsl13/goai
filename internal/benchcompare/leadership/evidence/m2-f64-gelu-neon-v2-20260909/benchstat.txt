@@ -1,0 +1,392 @@
+campaign: 1
+                                                        │      old      │                new                 │
+                                                        │    sec/op     │   sec/op     vs base               │
+VGELUF64NeonBoundary/leaf/forward/active/n2048             9.950µ ±  9%   4.951µ ± 0%  -50.24% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/active/n2048         10.058µ ±  4%   6.025µ ± 1%  -40.10% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/active/n2048            28.12µ ±  0%   13.18µ ± 0%  -53.12% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/active/n2048         29.34µ ±  1%   14.32µ ± 3%  -51.19% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n2048              29.61µ ±  3%   15.42µ ± 2%  -47.91% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/mixed/n2048           30.31µ ±  1%   16.53µ ± 0%  -45.46% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/mixed/n2048             48.83µ ±  1%   22.53µ ± 1%  -53.87% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/mixed/n2048          49.83µ ±  2%   23.69µ ± 2%  -52.46% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/active/n262144          2590.5µ ±  1%   633.5µ ± 1%  -75.54% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/active/n262144       2632.4µ ±  0%   672.7µ ± 1%  -74.45% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/active/n262144          3.928m ±  1%   1.699m ± 0%  -56.76% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/active/n262144       3.987m ±  2%   1.736m ± 1%  -56.46% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n262144            5.448m ±  1%   1.983m ± 0%  -63.60% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/mixed/n262144         5.481m ±  0%   2.025m ± 1%  -63.06% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/mixed/n262144           7.400m ±  0%   2.897m ± 0%  -60.85% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/mixed/n262144        7.489m ±  1%   2.933m ± 1%  -60.84% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/active/n2048-12         10.167µ ± 12%   4.950µ ± 0%  -51.31% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/active/n2048-12       9.230µ ± 13%   6.163µ ± 1%  -33.23% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/active/n2048-12         28.15µ ±  1%   13.17µ ± 1%  -53.20% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/active/n2048-12      29.28µ ±  3%   14.39µ ± 1%  -50.85% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n2048-12           29.63µ ±  4%   15.43µ ± 0%  -47.91% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/mixed/n2048-12        30.09µ ±  2%   16.59µ ± 1%  -44.87% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/mixed/n2048-12          48.86µ ±  4%   22.54µ ± 1%  -53.87% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/mixed/n2048-12       49.53µ ±  2%   23.63µ ± 1%  -52.28% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/active/n262144-12       2595.7µ ±  0%   634.0µ ± 1%  -75.57% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/active/n262144-12     553.2µ ±  2%   224.9µ ± 6%  -59.35% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/active/n262144-12       3.940m ±  1%   1.703m ± 1%  -56.77% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/active/n262144-12    772.2µ ±  2%   375.1µ ± 2%  -51.42% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n262144-12         5.455m ±  1%   1.986m ± 1%  -63.59% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/mixed/n262144-12      959.8µ ± 13%   431.1µ ± 1%  -55.09% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/mixed/n262144-12        7.409m ±  1%   2.902m ± 0%  -60.84% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/mixed/n262144-12    1216.8µ ±  3%   547.2µ ± 4%  -55.03% (p=0.001 n=7)
+SiLUBackwardF64_256K_cpu                                   714.2µ ±  2%   713.1µ ± 1%        ~ (p=0.902 n=7)
+SigmoidF64_64K_cpu                                         130.1µ ±  1%   130.3µ ± 1%        ~ (p=0.535 n=7)
+SoftplusF64_256K_cpu                                       1.101m ±  0%   1.101m ± 1%        ~ (p=0.620 n=7)
+SiLUBackwardF64_256K_cpu-12                                274.4µ ±  9%   275.2µ ± 7%        ~ (p=1.000 n=7)
+SigmoidF64_64K_cpu-12                                      106.0µ ±  6%   101.6µ ± 3%        ~ (p=0.128 n=7)
+SoftplusF64_256K_cpu-12                                    289.0µ ±  8%   286.7µ ± 8%        ~ (p=0.128 n=7)
+geomean                                                    279.7µ         138.9µ       -50.35%
+
+                                                        │      old       │                 new                  │
+                                                        │      B/op      │     B/op      vs base                │
+VGELUF64NeonBoundary/leaf/forward/active/n2048              0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n2048         16.29Ki ± 0%     16.29Ki ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/active/n2048             0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n2048        16.32Ki ± 0%     16.30Ki ± 0%  -0.10% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n2048               0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n2048          16.29Ki ± 0%     16.29Ki ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/mixed/n2048              0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n2048         16.32Ki ± 0%     16.30Ki ± 0%  -0.10% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/active/n262144            0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n262144       2.000Mi ± 0%     2.000Mi ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/active/n262144           0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n262144      2.000Mi ± 0%     2.000Mi ± 0%  -0.00% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n262144             0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n262144        2.000Mi ± 0%     2.000Mi ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/mixed/n262144            0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n262144       2.000Mi ± 0%     2.000Mi ± 0%  -0.00% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/active/n2048-12           0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n2048-12      16.29Ki ± 0%     16.29Ki ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/active/n2048-12          0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n2048-12     16.32Ki ± 0%     16.30Ki ± 0%  -0.10% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n2048-12            0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n2048-12       16.29Ki ± 0%     16.29Ki ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/mixed/n2048-12           0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n2048-12      16.32Ki ± 0%     16.30Ki ± 0%  -0.10% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/active/n262144-12         0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n262144-12    2.000Mi ± 0%     2.000Mi ± 0%  -0.00% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/active/n262144-12        0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n262144-12   2.000Mi ± 0%     2.000Mi ± 0%  -0.00% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n262144-12          0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n262144-12     2.000Mi ± 0%     2.000Mi ± 0%       ~ (p=0.117 n=7)
+VGELUF64NeonBoundary/leaf/backward/mixed/n262144-12         0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n262144-12    2.000Mi ± 0%     2.000Mi ± 0%  -0.00% (p=0.001 n=7)
+SiLUBackwardF64_256K_cpu                                  4.000Mi ± 0%     4.000Mi ± 0%       ~ (p=1.000 n=7) ¹
+SigmoidF64_64K_cpu                                        512.3Ki ± 0%     512.3Ki ± 0%       ~ (p=1.000 n=7) ¹
+SoftplusF64_256K_cpu                                      2.000Mi ± 0%     2.000Mi ± 0%       ~ (p=1.000 n=7) ¹
+SiLUBackwardF64_256K_cpu-12                               4.000Mi ± 0%     4.000Mi ± 0%       ~ (p=0.555 n=7)
+SigmoidF64_64K_cpu-12                                     512.3Ki ± 0%     512.3Ki ± 0%       ~ (p=0.563 n=7)
+SoftplusF64_256K_cpu-12                                   2.000Mi ± 0%     2.000Mi ± 0%       ~ (p=0.082 n=7)
+geomean                                                                ²                 -0.01%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                                        │     old      │                new                 │
+                                                        │  allocs/op   │ allocs/op   vs base                │
+VGELUF64NeonBoundary/leaf/forward/active/n2048            0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n2048         5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/active/n2048           0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n2048        5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/forward/mixed/n2048             0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n2048          5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/mixed/n2048            0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n2048         5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/forward/active/n262144          0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n262144       5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/active/n262144         0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n262144      5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/forward/mixed/n262144           0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n262144        5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/mixed/n262144          0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n262144       5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/forward/active/n2048-12         0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n2048-12      5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/active/n2048-12        0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n2048-12     5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n2048-12       5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n2048-12      5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/forward/active/n262144-12       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n262144-12    6.000 ± 0%     6.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/active/n262144-12      0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n262144-12   6.000 ± 0%     6.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n262144-12     6.000 ± 0%     6.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n262144-12    6.000 ± 0%     6.000 ± 0%       ~ (p=1.000 n=7) ¹
+SiLUBackwardF64_256K_cpu                                  6.000 ± 0%     6.000 ± 0%       ~ (p=1.000 n=7) ¹
+SigmoidF64_64K_cpu                                        5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+SoftplusF64_256K_cpu                                      5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+SiLUBackwardF64_256K_cpu-12                               7.000 ± 0%     7.000 ± 0%       ~ (p=1.000 n=7) ¹
+SigmoidF64_64K_cpu-12                                     6.000 ± 0%     6.000 ± 0%       ~ (p=1.000 n=7) ¹
+SoftplusF64_256K_cpu-12                                   6.000 ± 0%     6.000 ± 0%       ~ (p=1.000 n=7) ¹
+geomean                                                              ²               +0.00%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+campaign: 2
+                                                        │      old      │                 new                 │
+                                                        │    sec/op     │    sec/op     vs base               │
+VGELUF64NeonBoundary/leaf/forward/active/n2048            10.527µ ± 18%   4.952µ ±  0%  -52.96% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/active/n2048          9.922µ ±  3%   6.013µ ±  0%  -39.40% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/active/n2048            28.09µ ±  0%   13.18µ ±  0%  -53.08% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/active/n2048         29.38µ ±  1%   14.29µ ±  1%  -51.36% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n2048              29.15µ ±  4%   15.43µ ±  1%  -47.09% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/mixed/n2048           30.24µ ±  1%   16.54µ ±  0%  -45.31% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/mixed/n2048             48.65µ ±  1%   22.54µ ±  0%  -53.66% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/mixed/n2048          49.62µ ±  1%   23.67µ ±  0%  -52.29% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/active/n262144          2587.3µ ±  0%   633.0µ ±  0%  -75.53% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/active/n262144       2639.8µ ±  0%   672.7µ ±  0%  -74.52% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/active/n262144          3.926m ±  1%   1.696m ±  0%  -56.81% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/active/n262144       3.990m ±  1%   1.737m ±  0%  -56.46% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n262144            5.448m ±  0%   1.982m ±  0%  -63.62% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/mixed/n262144         5.481m ±  0%   2.025m ±  0%  -63.06% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/mixed/n262144           7.412m ±  0%   2.897m ±  0%  -60.92% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/mixed/n262144        7.478m ±  0%   2.935m ±  1%  -60.75% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/active/n2048-12         10.294µ ± 17%   4.953µ ±  0%  -51.88% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/active/n2048-12       9.223µ ±  1%   6.162µ ±  1%  -33.19% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/active/n2048-12         28.14µ ±  1%   13.18µ ±  0%  -53.16% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/active/n2048-12      29.34µ ±  1%   14.45µ ±  1%  -50.76% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n2048-12           29.37µ ±  4%   15.43µ ±  0%  -47.47% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/mixed/n2048-12        30.26µ ±  1%   16.64µ ±  1%  -45.02% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/mixed/n2048-12          48.57µ ±  3%   22.55µ ±  2%  -53.57% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/mixed/n2048-12       49.57µ ±  1%   23.76µ ±  2%  -52.07% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/active/n262144-12       2594.0µ ±  0%   632.7µ ±  1%  -75.61% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/active/n262144-12     554.0µ ±  4%   225.5µ ±  1%  -59.30% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/active/n262144-12       3.947m ±  1%   1.707m ±  0%  -56.77% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/active/n262144-12    778.1µ ±  4%   373.8µ ±  1%  -51.96% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n262144-12         5.459m ±  1%   1.984m ±  0%  -63.65% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/mixed/n262144-12      959.2µ ± 28%   426.5µ ±  2%  -55.54% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/mixed/n262144-12        7.422m ±  1%   2.903m ±  0%  -60.88% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/mixed/n262144-12    1214.4µ ±  1%   546.9µ ±  1%  -54.96% (p=0.001 n=7)
+SiLUBackwardF64_256K_cpu                                   714.4µ ±  1%   713.0µ ±  1%        ~ (p=0.620 n=7)
+SigmoidF64_64K_cpu                                         130.4µ ±  1%   130.4µ ±  1%        ~ (p=0.710 n=7)
+SoftplusF64_256K_cpu                                       1.103m ±  1%   1.101m ±  1%        ~ (p=0.535 n=7)
+SiLUBackwardF64_256K_cpu-12                                279.5µ ±  4%   277.1µ ±  3%        ~ (p=0.805 n=7)
+SigmoidF64_64K_cpu-12                                      104.7µ ±  6%   102.4µ ± 10%        ~ (p=0.535 n=7)
+SoftplusF64_256K_cpu-12                                    289.3µ ± 13%   288.8µ ±  3%        ~ (p=0.383 n=7)
+geomean                                                    280.0µ         138.9µ        -50.38%
+
+                                                        │      old       │                 new                  │
+                                                        │      B/op      │     B/op      vs base                │
+VGELUF64NeonBoundary/leaf/forward/active/n2048              0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n2048         16.29Ki ± 0%     16.29Ki ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/active/n2048             0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n2048        16.32Ki ± 0%     16.30Ki ± 0%  -0.10% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n2048               0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n2048          16.29Ki ± 0%     16.29Ki ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/mixed/n2048              0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n2048         16.32Ki ± 0%     16.30Ki ± 0%  -0.10% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/active/n262144            0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n262144       2.000Mi ± 0%     2.000Mi ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/active/n262144           0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n262144      2.000Mi ± 0%     2.000Mi ± 0%  -0.00% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n262144             0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n262144        2.000Mi ± 0%     2.000Mi ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/mixed/n262144            0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n262144       2.000Mi ± 0%     2.000Mi ± 0%  -0.00% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/active/n2048-12           0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n2048-12      16.29Ki ± 0%     16.29Ki ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/active/n2048-12          0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n2048-12     16.32Ki ± 0%     16.30Ki ± 0%  -0.10% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n2048-12            0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n2048-12       16.29Ki ± 0%     16.29Ki ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/mixed/n2048-12           0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n2048-12      16.32Ki ± 0%     16.30Ki ± 0%  -0.10% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/active/n262144-12         0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n262144-12    2.000Mi ± 0%     2.000Mi ± 0%  -0.00% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/active/n262144-12        0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n262144-12   2.000Mi ± 0%     2.000Mi ± 0%  -0.00% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n262144-12          0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n262144-12     2.000Mi ± 0%     2.000Mi ± 0%       ~ (p=0.297 n=7)
+VGELUF64NeonBoundary/leaf/backward/mixed/n262144-12         0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n262144-12    2.000Mi ± 0%     2.000Mi ± 0%  -0.00% (p=0.001 n=7)
+SiLUBackwardF64_256K_cpu                                  4.000Mi ± 0%     4.000Mi ± 0%       ~ (p=1.000 n=7) ¹
+SigmoidF64_64K_cpu                                        512.3Ki ± 0%     512.3Ki ± 0%       ~ (p=1.000 n=7) ¹
+SoftplusF64_256K_cpu                                      2.000Mi ± 0%     2.000Mi ± 0%       ~ (p=1.000 n=7) ¹
+SiLUBackwardF64_256K_cpu-12                               4.000Mi ± 0%     4.000Mi ± 0%       ~ (p=0.920 n=7)
+SigmoidF64_64K_cpu-12                                     512.3Ki ± 0%     512.3Ki ± 0%       ~ (p=0.476 n=7)
+SoftplusF64_256K_cpu-12                                   2.000Mi ± 0%     2.000Mi ± 0%       ~ (p=0.154 n=7)
+geomean                                                                ²                 -0.01%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                                        │     old      │                new                 │
+                                                        │  allocs/op   │ allocs/op   vs base                │
+VGELUF64NeonBoundary/leaf/forward/active/n2048            0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n2048         5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/active/n2048           0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n2048        5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/forward/mixed/n2048             0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n2048          5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/mixed/n2048            0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n2048         5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/forward/active/n262144          0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n262144       5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/active/n262144         0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n262144      5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/forward/mixed/n262144           0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n262144        5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/mixed/n262144          0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n262144       5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/forward/active/n2048-12         0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n2048-12      5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/active/n2048-12        0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n2048-12     5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n2048-12       5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n2048-12      5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/forward/active/n262144-12       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n262144-12    6.000 ± 0%     6.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/active/n262144-12      0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n262144-12   6.000 ± 0%     6.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n262144-12     6.000 ± 0%     6.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n262144-12    6.000 ± 0%     6.000 ± 0%       ~ (p=1.000 n=7) ¹
+SiLUBackwardF64_256K_cpu                                  6.000 ± 0%     6.000 ± 0%       ~ (p=1.000 n=7) ¹
+SigmoidF64_64K_cpu                                        5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+SoftplusF64_256K_cpu                                      5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+SiLUBackwardF64_256K_cpu-12                               7.000 ± 0%     7.000 ± 0%       ~ (p=1.000 n=7) ¹
+SigmoidF64_64K_cpu-12                                     6.000 ± 0%     6.000 ± 0%       ~ (p=1.000 n=7) ¹
+SoftplusF64_256K_cpu-12                                   6.000 ± 0%     6.000 ± 0%       ~ (p=1.000 n=7) ¹
+geomean                                                              ²               +0.00%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+campaign: 3
+                                                        │      old      │                 new                 │
+                                                        │    sec/op     │    sec/op     vs base               │
+VGELUF64NeonBoundary/leaf/forward/active/n2048            10.123µ ± 16%   4.950µ ±  0%  -51.10% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/active/n2048          9.997µ ±  4%   5.978µ ±  1%  -40.20% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/active/n2048            28.12µ ±  6%   13.18µ ±  0%  -53.15% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/active/n2048         29.38µ ±  0%   14.31µ ±  1%  -51.28% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n2048              29.29µ ±  2%   15.40µ ±  0%  -47.41% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/mixed/n2048           30.28µ ±  1%   16.54µ ±  1%  -45.37% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/mixed/n2048             48.77µ ±  1%   22.52µ ±  0%  -53.83% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/mixed/n2048          49.61µ ±  0%   23.69µ ±  0%  -52.24% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/active/n262144          2589.8µ ±  1%   633.5µ ±  0%  -75.54% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/active/n262144       2629.0µ ±  1%   671.2µ ±  0%  -74.47% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/active/n262144          3.928m ±  0%   1.697m ±  0%  -56.80% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/active/n262144       3.990m ±  0%   1.736m ±  0%  -56.50% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n262144            5.440m ±  0%   1.985m ±  1%  -63.51% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/mixed/n262144         5.468m ±  0%   2.024m ±  1%  -62.99% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/mixed/n262144           7.399m ±  0%   2.896m ±  1%  -60.86% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/mixed/n262144        7.471m ±  0%   2.928m ±  2%  -60.81% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/active/n2048-12         10.153µ ± 11%   4.954µ ±  0%  -51.21% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/active/n2048-12       9.318µ ±  3%   6.151µ ±  2%  -33.99% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/active/n2048-12         28.21µ ±  1%   13.16µ ±  0%  -53.33% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/active/n2048-12      29.16µ ±  1%   14.44µ ±  2%  -50.50% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n2048-12           29.31µ ±  3%   15.41µ ±  0%  -47.41% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/mixed/n2048-12        29.70µ ±  3%   16.54µ ±  1%  -44.32% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/mixed/n2048-12          48.42µ ±  2%   22.51µ ±  0%  -53.51% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/mixed/n2048-12       48.91µ ±  3%   23.52µ ±  1%  -51.91% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/active/n262144-12       2591.9µ ±  0%   632.1µ ±  0%  -75.61% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/active/n262144-12     544.3µ ±  3%   226.0µ ±  4%  -58.48% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/active/n262144-12       3.937m ±  1%   1.706m ±  0%  -56.67% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/active/n262144-12    778.2µ ±  7%   371.2µ ±  1%  -52.30% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n262144-12         5.456m ±  0%   1.984m ±  0%  -63.64% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/forward/mixed/n262144-12      961.9µ ±  3%   429.6µ ±  2%  -55.34% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/mixed/n262144-12        7.411m ±  0%   2.900m ±  0%  -60.87% (p=0.001 n=7)
+VGELUF64NeonBoundary/execute/backward/mixed/n262144-12    1214.0µ ±  3%   547.5µ ±  1%  -54.90% (p=0.001 n=7)
+SiLUBackwardF64_256K_cpu                                   714.3µ ±  1%   715.6µ ±  1%        ~ (p=0.383 n=7)
+SigmoidF64_64K_cpu                                         130.0µ ±  1%   130.2µ ±  1%        ~ (p=0.710 n=7)
+SoftplusF64_256K_cpu                                       1.100m ±  1%   1.098m ±  0%        ~ (p=0.318 n=7)
+SiLUBackwardF64_256K_cpu-12                                275.2µ ±  2%   274.1µ ±  5%        ~ (p=0.805 n=7)
+SigmoidF64_64K_cpu-12                                      101.0µ ±  9%   100.8µ ±  5%        ~ (p=0.805 n=7)
+SoftplusF64_256K_cpu-12                                    286.3µ ±  2%   288.7µ ± 20%        ~ (p=0.165 n=7)
+geomean                                                    278.8µ         138.7µ        -50.25%
+
+                                                        │      old       │                 new                  │
+                                                        │      B/op      │     B/op      vs base                │
+VGELUF64NeonBoundary/leaf/forward/active/n2048              0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n2048         16.29Ki ± 0%     16.29Ki ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/active/n2048             0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n2048        16.32Ki ± 0%     16.30Ki ± 0%  -0.10% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n2048               0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n2048          16.29Ki ± 0%     16.29Ki ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/mixed/n2048              0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n2048         16.32Ki ± 0%     16.30Ki ± 0%  -0.10% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/active/n262144            0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n262144       2.000Mi ± 0%     2.000Mi ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/active/n262144           0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n262144      2.000Mi ± 0%     2.000Mi ± 0%  -0.00% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n262144             0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n262144        2.000Mi ± 0%     2.000Mi ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/mixed/n262144            0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n262144       2.000Mi ± 0%     2.000Mi ± 0%  -0.00% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/active/n2048-12           0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n2048-12      16.29Ki ± 0%     16.29Ki ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/active/n2048-12          0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n2048-12     16.32Ki ± 0%     16.30Ki ± 0%  -0.10% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n2048-12            0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n2048-12       16.29Ki ± 0%     16.29Ki ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/mixed/n2048-12           0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n2048-12      16.32Ki ± 0%     16.30Ki ± 0%  -0.10% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/active/n262144-12         0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n262144-12    2.000Mi ± 0%     2.000Mi ± 0%  -0.00% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/active/n262144-12        0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n262144-12   2.000Mi ± 0%     2.000Mi ± 0%  -0.00% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/forward/mixed/n262144-12          0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n262144-12     2.000Mi ± 0%     2.000Mi ± 0%  -0.00% (p=0.001 n=7)
+VGELUF64NeonBoundary/leaf/backward/mixed/n262144-12         0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n262144-12    2.000Mi ± 0%     2.000Mi ± 0%  -0.00% (p=0.001 n=7)
+SiLUBackwardF64_256K_cpu                                  4.000Mi ± 0%     4.000Mi ± 0%       ~ (p=1.000 n=7) ¹
+SigmoidF64_64K_cpu                                        512.3Ki ± 0%     512.3Ki ± 0%       ~ (p=1.000 n=7) ¹
+SoftplusF64_256K_cpu                                      2.000Mi ± 0%     2.000Mi ± 0%       ~ (p=1.000 n=7) ¹
+SiLUBackwardF64_256K_cpu-12                               4.000Mi ± 0%     4.000Mi ± 0%       ~ (p=0.381 n=7)
+SigmoidF64_64K_cpu-12                                     512.3Ki ± 0%     512.3Ki ± 0%       ~ (p=0.679 n=7)
+SoftplusF64_256K_cpu-12                                   2.000Mi ± 0%     2.000Mi ± 0%       ~ (p=0.119 n=7)
+geomean                                                                ²                 -0.01%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                                        │     old      │                new                 │
+                                                        │  allocs/op   │ allocs/op   vs base                │
+VGELUF64NeonBoundary/leaf/forward/active/n2048            0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n2048         5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/active/n2048           0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n2048        5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/forward/mixed/n2048             0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n2048          5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/mixed/n2048            0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n2048         5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/forward/active/n262144          0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n262144       5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/active/n262144         0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n262144      5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/forward/mixed/n262144           0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n262144        5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/mixed/n262144          0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n262144       5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/forward/active/n2048-12         0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n2048-12      5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/active/n2048-12        0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n2048-12     5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/forward/mixed/n2048-12          0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n2048-12       5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/mixed/n2048-12         0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n2048-12      5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/forward/active/n262144-12       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/active/n262144-12    6.000 ± 0%     6.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/active/n262144-12      0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/active/n262144-12   6.000 ± 0%     6.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/forward/mixed/n262144-12        0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/forward/mixed/n262144-12     6.000 ± 0%     6.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/leaf/backward/mixed/n262144-12       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=7) ¹
+VGELUF64NeonBoundary/execute/backward/mixed/n262144-12    6.000 ± 0%     6.000 ± 0%       ~ (p=1.000 n=7) ¹
+SiLUBackwardF64_256K_cpu                                  6.000 ± 0%     6.000 ± 0%       ~ (p=1.000 n=7) ¹
+SigmoidF64_64K_cpu                                        5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+SoftplusF64_256K_cpu                                      5.000 ± 0%     5.000 ± 0%       ~ (p=1.000 n=7) ¹
+SiLUBackwardF64_256K_cpu-12                               7.000 ± 0%     7.000 ± 0%       ~ (p=1.000 n=7) ¹
+SigmoidF64_64K_cpu-12                                     6.000 ± 0%     6.000 ± 0%       ~ (p=1.000 n=7) ¹
+SoftplusF64_256K_cpu-12                                   6.000 ± 0%     6.000 ± 0%       ~ (p=1.000 n=7) ¹
+geomean                                                              ²               +0.00%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean

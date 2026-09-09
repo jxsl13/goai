@@ -1,0 +1,80 @@
+Initial pair-permutation and body-tail tests on unchanged V1 runtime.
+Go 1.27.1; GOCACHE=/private/tmp/gocache-goai; GOTOOLCHAIN=local;
+CGO_ENABLED=0; GOEXPERIMENT=simd.
+Command: go test ./backend/cpu -run 'TestErfF64x2GELUUniformSmallPairs|TestVGELUF64NeonSmallBoundaryBodyTail' -count=1 -v
+Exit status: 0.
+The initial fixture below predates additional reversed both-small, signed-zero,
+and signed-subnormal pairs requested during review. Those added pairs appear
+in both valid mutation logs and the restored candidate PASS; this initial log
+is not presented as testing the later fixture bytes.
+
+=== RUN   TestErfF64x2GELUUniformSmallPairs
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3fd0000000000000_bfe8000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/8000000000000000_0000000000000001
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3fe0000000000000_4000000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/4000000000000000_3fe0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3fe0000000000000_401c000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/401c000000000000_3fe0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfe0000000000000_4000000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/4000000000000000_bfe0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/c018000000000001_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c018000000000001
+=== RUN   TestErfF64x2GELUUniformSmallPairs/c018000000000000_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c018000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/c017ffffffffffff_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c017ffffffffffff
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bff0000000000001_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bff0000000000001
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bff0000000000000_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bff0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfefffffffffffff_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bfefffffffffffff
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3fefffffffffffff_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3fefffffffffffff
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3ff0000000000000_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3ff0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/3ff0000000000001_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3ff0000000000001
+=== RUN   TestErfF64x2GELUUniformSmallPairs/4017ffffffffffff_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4017ffffffffffff
+=== RUN   TestErfF64x2GELUUniformSmallPairs/4018000000000000_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4018000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/4018000000000001_bfd0000000000000
+=== RUN   TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4018000000000001
+--- PASS: TestErfF64x2GELUUniformSmallPairs (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/3fd0000000000000_bfe8000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/8000000000000000_0000000000000001 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/3fe0000000000000_4000000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/4000000000000000_3fe0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/3fe0000000000000_401c000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/401c000000000000_3fe0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfe0000000000000_4000000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/4000000000000000_bfe0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/c018000000000001_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c018000000000001 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/c018000000000000_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c018000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/c017ffffffffffff_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_c017ffffffffffff (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bff0000000000001_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bff0000000000001 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bff0000000000000_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bff0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfefffffffffffff_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_bfefffffffffffff (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/3fefffffffffffff_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3fefffffffffffff (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/3ff0000000000000_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3ff0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/3ff0000000000001_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_3ff0000000000001 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/4017ffffffffffff_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4017ffffffffffff (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/4018000000000000_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4018000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/4018000000000001_bfd0000000000000 (0.00s)
+    --- PASS: TestErfF64x2GELUUniformSmallPairs/bfd0000000000000_4018000000000001 (0.00s)
+=== RUN   TestVGELUF64NeonSmallBoundaryBodyTail
+--- PASS: TestVGELUF64NeonSmallBoundaryBodyTail (0.00s)
+PASS
+ok  	github.com/jxsl13/goai/backend/cpu	0.616s

@@ -1,0 +1,180 @@
+R-01M23VWNB5FRP — prospective allocation-site attribution research
+Date: 2026-09-09
+
+Conclusion and boundary
+=======================
+
+The completed fixed-N diagnostic is sufficient to motivate, but not to supply,
+site attribution. Its 504 valid N=1024 records show exact old/old variability and
+repeated old/V2 parallel Softplus median paired deltas of +3,264/+3,424/+10,864
+bytes and +2/+9/+27 allocations. Those are observations, not a candidate-caused
+effect. A minimal follow-up should profile Softplus only, separately at
+GOMAXPROCS=1 and 12, with contemporaneous old/old and old/V2 pairs. It must use
+matched test-only instrumentation and retain both immediate process-wide
+MemStats deltas and per-site allocation-profile deltas. No result changes either
+V2 rejection or ARM64-F64-GELU-CONTROLS-001.
+
+Observed source paths and potential allocation sites
+====================================================
+
+The old and V2 benchmark callbacks and shared paths are byte-identical. A bounded
+`git diff --exit-code dd1e779e... 361955ac... --` over bench_test.go,
+activation_bwd_f64_test.go, execute.go, cpu.go, tensor.go, storage.go, and
+allocator.go returned no diff. The actual runtime delta changes only GELU gates
+in backend/cpu/activation_bwd_f64.go:43-54 and elementwise.go:276-289, adds the
+ARM64 GELU implementation and package variables at
+backend/cpu/vgelu_f64_arm64.go:1-80, and adjusts architecture gate declarations.
+The new variables initialize before benchmark timing; no V2 source calls a
+control callback. They can change whole-process initialization/layout, but any
+downstream allocation effect is a hypothesis, not an observed control path.
+
+The exact control chain is:
+
+* backend/cpu/bench_test.go:18-28 constructs backend/context outside ResetTimer,
+  then calls backend.Execute once per iteration. Sigmoid and 256K Softplus are at
+  lines 48-58. backend/cpu/activation_bwd_f64_test.go:54-76 does the analogous
+  setup for 256K SiLU backward.
+* backend/execute.go:180-325 resolves a cached kernel and calls it at line 309.
+  The first cache miss can allocate a Context and resolvedDispatch at lines
+  111-170, but the fixed-count diagnostic's one-iteration calibration normally
+  warms this before its reported run. This is observed source behavior; whether
+  any object escapes in a particular build was not tested here.
+* Inputs are already contiguous, so Tensor.Contiguous returns the input at
+  tensor/tensor.go:498-505. Sigmoid allocates its output at
+  backend/cpu/elementwise.go:515-517; Softplus does so at lines 624-632. SiLU
+  backward allocates an output and a same-sized sigmoid scratch at
+  backend/cpu/activation_bwd_f64.go:63-76. Each returns a one-element tensor
+  slice. These are direct candidate sites: tensor.NewOn creates a tensorBlock and
+  Storage at tensor/tensor.go:65-96; newStorageWith selects the typed F64 path at
+  tensor/storage.go:32-56; heapAllocator.allocF64 makes the data slice at
+  tensor/allocator.go:59-64. Return-slice literals are also potential sites.
+* All three kernels call parallel. backend/cpu/cpu.go:265-375 creates a per-call
+  poolBarrier, passes its pointer and the captured body in poolTask values, and
+  either sends, steals/drains, runs inline, or waits. Persistent workers execute
+  tasks at lines 214-258. Channels and goroutines are created once at lines
+  190-205. The closure, escaping barrier, wait/scheduler bookkeeping, worker
+  stack growth, and runtime profiling bookkeeping are potential sources; source
+  alone does not prove which allocate or how often. At GOMAXPROCS=1 the body is
+  invoked inline at lines 266-270.
+
+Thus output/storage allocation is expected on every iteration; SiLU also has
+scratch. Allocation variability beyond those stable sites could arise from the
+parallel ownership/scheduler path or other goroutines in the Go process. External
+OS activity can affect scheduling and GC timing, but it does not itself allocate
+objects in the Go heap.
+
+Pinned Go 1.27.1 semantics and limits
+=====================================
+
+testing/benchmark.go:138-183 snapshots process-wide MemStats.Mallocs and
+TotalAlloc at StartTimer/StopTimer/ResetTimer. runN forces GC, then brackets the
+callback at lines 196-227. testing.Benchmark first runs N=1 at lines 229-268 and
+then the fixed count at lines 327-362; BenchmarkResult stores aggregate totals,
+and per-op values are integer division by N at lines 535-590. Consequently the
+completed diagnostic's totals cover the final timed callback only, whereas a
+whole-process allocation profile around testing.Benchmark would also include its
+calibration and harness.
+
+runtime/mstats.go:54-91 defines TotalAlloc and Mallocs as cumulative Go-heap
+counters; ReadMemStats is current and stop-the-world at lines 350-365. These
+counters have no goroutine/site filter.
+
+runtime/pprof/pprof.go:123-142 says heap/allocs profiles contain allocation sites
+since process start but publish a GC-stable snapshot; allocs merely defaults the
+display to cumulative alloc_space. The protobuf contains alloc_objects,
+alloc_space, inuse_objects, and inuse_space
+(runtime/pprof/protomem.go:15-60). At the default rate, samples are Poisson-scaled
+by allocation size (lines 63-85), so they are estimates. runtime.MemProfileRate=1
+requests every allocated block and must be set once, as early as possible
+(runtime/mprof.go:856-870); malloc.go:1333-1336 and 2218-2248 show the sampling
+and stack-recording path, which is material perturbation.
+
+Profiles are cumulative snapshots, not timed-region deltas. runtime.MemProfile
+can lag by up to two GC cycles (runtime/mprof.go:905-925), because allocation and
+free events are staged in future cycles (lines 114-143, 432-472). In this pinned
+runtime, an explicit runtime.GC waits through sweep and publishes the completed
+snapshot before returning (runtime/mgc.go:519-591); the experiment must use that
+boundary rather than an arbitrary sleep. Raw runtime.MemProfile records expose
+only 32 PCs; standard pprof uses the configured profiler stack depth (default
+128, runtime/extern.go:167-170). Fully freed sites require inuseZero=true.
+
+Rate 1 removes statistical sampling for allocations made after it takes effect,
+but does not make the profile identical to BenchmarkResult totals: profiling
+changes scheduling/GC, records allocation-slot size, may truncate/aggregate
+stacks, can omit rare runtime initialization cases, and the profile publication
+window includes the forced GC. Profile writing itself allocates. Therefore no
+profile sum may be asserted equal to the immediate MemStats delta, and profiled
+results cannot be substituted for the unprofiled completed evidence.
+
+Bounded prospective matched experiment
+======================================
+
+Instrumentation. Add one byte-identical, opt-in `_test.go` file to both detached
+pins; hash that file, both sources, Go SDK, build environment, commands, and both
+new binaries. Do not modify production files or frozen binaries. Select exactly
+one control per process via a validated environment value. A `//go:noinline`
+region helper performs exactly 1,024 calls to backend.Execute with the same
+context, op, shapes, seeds, and discarded outputs as the existing callback.
+Setup and one dispatch/pool warmup occur in a different helper before accounting.
+This duplicates only the loop boundary; it is site-attribution instrumentation,
+not a benchmark or latency result.
+
+Set `GODEBUG=memprofilerate=1` in the process environment, rather than changing
+MemProfileRate after initialization, and verify the value remains 1. Preallocate
+fixed-capacity pre/post `[]runtime.MemProfileRecord` buffers before warmup; use
+`inuseZero=true` and fail rather than resize if capacity is insufficient.
+
+Per invocation, the fixed order is: setup; one warmup; runtime.GC; raw pre
+MemProfile snapshot; ReadMemStats S; 1,024 region calls; ReadMemStats E
+immediately; runtime.GC; raw post snapshot; then symbolization/JSON and one
+standard post-run `allocs.pprof`. Also retain MemStats immediately before the
+post snapshot and after serialization so GC/profile-output tail allocations are
+visible separately. The primary exact totals are E.TotalAlloc-S.TotalAlloc and
+E.Mallocs-S.Mallocs. Compute raw profile deltas within the process by key
+`object-size + raw PC stack`, retain alloc/free objects and bytes for every key,
+then normalize to function/file/line for cross-binary comparison. Report all
+sites, plus subtotals whose stack contains the noinline region helper and all
+other Go/runtime stacks. The final pprof is corroborative and cumulative, not a
+region delta.
+
+Prospective command templates (not run here), after review, are:
+
+    PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd go test -c ./backend/cpu -o <pin-specific-binary>
+    GODEBUG=memprofilerate=1 GOMAXPROCS=<1-or-12> GOAI_ALLOC_SITE_DIAGNOSTIC=softplus GOAI_ALLOC_SITE_OUT=<unique-run-directory> <pin-specific-binary> -test.run '^TestCPUControlAllocationSites$' -test.count=1 -test.v
+
+The harness must reject a reused/nonempty output directory, and the runner must
+expand and retain each literal command. It must not also pass
+`-test.memprofilerate`, which would change the rate later in testing.M.before.
+
+Matrix. Primary scope is Softplus only because it is the one repeated strong
+old/V2 direction. Run mandatory phases old-old then old/V2, campaigns 1..3,
+pairs 1..7, at GOMAXPROCS 1 and 12. Odd campaigns order process counts 1 then 12;
+even campaigns reverse. Arm A precedes B when pair+campaign is even, otherwise B
+precedes A. One invocation runs one arm/process-count/control only, serialized
+with no owned build/test/profile/benchmark overlap. Preserve ordinary-background
+disclosure. The matrix is 3 campaigns * 7 pairs * 2 process counts * 2 arms =
+84 invocations per phase, 168 total. Do not add Sigmoid or SiLU
+after looking at results; they require a separately preregistered extension.
+
+Retain per invocation: all pins/order metadata; exit/PASS; N/procs/rate; S/E and
+tail MemStats counters; raw pre/post records including PCs/object size and all
+four profile counts; normalized site deltas; cumulative allocs.pprof; stdout and
+stderr. Retain every paired B-minus-A exact-total and per-site delta, ranges,
+medians, and sign counts. P-values, if shown, are descriptive only.
+
+Completeness/invalidity. A phase is unanalyzable if any planned invocation is
+missing/replaced, fails, uses wrong pin/order/N/procs/rate, overflows the fixed
+profile buffer, cannot decode/symbolize its records/profile, has decreasing
+cumulative allocation fields for a same-process site, or violates exact integer
+arithmetic. Preserve invalid runs; never rerun silently. Profile-site sums need
+not equal MemStats and are reported with their difference, not used as an
+invalidity criterion.
+
+Interpretation. Old/old site movement establishes what this instrumented pipeline
+can produce without a binary difference; it is not a subtractable noise floor.
+A repeatable normalized old/V2 site delta supports candidate association only in
+the rate-1 profiled harness. It does not show that GELU caused it, that the same
+delta exists unprofiled, or that a runtime/background stack was initiated by OS
+activity. Absence of a delta does not establish equivalence. No nonsignificant
+p-value, profile attribution, or exact-total result can rescore V2, relax a gate,
+or justify a scheduling/runtime optimization without a separate proposal.

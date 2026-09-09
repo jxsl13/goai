@@ -1,0 +1,236 @@
+T-01M241R5P3EH8 independent verifier report
+Date: 2026-09-10
+Worktree: /private/tmp/goai-alloc-sites-analysis-verify-BtEOXL/repo
+Reviewed commit: 9c1250abdb4133eede2c9c7ff9e5a2c75d099540
+
+VERDICT: FAIL
+
+Blocking finding
+================
+
+AllocationSites.parse violates the explicit strict-JSON contract that parse itself
+reject NaN/Infinity. On the required Ruby 2.6.10, JSON.parse with allow_nan:false
+rejects literal NaN and Infinity tokens, but a syntactically valid, finite decimal
+token with an overflowing exponent (for example 1e999) is converted to Float::INFINITY.
+The implementation returns that value without recursively checking the parsed root,
+arrays, or objects. The direct probe below observed Infinity at the root, -Infinity
+in an array, and Infinity nested in an object. The independent supplemental test
+therefore failed exactly as intended. This is a contract defect even though analyze
+would later reject a Float used in an integer schema field, because parse is a public
+entry point and its contract independently forbids non-finite values.
+
+Required correction: after JSON.parse, recursively reject any Float for which
+finite? is false at the root or at any array/object depth. Finite Float JSON values
+may remain parseable; schema integer fields continue to reject every Float. No schema
+relaxation is justified.
+
+No fix was made in this verifier snapshot. The original failure and supplemental
+test are preserved for a separately fixed fresh snapshot.
+
+Scope and source review
+=======================
+
+I read complete .claude/commands/spectackle.md, the Spectackle instruction manifest,
+the complete task T-01M241R5P3EH8, parent P-01M23BZPZNF9V, research
+R-01M23VWNB5FRP, protocol.md, schema.md, analysis-schema.md, corrected-review.txt,
+and /Users/john/Desktop/Development/spectackle/docs/agent-workflow.md. I reviewed the
+committed diff itself and did not trust an implementation transcript or generated
+expected values.
+
+The commit contains only the two expected added Ruby files. Their expected SHA-256
+hashes match. The analyzer otherwise follows the reviewed per-invocation contract:
+
+* Exact keys and primitive/container types are checked at capture, tail, boundaries,
+  snapshots, rows, frames, and counters.
+* All 32 raw PCs are validated as lowercase unpadded uint64 hex, stack holes are
+  rejected, emitted frames may expand/repeat, and active unresolved frames fail.
+* Positive rows derive exact slot sizes and validate division, free limits, and
+  checked multiplication. All-zero rows remain an ordered pre/post multiset with
+  multiplicity, while a zero pre row can become a post-only positive raw key.
+* Raw-key aggregation uses [slot_size, complete nonzero PC prefix], sums collisions,
+  preserves all ordinals/cardinalities, requires symbolization consistency, retains
+  unchanged and absent-side keys, and checks each raw-key counter decrease before
+  normalization. Thus a decrease cannot be hidden by an increase at another PC that
+  shares a normalized function stack.
+* Normalization uses only [slot_size, ordered fully-qualified function names]. PC,
+  frame-PC, file, and line shifts alter raw identity but not normalized results.
+  Normalized collisions preserve every raw-key index/cardinality.
+* Caller precedence over worker is correct; worker-only is labeled temporally
+  associated; other is exhaustive. All three groups, including empty groups, are
+  emitted. The positive caller delta marker is enforced without an exact-count or
+  causal claim.
+* Signed 64-bit checks cover row products, raw sums, raw deltas, normalized sums,
+  group sums, global sums, boundary windows, and discrepancies. MemStats inputs are
+  uint64, NumGC is uint32, cumulative fields are monotone through tail, heap fields
+  may decrease, and near-uint64 inputs retain exact small signed windows. Values over
+  2^53 remain exact Ruby integers.
+* Derived schema/key order, deterministic sorting, contributor coverage, all five
+  accounting windows, immediate/profile disclosure, source immutability, and strict
+  round trips passed independently calculated checks.
+* CLI reads and analyzes both absolute inputs before exclusive 0600 creation, is
+  silent on success, preserves an existing output, and creates no output for invalid
+  input. The contract-permitted partial-output behavior on an I/O failure is retained.
+
+Independent arithmetic derivation
+=================================
+
+The supplemental fixture was created independently of analyze_sites_test.rb. It used
+B = 2^53 + 9 and deliberately combined:
+
+* two pre rows colliding at raw key [8, [0x20,0x21]];
+* that raw key plus [8,[0x30]] colliding at the normalized caller stack;
+* a caller+worker inline/repeated stack to prove caller precedence;
+* a worker-only site;
+* two slot-4 raw keys colliding at one repeated-name normalized other site;
+* an unchanged site;
+* duplicate unresolved zero-active rows and a zero-to-positive caller row;
+* diagnostic file, line, raw-PC, and emitted-frame-PC shifts.
+
+Manual expected group totals were:
+
+caller pre  = {alloc_bytes:72,  free_bytes:16, alloc_objects:9,  free_objects:2}
+caller post = {alloc_bytes:176, free_bytes:32, alloc_objects:14, free_objects:4}
+caller delta= {alloc_bytes:104, free_bytes:16, alloc_objects:5,  free_objects:2}
+
+worker pre  = {alloc_bytes:32, free_bytes:0,  alloc_objects:2, free_objects:0}
+worker post = {alloc_bytes:64, free_bytes:16, alloc_objects:4, free_objects:1}
+worker delta= {alloc_bytes:32, free_bytes:16, alloc_objects:2, free_objects:1}
+
+other pre   = {alloc_bytes:4B+64, free_bytes:40, alloc_objects:B+2, free_objects:3}
+other post  = {alloc_bytes:4B+84, free_bytes:44, alloc_objects:B+7, free_objects:4}
+other delta = {alloc_bytes:20,    free_bytes:4,  alloc_objects:5,   free_objects:1}
+
+global pre  = {alloc_bytes:4B+168, free_bytes:56, alloc_objects:B+13, free_objects:5}
+global post = {alloc_bytes:4B+324, free_bytes:92, alloc_objects:B+25, free_objects:9}
+global delta= {alloc_bytes:156,    free_bytes:36, alloc_objects:12,   free_objects:4}
+
+With immediate region {total_alloc:200,mallocs:12,frees:4}, the independently
+expected disclosure was {alloc_bytes:44,alloc_objects:0,free_objects:0}.
+All values were observed exactly. Six non-parser supplemental tests passed with 75
+assertions. The full seven-test run had only the intended non-finite parser failure.
+
+Declared VERIFY transcript
+==========================
+
+COMMAND: ruby --version
+OUTPUT:
+ruby 2.6.10p210 (2022-04-12 revision 67958) [universal.arm64e-darwin25]
+EXIT_CODE=0
+
+COMMAND: ruby -c internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb
+OUTPUT:
+Syntax OK
+EXIT_CODE=0
+
+COMMAND: ruby -c internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+OUTPUT:
+Syntax OK
+EXIT_CODE=0
+
+COMMAND: ruby internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+OUTPUT:
+Run options: --seed 13026
+
+# Running:
+
+...................
+
+Finished in 0.334522s, 56.7975 runs/s, 813.1005 assertions/s.
+
+19 runs, 272 assertions, 0 failures, 0 errors, 0 skips
+EXIT_CODE=0
+
+COMMAND: git diff --check 9c1250ab^ 9c1250ab
+OUTPUT:
+<empty>
+EXIT_CODE=0
+
+COMMAND: shasum -a 256 internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+OUTPUT:
+2ce3d5d84f067601c559f46be2e3eb76d0d1a797824f83318d46155da92c1302  internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb
+5261c243cd7bda1051d3ea38e471785a6309d904f62471196e02bc3ce62c0a70  internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+EXIT_CODE=0
+
+Supplemental test transcript
+============================
+
+Supplemental source preserved outside the repository at:
+/private/tmp/goai-alloc-sites-analysis-verify-BtEOXL/independent_verify_test.rb
+SHA-256:
+ee2a1ea023ae01752aea825973f70b3c15a4b2617f5bc6a133a006b6518dd5f6
+
+COMMAND: ruby -c internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/independent_verify_test.rb
+OUTPUT:
+Syntax OK
+EXIT_CODE=0
+
+COMMAND: ruby internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/independent_verify_test.rb
+OUTPUT:
+Run options: --seed 3362
+
+# Running:
+
+..F....
+
+Finished in 0.165721s, 42.2397 runs/s, 458.6021 assertions/s.
+
+  1) Failure:
+IndependentAllocationSitesVerifyTest#test_parse_rejects_nonfinite_result_from_finite_json_exponent [internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/independent_verify_test.rb:270]:
+AllocationSites::Invalid expected but nothing was raised.
+
+7 runs, 76 assertions, 1 failures, 0 errors, 0 skips
+EXIT_CODE=1
+
+COMMAND: ruby internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/independent_verify_test.rb -n '/test_(?!parse_rejects_nonfinite)/'
+OUTPUT:
+Run options: -n "/test_(?!parse_rejects_nonfinite)/" --seed 13752
+
+# Running:
+
+......
+
+Finished in 0.166341s, 36.0705 runs/s, 450.8810 assertions/s.
+
+6 runs, 75 assertions, 0 failures, 0 errors, 0 skips
+EXIT_CODE=0
+
+COMMAND: ruby -I internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909 -ranalyze_sites -e 'cases = [%q(1e999), %q([0,-1e999]), %q({"outer":{"value":1e999}})]; cases.each { |s| v = AllocationSites.parse(s); p v }'
+OUTPUT:
+Infinity
+[0, -Infinity]
+{"outer"=>{"value"=>Infinity}}
+EXIT_CODE=0
+
+Final source and cleanliness transcript
+=======================================
+
+COMMAND: git rev-parse HEAD
+OUTPUT:
+9c1250abdb4133eede2c9c7ff9e5a2c75d099540
+EXIT_CODE=0
+
+COMMAND: git diff-tree --no-commit-id --name-status -r 9c1250ab
+OUTPUT:
+A\tinternal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb
+A\tinternal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+EXIT_CODE=0
+
+COMMAND: git status --short --branch
+OUTPUT:
+## HEAD (no branch)
+EXIT_CODE=0
+
+COMMAND: test -f /private/tmp/goai-alloc-sites-analysis-verify-BtEOXL/independent_verify_test.rb
+OUTPUT:
+<empty>
+EXIT_CODE=0
+
+The in-repository supplemental test was removed after preservation. The committed
+scripts were never modified. The detached worktree is clean.
+
+Explicit limits
+===============
+
+No Go build or test, enabled capture, profiler, pprof decoding, benchmark, matrix,
+runtime execution, or source-binary comparison was run. This report makes no
+profiling, runtime, causality, equivalence, performance, or qualification claim.

@@ -1,0 +1,62 @@
+Independent Go 1.27.1 V2 verification raw logs
+See verification-report.txt for exact commands, environment, exit statuses and limitations.
+
+=== v2-verifier-full-cpu-default.log ===
+ok  	github.com/jxsl13/goai/backend/cpu	14.001s
+
+=== v2-verifier-full-cpu-simd.log ===
+ok  	github.com/jxsl13/goai/backend/cpu	14.016s
+
+=== v2-verifier-focused-default-gmp1.log ===
+ok  	github.com/jxsl13/goai/backend/cpu	0.805s
+
+=== v2-verifier-focused-default-gmp12.log ===
+ok  	github.com/jxsl13/goai/backend/cpu	0.532s
+
+=== v2-verifier-focused-simd-gmp1.log ===
+ok  	github.com/jxsl13/goai/backend/cpu	0.654s
+
+=== v2-verifier-focused-simd-gmp12.log ===
+ok  	github.com/jxsl13/goai/backend/cpu	0.648s
+
+=== v2-verifier-build-default.log ===
+go: writing stat cache: open /Users/john/go/pkg/mod/cache/download/github.com/jxsl13/goai/@v/v0.1.1-0.20260909172949-bd8faf5f69eb.info462230944.tmp: operation not permitted
+
+=== v2-verifier-build-simd.log ===
+go: writing stat cache: open /Users/john/go/pkg/mod/cache/download/github.com/jxsl13/goai/@v/v0.1.1-0.20260909172949-bd8faf5f69eb.info882569282.tmp: operation not permitted
+
+=== v2-verifier-vet-default.log ===
+
+=== v2-verifier-vet-simd.log ===
+
+=== v2-verifier-crosscompile-amd64.log ===
+
+=== v2-verifier-race-default.log ===
+ok  	github.com/jxsl13/goai/backend/cpu	3.540s
+
+=== v2-verifier-race-simd.log ===
+ok  	github.com/jxsl13/goai/backend/cpu	3.782s
+
+=== v2-verifier-format-hashes-status.log ===
+gofmt-d exit=0
+committed-diff-check exit=0
+working-diff-check exit=0
+72c79a0bf18257f19c38206ae6f206f8aa1227803d8e881fc65d068192075c35  backend/cpu/vgelu_f64_arm64.go
+cc87da8e6407080c7d931a9917b364adbdbff82698a631f30b16cb6e30abf7ca  backend/cpu/vgelu_f64_neon_test.go
+b53599699510a31f3a2d086f08f1b11b968b9ad1f25941e75c8a1f62fc49c9f3  backend/cpu/vgelu_f64_bench_test.go
+c95691bc1a7289094bc523250fde7a9cae614756635b78701e9c306962b246cb  /private/tmp/goai-m2-f64-gelu-neon-26BhJN/gelu-old.test
+045826effd7c6aab639a1b4c9e0e162e4eca03b6aaef56761291c248492301d7  /private/tmp/goai-m2-f64-gelu-neon-26BhJN/gelu-new.test
+b768ca10228a7487aad1cbef3a658c99cb21078b5059b815fa690b0d9bcc7614  /private/tmp/goai-m2-f64-gelu-neon-26BhJN/gelu-v2.test
+901d8b5ed9f9f7bbb46c493f79b97cf49d81fd02e9db070aa72aaed7be17877b  /private/tmp/goai-m2-f64-gelu-neon-26BhJN/v2-verifier-amd64-simd-2.test
+
+=== v2-verifier-codegen-boundaries.log ===
+=== gelu-new.test ===
+00000001001bd9b0 (__TEXT,__text) non-external _github.com/jxsl13/goai/backend/cpu.erfF64x2GELU
+00000001001bdd20 (__TEXT,__text) non-external _github.com/jxsl13/goai/backend/cpu.erfF64GELUPoly
+body-lines=220 ret=1 udf=1 nop=2
+last=00000001001bdd1c	udf	#0x0
+=== gelu-v2.test ===
+00000001001bd9b0 (__TEXT,__text) non-external _github.com/jxsl13/goai/backend/cpu.erfF64x2GELU
+00000001001bdd30 (__TEXT,__text) non-external _github.com/jxsl13/goai/backend/cpu.erfF64GELUPoly
+body-lines=224 ret=2 udf=0 nop=1
+last=00000001001bdd2c	ret

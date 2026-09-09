@@ -1,0 +1,243 @@
+T-01M241R5P3EH8 nonfinite exponent parser fix
+================================================
+
+Scope and outcome
+-----------------
+
+Independent verification found that pinned Ruby 2.6.10 converts overflowed JSON
+exponent tokens such as 1e999 to nonfinite Float values despite allow_nan:false.
+AllocationSites.parse now recursively checks the parsed root, Hash values, and
+Array elements and raises AllocationSites::Invalid with the exact traversal path
+for any nonfinite Float. Duplicate-key rejection is unchanged because JSON still
+constructs every object through UniqueObject. Finite Float tokens remain parseable;
+AllocationSites.analyze continues to reject them wherever the capture schema
+requires an Integer.
+
+Only the two already declared Ruby files were changed. The schema, prior evidence,
+and original report.txt were not changed. No lifecycle or Git mutation occurred.
+
+Worktree: /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo
+Source HEAD: 69deae0524acaf0ef3a94379467b183626eba309
+
+Pre-fix reproduction
+--------------------
+
+Command:
+ruby -Iinternal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909 -ranalyze_sites -e 'p AllocationSites.parse("{\"a\":1e999}")'
+Exit code: 0
+Output:
+{"a"=>Infinity}
+
+Command:
+ruby -Iinternal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909 -ranalyze_sites -e 'p AllocationSites.parse("-1e999")'
+Exit code: 0
+Output:
+-Infinity
+
+Fix applied
+-----------
+
+Used apply_patch to make only these bounded changes:
+
+* analyze_sites.rb: retain the JSON.parse result, recursively traverse Float,
+  Hash, and Array values, reject !finite? Float values with path and reason, and
+  return the unchanged parsed object otherwise.
+* analyze_sites_test.rb: add independent positive/negative root overflow probes,
+  nested mixed Hash/Array overflow probes, finite root/nested exponent parsing,
+  and proof that a finite exponent parsed as Float is still rejected downstream
+  for the integer n field.
+
+No finite value is converted or normalized by the new traversal.
+
+Post-fix syntax and direct probes
+---------------------------------
+
+Command:
+ruby -c internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb
+Exit code: 0
+Output:
+Syntax OK
+
+Command:
+ruby -c internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+Exit code: 0
+Output:
+Syntax OK
+
+Command:
+ruby -Iinternal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909 -ranalyze_sites -e 'p AllocationSites.parse("1e2")'
+Exit code: 0
+Output:
+100.0
+
+Command:
+ruby -Iinternal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909 -ranalyze_sites -e 'AllocationSites.parse("1e999")'
+Exit code: 1
+Output:
+/private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:498:in `invalid': $: nonfinite JSON number (AllocationSites::Invalid)
+	from /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:59:in `reject_nonfinite!'
+	from /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:50:in `parse'
+	from -e:1:in `<main>'
+
+Command:
+ruby -Iinternal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909 -ranalyze_sites -e 'AllocationSites.parse("-1e999")'
+Exit code: 1
+Output:
+/private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:498:in `invalid': $: nonfinite JSON number (AllocationSites::Invalid)
+	from /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:59:in `reject_nonfinite!'
+	from /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:50:in `parse'
+	from -e:1:in `<main>'
+
+Command:
+ruby -Iinternal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909 -ranalyze_sites -e 'AllocationSites.parse("[{\"finite\":1.5},{\"mixed\":[null,-1e999,true]}]")'
+Exit code: 1
+Output:
+/private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:498:in `invalid': $[1]["mixed"][1]: nonfinite JSON number (AllocationSites::Invalid)
+	from /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:59:in `reject_nonfinite!'
+	from /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:63:in `block in reject_nonfinite!'
+	from /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:63:in `each'
+	from /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:63:in `each_with_index'
+	from /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:63:in `reject_nonfinite!'
+	from /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:61:in `block in reject_nonfinite!'
+	from /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:61:in `each'
+	from /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:61:in `reject_nonfinite!'
+	from /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:63:in `block in reject_nonfinite!'
+	from /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:63:in `each'
+	from /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:63:in `each_with_index'
+	from /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:63:in `reject_nonfinite!'
+	from /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:50:in `parse'
+	from -e:1:in `<main>'
+
+Focused synthetic test
+----------------------
+
+Command:
+ruby internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb --name test_parse_rejects_overflowed_exponents_recursively_but_retains_finite_floats
+Exit code: 0
+Output:
+Run options: --name test_parse_rejects_overflowed_exponents_recursively_but_retains_finite_floats --seed 19098
+
+# Running:
+
+.
+
+Finished in 0.001579s, 633.3123 runs/s, 11399.6223 assertions/s.
+
+1 runs, 18 assertions, 0 failures, 0 errors, 0 skips
+
+Final original verification block
+---------------------------------
+
+Command:
+ruby --version
+Exit code: 0
+Output:
+ruby 2.6.10p210 (2022-04-12 revision 67958) [universal.arm64e-darwin25]
+
+Command:
+ruby -c internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb
+Exit code: 0
+Output:
+Syntax OK
+
+Command:
+ruby -c internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+Exit code: 0
+Output:
+Syntax OK
+
+Command:
+ruby internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+Exit code: 0
+Output:
+Run options: --seed 62217
+
+# Running:
+
+....................
+
+Finished in 0.332337s, 60.1799 runs/s, 872.6082 assertions/s.
+
+20 runs, 290 assertions, 0 failures, 0 errors, 0 skips
+
+Command:
+git diff --check
+Exit code: 0
+Output:
+<empty>
+
+Command:
+shasum -a256 internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+Exit code: 0
+Output:
+9a19e1c13de703013048ca228be993952ba76e33a17bb2adba6c54c26f8c42eb  internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb
+38cd111df95fff9e97b5e7bb63bd67cf4134678d5ae3e19d8b2bd95a49da92e4  internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+
+Final repository status
+-----------------------
+
+Command:
+git status --short
+Exit code: 0
+Output:
+?? internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb
+?? internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+
+Original report preservation
+----------------------------
+
+Command:
+shasum -a256 /private/tmp/goai-alloc-sites-analyze-1sS6ot/report.txt
+Exit code: 0
+Output:
+963183fbc55f02e833388162788648612e62f2dcdc9c8e1504e1aca8f5b2c2a3  /private/tmp/goai-alloc-sites-analyze-1sS6ot/report.txt
+
+Coordination and explicit exclusions
+------------------------------------
+
+Lease claim before the narrow fix:
+
+Command:
+spectackle call lease '{"op":"claim","item":"T-01M241R5P3EH8","paths":["internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb","internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb"],"ttl":3600}'
+Exit code: 0
+Output:
+c . journal 1135 events since last compact
+ok claimed internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+
+NOT RUN: any Go build/test/vet, runtime binary, enabled capture, MemProfile/pprof,
+benchmark, profile, matrix, runner, paired statistics, or compiler diagnostic.
+
+NOT CHANGED: schema/protocol documents, old raw evidence, prior analyzer,
+original report.txt, .spectackle bytes, runtime source, Git index/commit/branch/
+remote/PR state, or lifecycle state.
+
+Lease release:
+
+Command:
+spectackle call lease '{"op":"release","item":"T-01M241R5P3EH8","paths":["internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb","internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb"]}'
+Exit code: 0
+Output:
+c . journal 1135 events since last compact
+ok released
+
+Post-release source-freeze command:
+shasum -a256 internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+Exit code: 0
+Output:
+9a19e1c13de703013048ca228be993952ba76e33a17bb2adba6c54c26f8c42eb  internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb
+38cd111df95fff9e97b5e7bb63bd67cf4134678d5ae3e19d8b2bd95a49da92e4  internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+
+Post-release status command:
+git status --short
+Exit code: 0
+Output:
+?? internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb
+?? internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+
+Post-release original-report preservation command:
+shasum -a256 /private/tmp/goai-alloc-sites-analyze-1sS6ot/report.txt
+Exit code: 0
+Output:
+963183fbc55f02e833388162788648612e62f2dcdc9c8e1504e1aca8f5b2c2a3  /private/tmp/goai-alloc-sites-analyze-1sS6ot/report.txt
+
+Source is frozen at the two hashes above for fresh independent verification.

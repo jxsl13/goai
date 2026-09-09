@@ -534,6 +534,9 @@ Mathematical and scientific grounding is required per unit of work. Numeric deci
 - P-01M0W38CXRFN9TJ70JBE2RX3EQ Fuse ARM64 F64 Softplus into one NEON pass: Implemented and validated by archived task T-01M0W39FV0F7Z9NCDV2TXNPVXE. ARM64 F64 Softplus now uses a dedicated one-pass NEON kernel with exact special-value behavior, 2.085x to 2.122x direct same-binary gains and 3.49x to 3.81x production-path gains on Apple M2 Pro, zero allocation regression, full preflight success, and the generalized finding reported at perfscan issue 917.
 - T-01M234MSKYE6D8NGMMEYBJG4GZ Pin and validate Go 1.27.1 on current main: Rebuilt current main with checksum-verified Go 1.27.1; pinned module, README and all ten CI selectors. No runtime algorithm changes. Nine same-source alternating pairs retained; initial parallel MoE +22.00% p=.024 did not reproduce significantly in focused confirmation (+3.60% p=.489). All 108 samples, hashes and statistics independently verified. Full pure-Go build/vet/short suites, native SIMD f [body truncated at tombstone retention cap]
 - P-01M234HF6DF2JB1Y3X1BPKMK7Z Rebuild current main with the pinned Go 1.27.1 patch toolchain: Go 1.27.1 patch rebuild completed and independently verified from current main; task T-01M234MSKYE6D archived after all16 CI34357138053 jobs passed. Module and ten CI declarations pinned; exact same-source benchmark campaigns retained, with no speedup claim and the unreproduced initial parallel MoE slowdown disclosed. Native M2, portable, SIMD, external perfscan direct and cross-platform gates pas [body truncated at tombstone retention cap]
+- R-01M23B9YZ1E16ANNE778WX5G7T Design a fused M2 F64 exact-erf GELU SIMD leaf with truthful numerical and caller gates: Consumed by independently reviewed P-01M23BZPZNF9V/T-01M23C5EWPE8P, seven anchored ARM64-F64-GELU rules, and ADR-0031. Fresh researcher established dedicated gate and register-resident Cephes+degree13-exp feasibility, recommended assembly, and identified rounded erfc/PDF exponent mismatch. Main verified Go1.27.1 Float64x2 API via actual SDK go doc and chose a smaller intrinsic experiment first, wi [body truncated at tombstone retention cap]
+- R-01M23VWNB5FRP85PW5NSQWY5QA Design allocation-site attribution for repeated fixed-count control differences: Research consumed by T-01M24137G7EHM raw capture and T-01M241R5P3EH8 offline analysis, their prospective contracts and m2-control-alloc-sites-20260909 protocol/schema/analysis-schema/execution-prerequisites. Immutable original report and initial correction review retained; corrected-review independently passes design only. Public 32-PC collisions require sums, zero-active records are size-unknown, [body truncated at tombstone retention cap]
+- T-01M241R5P3EH886EVW1AGTD3EA Implement strict collision-safe per-invocation allocation-site analyzer: validated pass by root no attributed diff (1ceb1c167ccf binds the target list, not code) :: [evidence] Pack has no source diff because implementation 9c1250ab and narrow fix e57d49aafa700e6428a1fcb6f2fad7b95a95e1ae are committed. Root reviewed exact source and matching hashes 9a19e1c1/38cd111d; independent follow-up report 78c6bfe0 reran full Ruby2.6.10 VERIFY (20 tests/290 assertions), preserved [body truncated at tombstone retention cap]
 
 ## PROC-007
 WHERE a performance transform is not bit-identical, the GoAI SHALL apply it only where the value is a continuous output, and never where it feeds round, quantize, argmax, or a threshold comparison.
@@ -796,3 +799,13 @@ Rationale: One declared compiler generation prevents local, documentation, and C
 WHEN the minimum Go toolchain changes, the GoAI SHALL cross-build the full Linux AMD64 tree with GOEXPERIMENT=simd and execute 1 internal/simd CI test suite before archive.
 
 Rationale: Darwin ARM64 cannot compile AMD64-only experimental archsimd calls, whose API is outside the Go 1 compatibility promise.
+
+## PROC-MUTATION-COMMIT-SERIAL-001
+WHEN a source mutation test starts, the orchestrator SHALL perform 0 commits, pushes, or Spectackle auto-committing operations until exact restoration is confirmed.
+
+Rationale: PR #1249 captured an in-target temporary mutation during research archival; lifecycle and mutation ownership must be serialized.
+
+## PROC-PUSH-COMMITTED-DIFF-001
+WHEN a tested feature branch is ready to push, the orchestrator SHALL verify the exact committed runtime diff and source SHA immediately before push, with 0 active source mutations.
+
+Rationale: A prior clean working-tree inspection does not prove that a later auto-commit excluded a temporary mutation.

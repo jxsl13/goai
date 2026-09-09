@@ -1,0 +1,164 @@
+Independent V2 performance-only verification — T-01M23JPZT8FDM
+Date: 2026-09-09
+Verdict: REJECT (performance qualification only)
+
+Scope and method
+----------------
+I independently parsed the raw paired.txt and controls.txt streams and recomputed
+medians and nominal exact two-sided rank p-values without relying on analysis.csv
+or the checked-in Ruby result. Ties receive average ranks. For each 7-vs-7 cell,
+all C(14,7)=3432 label assignments were enumerated; the p-value counts rank-sum
+distances at least as extreme as observed. I then compared my results with the
+protocol analyzer as a secondary cross-check. I ran no new benchmarks.
+
+Protocol integrity
+------------------
+PASS. paired.txt contains exactly 84 invocations and 1344 GELU benchmark records;
+controls.txt contains exactly 84 invocations and 252 fixed-control records. Every
+invocation has PASS, no FAIL, and exactly the expected ordered cells. There are
+3 campaigns x 7 pairs x 2 process counts x 2 arms in each file. GOMAXPROCS is
+exactly 1/12, campaign process order alternates (1,12 / 12,1 / 1,12), and arm
+order alternates by pair plus campaign exactly as run.sh declares. Each grouped
+cell has old and new pairs 1..7 exactly once. All samples were retained.
+
+Observed hashes match the frozen pins:
+- old binary: c95691bc1a7289094bc523250fde7a9cae614756635b78701e9c306962b246cb
+- V2 binary: b768ca10228a7487aad1cbef3a658c99cb21078b5059b815fa690b0d9bcc7614
+- shared harness: b53599699510a31f3a2d086f08f1b11b968b9ad1f25941e75c8a1f62fc49c9f3
+- V2 runtime source: 72c79a0bf18257f19c38206ae6f206f8aa1227803d8e881fc65d068192075c35
+- runtime commit recorded by the evidence: 361955ac35eaada696045f2cf828817b650174ec
+
+Large public Execute targets (n=262144)
+----------------------------------------
+All 24/24 required campaign cells pass. Values are old median ns/op, new median
+ns/op, old/new speedup, nominal exact two-sided p. Every row is new-faster in
+7/7 observed pairs and has p=0.000582750583 (=2/3432). Serial minima exceed
+1.25x; parallel minima exceed 1.05x.
+
+camp procs direction distribution  old_ns   new_ns  speedup       p
+1    1     forward   active       2632444   672707  3.91321036  0.000582750583
+1    1     forward   mixed        5480705  2024810  2.70677496  0.000582750583
+1    1     backward  active       3986643  1735607  2.29697334  0.000582750583
+1    1     backward  mixed        7488669  2932745  2.55346749  0.000582750583
+1    12    forward   active        553214   224891  2.45992058  0.000582750583
+1    12    forward   mixed         959762   431066  2.22648504  0.000582750583
+1    12    backward  active        772151   375114  2.05844357  0.000582750583
+1    12    backward  mixed        1216796   547181  2.22375411  0.000582750583
+2    1     forward   active       2639839   672703  3.92422659  0.000582750583
+2    1     forward   mixed        5481282  2024703  2.70720298  0.000582750583
+2    1     backward  active       3990005  1737281  2.29669524  0.000582750583
+2    1     backward  mixed        7478058  2935099  2.54780435  0.000582750583
+2    12    forward   active        553982   225478  2.45692263  0.000582750583
+2    12    forward   mixed         959180   426492  2.24899881  0.000582750583
+2    12    backward  active        778149   373821  2.08160858  0.000582750583
+2    12    backward  mixed        1214361   546921  2.22035906  0.000582750583
+3    1     forward   active       2628973   671154  3.91709354  0.000582750583
+3    1     forward   mixed        5467817  2023856  2.70168283  0.000582750583
+3    1     backward  active       3989601  1735518  2.29879552  0.000582750583
+3    1     backward  mixed        7470603  2927877  2.55154264  0.000582750583
+3    12    forward   active        544288   225992  2.40843924  0.000582750583
+3    12    forward   mixed         961926   429614  2.23904714  0.000582750583
+3    12    backward  active        778209   371172  2.09662636  0.000582750583
+3    12    backward  mixed        1214039   547506  2.21739853  0.000582750583
+
+Across the 12 serial targets, speedup is 2.29669524x..3.92422659x. Across the
+12 parallel targets it is 2.05844357x..2.45992058x. Thus the weakest margins
+are still 1.837x the serial threshold and 1.960x the parallel threshold.
+
+Small GELU controls (n=2048)
+----------------------------
+No V1-style small active-forward regression remains. For each named cell below,
+the range covers all 3 campaigns and both process counts (six medians). Every
+one of the 48 small campaign/process cells is new-faster in 7/7 pairs with
+p=0.000582750583. Speedup ranges:
+
+- leaf forward active: 2.00969501x..2.12580775x
+- Execute forward active: 1.49675430x..1.67229843x
+- leaf backward active: 2.13119357x..2.14288970x
+- Execute backward active: 2.02015933x..2.05577717x
+- leaf forward mixed: 1.88986127x..1.91965269x
+- Execute forward mixed: 1.79588875x..1.83335350x
+- leaf backward mixed: 2.15091071x..2.16771730x
+- Execute backward mixed: 2.07964451x..2.10367681x
+
+All small leaf B/op and allocs/op medians remain 0/0. All small Execute forward
+medians remain 16680 B/op and 5 allocs/op. Execute backward improves from
+16712 to 16696 B/op in every campaign/process cell and stays at 5 allocs/op.
+There is no small-cell time or allocation veto.
+
+Fixed non-target controls
+-------------------------
+No fixed-control cell has a significant >3% time regression, and no benchmark
+reproduces a >3% regression across campaigns. The largest candidate slowdown
+is Softplus campaign 3/GMP12: 286291 -> 288692 ns/op (+0.839%; speedup
+0.991683178x), p=0.164918415. Full timing cells (old -> new ns/op, speedup, p):
+
+camp procs control       old_ns   new_ns  speedup       p
+1    1     SiLUBack      714213   713087  1.00157905  0.901515152
+1    1     Sigmoid       130094   130291  0.99848800  0.534965035
+1    1     Softplus     1100655  1100914  0.99976474  0.620046620
+1    12    SiLUBack      274443   275178  0.99732900  1.000000000
+1    12    Sigmoid       105980   101572  1.04339779  0.128205128
+1    12    Softplus      288988   286705  1.00796289  0.128205128
+2    1     SiLUBack      714360   712971  1.00194819  0.620046620
+2    1     Sigmoid       130385   130401  0.99987730  0.710372960
+2    1     Softplus     1102701  1100551  1.00195357  0.534965035
+2    12    SiLUBack      279515   277099  1.00871891  0.804778555
+2    12    Sigmoid       104686   102355  1.02277368  0.534965035
+2    12    Softplus      289320   288819  1.00173465  0.382867133
+3    1     SiLUBack      714306   715562  0.99824474  0.382867133
+3    1     Sigmoid       129997   130180  0.99859425  0.710372960
+3    1     Softplus     1100263  1097704  1.00233123  0.317599068
+3    12    SiLUBack      275208   274112  1.00399837  0.804778555
+3    12    Sigmoid       100952   100816  1.00134899  0.804778555
+3    12    Softplus      286291   288692  0.99168318  0.164918415
+
+Allocation disclosure (all median increases, including nonsignificant)
+-----------------------------------------------------------------------
+No allocs/op median increases occur anywhere. No B/op median increase occurs
+in any GELU target, large leaf, small leaf, or small Execute cell. The following
+six fixed-control/GMP12 B/op median increases do occur and are retained even
+though none is individually significant:
+
+- campaign 1 Sigmoid: 524612 -> 524613 B/op (+1), p=0.562937063
+- campaign 1 Softplus: 2097482 -> 2097484 B/op (+2), p=0.081585082
+- campaign 2 SiLUBackward: 4194697 -> 4194701 B/op (+4), p=0.920163170
+- campaign 2 Softplus: 2097481 -> 2097484 B/op (+3), p=0.154428904
+- campaign 3 SiLUBackward: 4194701 -> 4194702 B/op (+1), p=0.380536131
+- campaign 3 Softplus: 2097482 -> 2097484 B/op (+2), p=0.119463869
+
+These median-byte increases recur by benchmark for Softplus (3/3 GMP12
+campaigns) and SiLUBackward (2/3 GMP12 campaigns). They are tiny, are not
+allocs/op increases, and their individual exact rank tests are nonsignificant,
+but the assigned gate explicitly requires every B/op and allocs/op median
+increase to be reported and makes an allocation change reproducible across
+campaigns a promotion veto. Softplus is therefore a reproducible 3/3 B/op
+increase, and SiLUBackward independently repeats in 2/3. The aggregate analyzer's
+"0 allocation flags" reflects its additional per-campaign p<0.05 filter; it
+cannot establish a universal allocation pass under the stricter verifier brief.
+
+Limitations
+-----------
+This is a frozen-binary microbenchmark comparison on one Apple M2 Pro, one OS
+and Go 1.27.1 session. Count seven limits power and precision. The declared
+exact rank test is an unpaired label-permutation Mann-Whitney-style test even
+though execution was order-balanced in pairs; it does not model pair effects.
+Benchmark iterations are adaptively chosen. Warmups were excluded and their raw
+measurements were not retained. The environment snapshot disclosed intermittent
+background activity (including a VM and system services); there was no continuous
+CPU-frequency, thermal, or load trace, CPU affinity, or cross-day replication.
+The raw logs demonstrate invocation order and PASS, not semantic equivalence;
+correctness/codegen qualification is covered by the separate verifier report.
+
+Performance-only conclusion
+---------------------------
+REJECT. The frozen V2 candidate satisfies every one of the 24 per-campaign large
+public target gates with wide margin and p<0.05, eliminates rather than repeats
+the rejected V1 small active-forward regression, shows no significant >3% small
+or fixed-control time regression, and shows no allocs/op median increase.
+Nevertheless, the fixed Softplus GMP12 B/op median increases in all 3 campaigns
+(and SiLUBackward in 2/3), which is reproducible allocation-byte movement and
+therefore vetoes promotion under the unrelaxed assigned gate. Statistical
+nonsignificance does not erase a separately required repeated-median veto. This
+result supports only this internal frozen-binary qualification; it makes no
+external-library, end-to-end model, or hardware leadership claim.
