@@ -28,9 +28,6 @@ DEC-004	go:nlp.Llama.SelfExtendForward	nlp/self_extend.go	205-258	47e882ed07cfcf
 M2-INCUMBENT-ATTRIBUTION-HARNESS-001	go:benchcompare.BenchmarkProdMetalProfiledDecodeGGUF	internal/benchcompare/prod_metal_profile_external_test.go	61-127	822d8faad69ec5cd	be62aced583aeee6
 MEASURED-VULKAN-BIAS-GRAD-ROUTE-001	go:vulkan.addBiasBackwardF32	backend/vulkan/vulkan.go	1250-1260	e00f000ef2504b5e	4ff1e2fd49285fed
 MEASURED-METAL-BIAS-GRAD-ROUTE-001	go:metal.addBiasBackwardF32	backend/metal/metal.go	1564-1574	74c74869199b8083	25108c6c075c962a
-MEASURED-METAL-SIMD-ACTIVATION-ROUTE-001	backend/metal/metal.go	-	0-0	-	a2fecb1a11d676f2
-MEASURED-METAL-SIMD-ACTIVATION-ROUTE-001	backend/metal/activation_route_arm64simd.go	-	0-0	-	a2fecb1a11d676f2
-MEASURED-METAL-SIMD-ACTIVATION-ROUTE-001	backend/metal/activation_route_default.go	-	0-0	-	a2fecb1a11d676f2
 MEASURED-METAL-UNARY-ROUTE-001	go:metal.unaryF32	backend/metal/metal.go	1382-1406	3f81e1cae1d2bb11	5eef401dedf69e71
 MEASURED-METAL-UNARY-ROUTE-001	backend/metal/unary_route_arm64_default.go	-	0-0	-	5eef401dedf69e71
 MEASURED-METAL-SIMD-UNARY-ROUTE-001	go:metal.unaryF32	backend/metal/metal.go	1382-1406	3f81e1cae1d2bb11	11c7d5992b6146af
@@ -433,3 +430,10 @@ SVC-RBF-SIMD-EXP-ROUTE-001	go:simd.ExpScaledF64	internal/simd/exp_f64_arm64.go	6
 SVC-RBF-SIMD-EXP-GATE-001	go:classic.kernelCache.column	classic/svm.go	347-484	5589e63a08230cc7	5d8de94c99f70b83
 ARM64-F64-EXP-SCOPE-001	go:cpu.vlogisticPairsNeonF64	backend/cpu/vexp_arm64.go	230-230	2b7693dc386ab77b	f6e68f76ffe459b4
 ARM64-F64-EXP-SCOPE-001	asm:cpu.vlogisticPairsNeonF64	backend/cpu/vexp_arm64.s	810-810	8166a48612807159	f6e68f76ffe459b4
+MEASURED-METAL-SIMD-ACTIVATION-ROUTE-001	go:metal.hostSIMDActivationCandidate	backend/metal/metal.go	1615-1626	6b45a677556c48d6	a2fecb1a11d676f2
+MEASURED-METAL-SIMD-ACTIVATION-ROUTE-001	go:metal.maxHostSIMDActivationElements	backend/metal/metal.go	1609-1609	5ceec40fbec00703	a2fecb1a11d676f2
+MEASURED-METAL-SIMD-ACTIVATION-ROUTE-001	go:metal.unaryF32	backend/metal/metal.go	1382-1406	3f81e1cae1d2bb11	a2fecb1a11d676f2
+MEASURED-METAL-SIMD-ACTIVATION-ROUTE-001	go:metal.geluBackwardF32	backend/metal/metal.go	1629-1636	45c1817eac048689	a2fecb1a11d676f2
+MEASURED-METAL-SIMD-ACTIVATION-ROUTE-001	go:metal.siluBackwardF32	backend/metal/metal.go	1667-1674	daca11f55485b638	a2fecb1a11d676f2
+MEASURED-METAL-SIMD-ACTIVATION-ROUTE-001	go:metal.hostSIMDActivationRouteEnabled	backend/metal/activation_route_arm64simd.go	7-7	bbf05735ef5a4931	a2fecb1a11d676f2
+MEASURED-METAL-SIMD-ACTIVATION-ROUTE-001	go:metal.hostSIMDActivationRouteEnabled~2	backend/metal/activation_route_default.go	6-6	82d0e8948d3258ad	a2fecb1a11d676f2
