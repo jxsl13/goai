@@ -1,0 +1,15 @@
+cgo+metal / macos	UNKNOWN STEP	2026-09-09T19:29:12.9764700Z SQ 512  goai-metal(MPS f32)    935.7 GFLOP/s
+cgo+metal / macos	UNKNOWN STEP	2026-09-09T19:29:12.9765080Z SQ 1024  goai-metal(MPS f32)   1672.3 GFLOP/s
+cgo+metal / macos	UNKNOWN STEP	2026-09-09T19:29:12.9765710Z NOISE gpu  min=16.3 med=31.9 max=35.8 GB/s  cv=21.13%  (min/med spread 106.4%)
+cgo+metal / macos	UNKNOWN STEP	2026-09-09T19:29:12.9766270Z MHA decode tinyllama  dk= 64 sk=  36  17.78 us/op
+cgo+metal / macos	UNKNOWN STEP	2026-09-09T19:29:12.9766640Z MHA decode tinyllama  dk= 64 sk= 512  28.61 us/op
+cgo+metal / macos	UNKNOWN STEP	2026-09-09T19:29:12.9767760Z MHA decode llama7b    dk=128 sk=  36  107.47 us/op
+cgo+metal / macos	UNKNOWN STEP	2026-09-09T19:29:12.9769420Z MHA decode llama7b    dk=128 sk= 512  817.75 us/op
+cgo+metal / macos	UNKNOWN STEP	2026-09-09T19:29:12.9769820Z --- FAIL: TestMHADecodeCost (8.21s)
+cgo+metal / macos	UNKNOWN STEP	2026-09-09T19:29:12.9773590Z     mha_decode_bench_test.go:81: llama7b dk=128 sk=512: 817.7 us/op — decode attention has regressed onto the dynamically-indexed path
+cgo+metal / macos	UNKNOWN STEP	2026-09-09T19:29:12.9774780Z CURVE gate/up K=2048 N=5632 — MPS efficiency vs M
+cgo+metal / macos	UNKNOWN STEP	2026-09-09T19:29:12.9775310Z CURVE M=   32  f16   693.8 GFLOP/s (10.2%)  f32   552.1 ( 8.1%)   f16 weight-read  21.7 GB/s
+cgo+metal / macos	UNKNOWN STEP	2026-09-09T19:29:12.9776290Z CURVE M=   64  f16   992.9 GFLOP/s (14.6%)  f32   558.6 ( 8.2%)   f16 weight-read  15.5 GB/s
+cgo+metal / macos	UNKNOWN STEP	2026-09-09T19:29:12.9776940Z CURVE M=   96  f16  1233.0 GFLOP/s (18.1%)  f32   586.7 ( 8.6%)   f16 weight-read  12.8 GB/s
+cgo+metal / macos	UNKNOWN STEP	2026-09-09T19:29:12.9779050Z CURVE M=  128  f16  1172.8 GFLOP/s (17.2%)  f32   594.4 ( 8.7%)   f16 weight-read   9.2 GB/s
+cgo+metal / macos	UNKNOWN STEP	2026-09-09T19:29:12.9779720Z CURVE M=  192  f16  1337.8 GFLOP/s (19.7%)  f32   608.6 ( 8.9%)   f16 weight-read   7.0 GB/s
