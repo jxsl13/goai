@@ -1,0 +1,67 @@
+Mutation attempts for the M2 F64 GELU intrinsic experiment.
+All temporary mutations were restored before the candidate was frozen.
+The first NaN-output attempt below is INVALID: it failed to compile and proves
+nothing about assertion sensitivity. It must not be counted as a caught mutation.
+
+=== mutation-onulp-default-activation.log ===
+--- FAIL: TestActivationBackwardF64CPUMatchesRef (0.02s)
+    activation_bwd_f64_test.go:45: gelu_backward i=0 x=-3: cpu -0.023891294408367836 != ref -0.02389129440836784 (must be bit-exact)
+FAIL
+FAIL	github.com/jxsl13/goai/backend/cpu	0.316s
+FAIL
+
+=== mutation-onulp-default-crossref.log ===
+--- FAIL: TestCPUGeluBackwardCrossReference (0.04s)
+    cpu_test.go:201: gelu_backward/f64 [0]: cpu -3.6521489697225005 != ref -3.652148969722501
+FAIL
+FAIL	github.com/jxsl13/goai/backend/cpu	0.269s
+FAIL
+
+=== mutation-onulp-simd-activation.log ===
+--- FAIL: TestActivationBackwardF64CPUMatchesRef (0.02s)
+    activation_bwd_f64_test.go:45: gelu_backward i=0 x=-3: cpu -0.023891294408367836 != ref -0.02389129440836784 (must be bit-exact)
+FAIL
+FAIL	github.com/jxsl13/goai/backend/cpu	0.258s
+FAIL
+
+=== mutation-onulp-simd-crossref.log ===
+--- FAIL: TestCPUGeluBackwardCrossReference (0.04s)
+    cpu_test.go:201: gelu_backward/f64 [0]: cpu -3.6521489697225005 != ref -3.652148969722501
+FAIL
+FAIL	github.com/jxsl13/goai/backend/cpu	0.281s
+FAIL
+
+=== mutation-simd-bounded-error.log ===
+--- FAIL: TestVGELUF64NeonEligibleAccuracyAndBodyTail (0.00s)
+    vgelu_f64_neon_test.go:146: got 1e-08, want -0
+FAIL
+FAIL	github.com/jxsl13/goai/backend/cpu	0.398s
+FAIL
+
+=== mutation-simd-nan-output.log ===
+# github.com/jxsl13/goai/backend/cpu [github.com/jxsl13/goai/backend/cpu.test]
+backend/cpu/vgelu_f64_arm64.go:209:3: declared and not used: erf
+FAIL	github.com/jxsl13/goai/backend/cpu [build failed]
+FAIL
+
+=== mutation-gate-off-public-reachability.log ===
+--- FAIL: TestVGELUF64NeonPublicReachability (0.04s)
+    --- FAIL: TestVGELUF64NeonPublicReachability/forward/n3 (0.00s)
+        vgelu_f64_neon_test.go:368: got -0.00095780702926921712 (bf4f62aaeeec6d81), want -0.00095780702926902544 (bf4f62aaeeec6699)
+    --- FAIL: TestVGELUF64NeonPublicReachability/backward/n3 (0.00s)
+        vgelu_f64_neon_test.go:420: got -6.4747967154435686e-14 (bd3239952dec8ea8), want -6.4747967154435699e-14 (bd3239952dec8ea9)
+    --- FAIL: TestVGELUF64NeonPublicReachability/forward/n4 (0.00s)
+        vgelu_f64_neon_test.go:368: got -0.00095780702926921712 (bf4f62aaeeec6d81), want -0.00095780702926902544 (bf4f62aaeeec6699)
+    --- FAIL: TestVGELUF64NeonPublicReachability/backward/n4 (0.00s)
+        vgelu_f64_neon_test.go:420: got -6.4747967154435686e-14 (bd3239952dec8ea8), want -6.4747967154435699e-14 (bd3239952dec8ea9)
+    --- FAIL: TestVGELUF64NeonPublicReachability/forward/n200003 (0.01s)
+        vgelu_f64_neon_test.go:368: got -0.00095780702926921712 (bf4f62aaeeec6d81), want -0.00095780702926902544 (bf4f62aaeeec6699)
+    --- FAIL: TestVGELUF64NeonPublicReachability/backward/n200003 (0.01s)
+        vgelu_f64_neon_test.go:420: got -6.4747967154435686e-14 (bd3239952dec8ea8), want -6.4747967154435699e-14 (bd3239952dec8ea9)
+    --- FAIL: TestVGELUF64NeonPublicReachability/forward/n262144 (0.01s)
+        vgelu_f64_neon_test.go:368: got -0.00095780702926921712 (bf4f62aaeeec6d81), want -0.00095780702926902544 (bf4f62aaeeec6699)
+    --- FAIL: TestVGELUF64NeonPublicReachability/backward/n262144 (0.01s)
+        vgelu_f64_neon_test.go:420: got -6.4747967154435686e-14 (bd3239952dec8ea8), want -6.4747967154435699e-14 (bd3239952dec8ea9)
+FAIL
+FAIL	github.com/jxsl13/goai/backend/cpu	0.467s
+FAIL

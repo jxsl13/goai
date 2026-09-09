@@ -2,18 +2,24 @@
 # Three isolated campaigns over prebuilt binaries with an identical harness.
 set -euo pipefail
 
-if [[ $# != 2 ]]; then
-  echo "usage: bash run.sh OLD_BINARY NEW_BINARY" >&2
+if [[ $# != 2 && $# != 3 ]]; then
+  echo "usage: bash run.sh OLD_BINARY NEW_BINARY [controls]" >&2
   exit 2
 fi
 old_binary=$1
 new_binary=$2
 [[ -x "$old_binary" && -x "$new_binary" ]]
 benchmark='^BenchmarkVGELUF64NeonBoundary$'
+fixtures='forward/backward; active/mixed; n2048/n262144'
+if [[ $# == 3 ]]; then
+  [[ $3 == controls ]] || { echo 'third argument must be controls' >&2; exit 2; }
+  benchmark='^Benchmark(SigmoidF64_64K_cpu|SoftplusF64_256K_cpu|SiLUBackwardF64_256K_cpu)$'
+  fixtures='non-target F64 Sigmoid/Softplus/SiLUBackward controls'
+fi
 
 echo 'protocol: three alternating count-seven campaigns; one-second samples'
 echo 'boundary: leaf is preallocated; Execute includes output allocation'
-echo 'fixtures: forward/backward; active/mixed; n2048/n262144'
+echo "fixtures: $fixtures"
 echo 'warmup: one second per arm and cell before each campaign; excluded'
 echo "old-sha256: $(shasum -a 256 "$old_binary" | awk '{print $1}')"
 echo "new-sha256: $(shasum -a 256 "$new_binary" | awk '{print $1}')"

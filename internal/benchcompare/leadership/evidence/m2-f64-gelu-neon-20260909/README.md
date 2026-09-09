@@ -1,6 +1,6 @@
 # M2 F64 GELU intrinsic experiment — September 9, 2026
 
-Status: control frozen; candidate implementation in progress. No candidate speedup or production
+Status: control and candidate frozen; independent verification in progress. No candidate speedup or production
 promotion is claimed by this record.
 
 ## Scope and pins
@@ -28,6 +28,7 @@ or other CPU-heavy workloads concurrently with measurement. Run:
 
 ```sh
 bash run.sh /absolute/path/to/control.test /absolute/path/to/candidate.test
+bash run.sh /absolute/path/to/control.test /absolute/path/to/candidate.test controls
 ```
 
 The runner prints binary SHA-256 hashes and campaign, pair, process-count, and
@@ -40,6 +41,10 @@ direction, distribution, size, and process-count dimensions. The declared large
 public-operation gate requires at least 1.25x serial and 1.05x parallel speedup,
 each with `p<0.05`, for both directions and both distributions in every campaign.
 Control regressions and allocation increases can veto promotion.
+The fixed non-target controls are F64 Sigmoid (65536 elements), Softplus
+(262144), and SiLU backward (262144), using existing unchanged public-operation
+harnesses and the same three-campaign protocol. They run separately, never
+concurrently with the GELU measurements.
 
 This internal comparison is not an external-library leadership claim. The
 previous scalar callback experiment was rejected; its profile is only motivation
@@ -61,13 +66,36 @@ and the frozen focused numerical, view, fallback, and existing exact tests.
 Those tests passed. The control's dense special-value fixture is an exact
 whole-wrapper fallback oracle, not proof that a future vector path runs.
 
-The implementer reported that the default exact oracles reject a one-ULP
-mutation in both build modes; raw mutation records are being captured before
-the runtime rewrite. Candidate acceptance also
+The default exact oracles reject a one-ULP mutation in both build modes;
+the public routing tests reject disabling the dedicated SIMD gate in both
+directions at 3, 4, 200003, and 262144 elements. Raw attempts, including an
+invalid non-compiling NaN mutation that does not count as evidence, are retained
+in [mutations.txt](mutations.txt). Candidate acceptance also
 requires independent numerical, special-value, input-immutability, aliasing,
 body/tail, allocation, routing, race, cross-build, and generated-code checks.
 Final commits, hashes, test outcomes, raw measurements, and the acceptance or
 rejection decision will be added when those checks have completed.
+
+Candidate runtime commit: `e766a961505adf071cae8642b8722082ebcaf48b`.
+The test-only verifier-gap repair is `dc954bc9343fb56c1cb0d659ce98e5af43dddf5c`;
+the frozen candidate built from it has SHA-256
+`045826effd7c6aab639a1b4c9e0e162e4eca03b6aaef56761291c248492301d7`.
+Its shared benchmark harness matches the control byte-for-byte. Initial
+independent review required stronger whole-wrapper fallback and public SIMD
+reachability coverage; those tests were repaired before measurement.
+
+Generated code contains real two-lane arithmetic, with the exp polynomial
+inlined into the erf helper. The wrappers still call that helper per pair and
+spill/reload vector inputs across it. This is a performance risk to measure,
+not proof of a speedup or compiler defect.
+
+During an earlier test mutation, a Spectackle auto-commit captured the temporary
+scalar change. It was pushed only to the draft branch, caught by CI, and restored
+in `fc60945b7d8ab817e080aef3753da75d4d647e7d`; it never reached main.
+[PR incident record](https://github.com/jxsl13/goai/pull/1249#issuecomment-5604611720).
+The corrected checkpoint passed all 16 CI jobs and their individual steps.
+New process contracts serialize mutations with every committing operation and
+require immediate verification of the committed runtime diff before pushing.
 
 ## Further reading
 
