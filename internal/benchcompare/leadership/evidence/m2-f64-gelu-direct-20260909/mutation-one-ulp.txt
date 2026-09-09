@@ -7,4 +7,3 @@
 FAIL
 FAIL	github.com/jxsl13/goai/backend/cpu	0.563s
 FAIL
-

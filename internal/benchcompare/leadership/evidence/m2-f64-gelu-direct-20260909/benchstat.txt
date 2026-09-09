@@ -75,4 +75,3 @@ GELUBackwardF64DirectDispatch/n2048-12     5.000 ± 0%   5.000 ± 0%       ~ (p=
 GELUBackwardF64DirectDispatch/n262144-12   6.000 ± 0%   6.000 ± 0%       ~ (p=1.000 n=7) ¹
 geomean                                    5.233        5.233       +0.00%
 ¹ all samples are equal
-

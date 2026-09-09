@@ -160,4 +160,3 @@ cpu: Apple M2 Pro
 BenchmarkGELUBackwardF64_256K_cpu-12    	     753	    801648 ns/op	 2097533 B/op	       6 allocs/op
 BenchmarkGELUF64_256x2048_cpu-12        	     619	    953203 ns/op	 4194652 B/op	       6 allocs/op
 PASS
-
