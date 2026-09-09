@@ -1,6 +1,6 @@
 # M2 F64 GELU intrinsic experiment — September 9, 2026
 
-Status: test-first validation in progress. No candidate speedup or production
+Status: control frozen; candidate implementation in progress. No candidate speedup or production
 promotion is claimed by this record.
 
 ## Scope and pins
@@ -47,8 +47,23 @@ for investigating the transcendental cost here.
 
 ## Verification record
 
-Before runtime changes, the implementer must freeze the control after proving
-the default exact oracles reject a one-ULP mutation. Candidate acceptance also
+The test-only control was frozen before runtime changes:
+
+- Source commit: `dd1e779eb085bb621ed5dafff0a4351636b6e656`.
+- Control binary SHA-256:
+  `c95691bc1a7289094bc523250fde7a9cae614756635b78701e9c306962b246cb`.
+- Shared harness SHA-256:
+  `b53599699510a31f3a2d086f08f1b11b968b9ad1f25941e75c8a1f62fc49c9f3`.
+- Binary metadata: `go1.27.1-X:simd`, Darwin ARM64/v8.0, `CGO_ENABLED=0`.
+
+The parent independently checked those hashes, the unchanged production diff,
+and the frozen focused numerical, view, fallback, and existing exact tests.
+Those tests passed. The control's dense special-value fixture is an exact
+whole-wrapper fallback oracle, not proof that a future vector path runs.
+
+The implementer reported that the default exact oracles reject a one-ULP
+mutation in both build modes; raw mutation records are being captured before
+the runtime rewrite. Candidate acceptance also
 requires independent numerical, special-value, input-immutability, aliasing,
 body/tail, allocation, routing, race, cross-build, and generated-code checks.
 Final commits, hashes, test outcomes, raw measurements, and the acceptance or
