@@ -181,7 +181,7 @@ WHEN an ARM64 GELU wrapper call contains any lane outside the declared eligibili
 ## ARM64-F64-GELU-PERF-001 {applies: go:cpu.geluKernelCPU,go:cpu.geluBackwardF64KernelCPU}
 WHEN three paired count-seven M2 Go1.27.1 campaigns measure 262144-element GELU forward and backward, the promotion gate SHALL require 1.25x serial and 1.05x parallel public-operation speedup with p below 0.05 in every campaign.
 
-## ARM64-F64-GELU-EXP-ORDER-001 {applies: go:cpu.geluBackwardF64KernelCPU}
+## ARM64-F64-GELU-EXP-ORDER-001 {applies: go:cpu.vgeluGradF64~3}
 WHEN the ARM64 SIMD backward kernel evaluates the erfc and PDF factors, the exponential composition SHALL evaluate exp(-y*y) and exp(-0.5*x*x) separately with y=x*invSqrt2, preserving each rounded argument.
 
 ## ARM64-F64-GELU-CONTROLS-001 {applies: go:cpu.geluKernelCPU,go:cpu.geluBackwardF64KernelCPU}
