@@ -1,0 +1,2671 @@
+Implementation verification; pinned Go1.27.1, CGO_ENABLED=1, GOTOOLCHAIN=local.
+Compiler: /private/tmp/goai-go1271-j1cLvq/go/bin/go
+These are implementer logs; independent verification is separate.
+
+=== focused-short-default ===
+=== RUN   TestPrefillOpCosts
+    prefill_ops_bench_test.go:108: prefill op RMSNorm rows=64 d=2048 smoke complete
+    prefill_ops_bench_test.go:108: prefill op SwiGLU 64x5632 smoke complete
+    prefill_ops_bench_test.go:108: prefill op residual add 64x2048 smoke complete
+    prefill_ops_bench_test.go:108: prefill op attention sq=64 sk=64 smoke complete
+    prefill_ops_bench_test.go:108: prefill op attention sq=64 sk=128 smoke complete
+--- PASS: TestPrefillOpCosts (0.02s)
+PASS
+ok  	github.com/jxsl13/goai/backend/metal	0.325s
+
+=== focused-short-simd ===
+=== RUN   TestPrefillOpCosts
+    prefill_ops_bench_test.go:108: prefill op RMSNorm rows=64 d=2048 smoke complete
+    prefill_ops_bench_test.go:108: prefill op SwiGLU 64x5632 smoke complete
+    prefill_ops_bench_test.go:108: prefill op residual add 64x2048 smoke complete
+    prefill_ops_bench_test.go:108: prefill op attention sq=64 sk=64 smoke complete
+    prefill_ops_bench_test.go:108: prefill op attention sq=64 sk=128 smoke complete
+--- PASS: TestPrefillOpCosts (0.02s)
+PASS
+ok  	github.com/jxsl13/goai/backend/metal	0.426s
+
+=== focused-full-default ===
+=== RUN   TestPrefillOpCosts
+prefill op RMSNorm rows=64 d=2048     10.51 us
+prefill op SwiGLU 64x5632             11.04 us
+prefill op residual add 64x2048        4.93 us
+prefill op attention sq=64 sk=64      23.22 us
+prefill op attention sq=64 sk=128    347.63 us
+--- PASS: TestPrefillOpCosts (0.94s)
+PASS
+ok  	github.com/jxsl13/goai/backend/metal	1.245s
+
+=== focused-full-simd ===
+=== RUN   TestPrefillOpCosts
+prefill op RMSNorm rows=64 d=2048      5.80 us
+prefill op SwiGLU 64x5632              8.00 us
+prefill op residual add 64x2048        3.92 us
+prefill op attention sq=64 sk=64      21.80 us
+prefill op attention sq=64 sk=128    349.66 us
+--- PASS: TestPrefillOpCosts (0.91s)
+PASS
+ok  	github.com/jxsl13/goai/backend/metal	1.218s
+
+=== metal-short-default ===
+=== RUN   TestMetalDefaultActivationRouteRemainsDirect
+=== RUN   TestMetalDefaultActivationRouteRemainsDirect/gelu
+=== RUN   TestMetalDefaultActivationRouteRemainsDirect/gelu_backward
+=== RUN   TestMetalDefaultActivationRouteRemainsDirect/silu
+=== RUN   TestMetalDefaultActivationRouteRemainsDirect/silu_backward
+--- PASS: TestMetalDefaultActivationRouteRemainsDirect (0.01s)
+    --- PASS: TestMetalDefaultActivationRouteRemainsDirect/gelu (0.00s)
+    --- PASS: TestMetalDefaultActivationRouteRemainsDirect/gelu_backward (0.00s)
+    --- PASS: TestMetalDefaultActivationRouteRemainsDirect/silu (0.00s)
+    --- PASS: TestMetalDefaultActivationRouteRemainsDirect/silu_backward (0.00s)
+=== RUN   TestMetalAddBiasBackwardMeasuredThresholdRoutesBothArms
+=== RUN   TestMetalAddBiasBackwardMeasuredThresholdRoutesBothArms/below-to-cpu
+=== RUN   TestMetalAddBiasBackwardMeasuredThresholdRoutesBothArms/above-to-metal
+--- PASS: TestMetalAddBiasBackwardMeasuredThresholdRoutesBothArms (0.02s)
+    --- PASS: TestMetalAddBiasBackwardMeasuredThresholdRoutesBothArms/below-to-cpu (0.00s)
+    --- PASS: TestMetalAddBiasBackwardMeasuredThresholdRoutesBothArms/above-to-metal (0.02s)
+=== RUN   TestMetalAddBiasMeasuredThresholdRoutesBothArms
+=== RUN   TestMetalAddBiasMeasuredThresholdRoutesBothArms/below-to-cpu
+=== RUN   TestMetalAddBiasMeasuredThresholdRoutesBothArms/above-to-metal
+--- PASS: TestMetalAddBiasMeasuredThresholdRoutesBothArms (0.08s)
+    --- PASS: TestMetalAddBiasMeasuredThresholdRoutesBothArms/below-to-cpu (0.01s)
+    --- PASS: TestMetalAddBiasMeasuredThresholdRoutesBothArms/above-to-metal (0.08s)
+=== RUN   TestAttnDK64Specializations
+    attn_dk64_bench_test.go:39: timing guard calibrated for this project's M2; runner GPUs invert it
+--- SKIP: TestAttnDK64Specializations (0.00s)
+=== RUN   TestConcurrentRecorderToggleDependenciesAndBoundaries
+--- PASS: TestConcurrentRecorderToggleDependenciesAndBoundaries (0.00s)
+=== RUN   TestRecorderResetRequiresFreeAndReopensSelectedMode
+--- PASS: TestRecorderResetRequiresFreeAndReopensSelectedMode (0.00s)
+=== RUN   TestDecodeAttnOccupancy
+OCC mha_decode generic=1024 dk64=384 dk128=1024 splitK_p1=384 splitK_p2=448
+--- PASS: TestDecodeAttnOccupancy (0.00s)
+=== RUN   TestDecodeAttnRoofline
+ROOF sk=  512    47.87us    21.9 GB/s (12.2% of 180)     87.6 GFLOP/s ( 1.3% of 6800)
+ROOF   f16 KV would cut bytes to 0.5 MB -> saves at most 2.91us of 47.87us (6.1%)
+ROOF sk= 1536    41.08us    76.6 GB/s (42.5% of 180)    306.3 GFLOP/s ( 4.5% of 6800)
+ROOF   f16 KV would cut bytes to 1.6 MB -> saves at most 8.74us of 41.08us (21.3%)
+ROOF sk= 2048    53.64us    78.2 GB/s (43.4% of 180)    312.8 GFLOP/s ( 4.6% of 6800)
+ROOF   f16 KV would cut bytes to 2.1 MB -> saves at most 11.65us of 53.64us (21.7%)
+--- PASS: TestDecodeAttnRoofline (0.05s)
+=== RUN   TestDecodeMatmulIsAtMemoryCeiling
+    decode_bandwidth_ceiling_test.go:60: timing guard calibrated for this project's M2; runner GPUs invert it
+--- SKIP: TestDecodeMatmulIsAtMemoryCeiling (0.00s)
+=== RUN   TestDecodeLeaveOneOut
+LOO full chain (22 layers) = 4605.0us  -> 217.2 tok/s if this were the whole token
+LOO without matmul          677.8us   contribution  3927.3us (85.3%)
+LOO without attention      4196.4us   contribution   408.7us ( 8.9%)
+LOO without rmsnorm        4460.6us   contribution   144.5us ( 3.1%)
+LOO without elementwise    4593.4us   contribution    11.7us ( 0.3%)
+--- PASS: TestDecodeLeaveOneOut (0.58s)
+=== RUN   TestDecodeNonMatmulBreakdown
+DEC --- attention vs context length (sq=1) ---
+DEC   sk=   64     14.24us  reads   0.13 MB     9.2 GB/s
+DEC   sk=  128      8.35us  reads   0.26 MB    31.4 GB/s
+DEC   sk=  256     10.90us  reads   0.52 MB    48.1 GB/s
+DEC   sk=  512     17.26us  reads   1.05 MB    60.8 GB/s
+DEC   sk= 1024     29.03us  reads   2.10 MB    72.2 GB/s
+DEC   sk= 2048     55.31us  reads   4.19 MB    75.8 GB/s
+DEC op                 n/tok    us/each   us/token
+DEC rmsnorm (1 row)       44       4.66      204.9
+DEC attention sq=1        22      15.91      349.9
+DEC binary dim            44       1.62       71.2
+DEC binary hidden         22       1.66       36.4
+DEC silu hidden           22       1.74       38.2
+DEC SUM                                      700.7 us/token (non-matmul, measured pieces)
+--- PASS: TestDecodeNonMatmulBreakdown (0.06s)
+=== RUN   TestDequantGemmCrossover
+dequant+GEMM M= 64: coop 1954.8us vs 739.8us = 2.64x (maxRel 8.09e-05)
+dequant+GEMM M=256: coop 18862.9us vs 1426.9us = 13.22x (maxRel 0.00e+00)
+--- PASS: TestDequantGemmCrossover (1.18s)
+=== RUN   TestIsolatedOpCostIsNotAdditive
+FIX rmsnorm rows-sweep (dim=2048):
+FIX   rows=  1     4.82us  (   24.0 KB,  4.74 GB/s)
+FIX   rows=  2     4.66us  (   48.0 KB,  9.82 GB/s)
+FIX   rows=  4     4.76us  (   96.0 KB, 19.23 GB/s)
+FIX   rows=  8     4.82us  (  192.0 KB, 37.95 GB/s)
+FIX   rows= 16     4.85us  (  384.0 KB, 75.57 GB/s)
+FIX   rows= 32     5.12us  (  768.0 KB, 143.03 GB/s)
+FIX   rows= 64     5.21us  ( 1536.0 KB, 281.25 GB/s)
+FIX   fit: fixed = 4.72us/dispatch, marginal = 0.008us/row
+FIX   at rows=1 the fixed part is 98% of the call
+FIX pair: qmatmul alone 36.77us, rmsnorm+qmatmul 43.99us -> fusing saves 7.22us (16%)
+FIX projected: 44 rmsnorm/token x 7.22us = 318us of a ~5740us token (5.5%)
+--- PASS: TestIsolatedOpCostIsNotAdditive (0.05s)
+=== RUN   TestDQGemmCostSplit
+SPLIT dequant-only = 254.4us (writes 46.1 MB f32)
+SPLIT M=  64 gemm-only =    378.6us  dequant share = 40.2%
+SPLIT M= 256 gemm-only =   1144.4us  dequant share = 18.2%
+SPLIT M=1024 gemm-only =   4430.6us  dequant share =  5.4%
+--- PASS: TestDQGemmCostSplit (0.19s)
+=== RUN   TestEncodeHostCost
+encode host cost: 0.44 us/dispatch
+--- PASS: TestEncodeHostCost (0.05s)
+=== RUN   TestEncoderOverheadIsBelowNoise
+ENC n=330 per-encoder=  1     459.3us total    1.39us/dispatch
+ENC n=330 per-encoder=  2     437.1us total    1.32us/dispatch
+ENC n=330 per-encoder=  4     431.3us total    1.31us/dispatch
+ENC n=330 per-encoder=  8     420.6us total    1.27us/dispatch
+ENC n=330 per-encoder= 16     418.4us total    1.27us/dispatch
+ENC n=330 per-encoder=330     404.7us total    1.23us/dispatch
+--- PASS: TestEncoderOverheadIsBelowNoise (0.09s)
+=== RUN   TestRoPEF16KVAppendExactParityAndCacheBounds
+=== RUN   TestRoPEF16KVAppendExactParityAndCacheBounds/pos0
+=== RUN   TestRoPEF16KVAppendExactParityAndCacheBounds/pos1
+=== RUN   TestRoPEF16KVAppendExactParityAndCacheBounds/pos127
+--- PASS: TestRoPEF16KVAppendExactParityAndCacheBounds (0.01s)
+    --- PASS: TestRoPEF16KVAppendExactParityAndCacheBounds/pos0 (0.00s)
+    --- PASS: TestRoPEF16KVAppendExactParityAndCacheBounds/pos1 (0.00s)
+    --- PASS: TestRoPEF16KVAppendExactParityAndCacheBounds/pos127 (0.00s)
+=== RUN   TestRoPEPairF16KVAppendExactParityAndCacheBounds
+=== RUN   TestRoPEPairF16KVAppendExactParityAndCacheBounds/pos0
+=== RUN   TestRoPEPairF16KVAppendExactParityAndCacheBounds/pos1
+=== RUN   TestRoPEPairF16KVAppendExactParityAndCacheBounds/pos127
+--- PASS: TestRoPEPairF16KVAppendExactParityAndCacheBounds (0.00s)
+    --- PASS: TestRoPEPairF16KVAppendExactParityAndCacheBounds/pos0 (0.00s)
+    --- PASS: TestRoPEPairF16KVAppendExactParityAndCacheBounds/pos1 (0.00s)
+    --- PASS: TestRoPEPairF16KVAppendExactParityAndCacheBounds/pos127 (0.00s)
+=== RUN   TestRoPEPairF16KVAppendProfileProvesDistinctToggleArms
+=== RUN   TestRoPEPairF16KVAppendProfileProvesDistinctToggleArms/control
+=== RUN   TestRoPEPairF16KVAppendProfileProvesDistinctToggleArms/candidate
+--- PASS: TestRoPEPairF16KVAppendProfileProvesDistinctToggleArms (0.00s)
+    --- PASS: TestRoPEPairF16KVAppendProfileProvesDistinctToggleArms/control (0.00s)
+    --- PASS: TestRoPEPairF16KVAppendProfileProvesDistinctToggleArms/candidate (0.00s)
+=== RUN   TestRoPEF16KVAppendProfileProvesDistinctToggleArms
+=== RUN   TestRoPEF16KVAppendProfileProvesDistinctToggleArms/control
+=== RUN   TestRoPEF16KVAppendProfileProvesDistinctToggleArms/candidate
+--- PASS: TestRoPEF16KVAppendProfileProvesDistinctToggleArms (0.00s)
+    --- PASS: TestRoPEF16KVAppendProfileProvesDistinctToggleArms/control (0.00s)
+    --- PASS: TestRoPEF16KVAppendProfileProvesDistinctToggleArms/candidate (0.00s)
+=== RUN   TestRoPEF16KVAppendInterleavedCampaigns
+    f16kv_test.go:478: timing-only Metal promotion campaign; skipped in -short
+--- SKIP: TestRoPEF16KVAppendInterleavedCampaigns (0.00s)
+=== RUN   TestMedianSpeedupThreshold
+=== RUN   TestMedianSpeedupThreshold/accept_exact_threshold
+=== RUN   TestMedianSpeedupThreshold/reject_below_threshold
+--- PASS: TestMedianSpeedupThreshold (0.00s)
+    --- PASS: TestMedianSpeedupThreshold/accept_exact_threshold (0.00s)
+    --- PASS: TestMedianSpeedupThreshold/reject_below_threshold (0.00s)
+=== RUN   TestF32ToF16CacheRoundingGolden
+--- PASS: TestF32ToF16CacheRoundingGolden (0.00s)
+=== RUN   TestF16KVAttentionParityAndStorage
+=== RUN   TestF16KVAttentionParityAndStorage/ctx1
+=== RUN   TestF16KVAttentionParityAndStorage/ctx127
+=== RUN   TestF16KVAttentionParityAndStorage/ctx512
+--- PASS: TestF16KVAttentionParityAndStorage (0.00s)
+    --- PASS: TestF16KVAttentionParityAndStorage/ctx1 (0.00s)
+    --- PASS: TestF16KVAttentionParityAndStorage/ctx127 (0.00s)
+    --- PASS: TestF16KVAttentionParityAndStorage/ctx512 (0.00s)
+=== RUN   TestF16KVAttentionProfileProvesSpecializedPath
+--- PASS: TestF16KVAttentionProfileProvesSpecializedPath (0.00s)
+=== RUN   TestF16KVAttentionInterleavedAB
+    f16kv_test.go:866: ctx=128 f32_gpu=13.87us f16kv_gpu=9.67us gpu_speedup=1.435x f32_host=173.38us f16kv_host=165.58us host_speedup=1.047x
+    f16kv_test.go:866: ctx=512 f32_gpu=21.54us f16kv_gpu=13.29us gpu_speedup=1.621x f32_host=176.46us f16kv_host=166.33us host_speedup=1.061x
+    f16kv_test.go:866: ctx=1024 f32_gpu=37.38us f16kv_gpu=17.13us gpu_speedup=2.183x f32_host=193.92us f16kv_host=170.42us host_speedup=1.138x
+    f16kv_test.go:866: ctx=2048 f32_gpu=62.92us f16kv_gpu=29.37us gpu_speedup=2.142x f32_host=215.54us f16kv_host=182.00us host_speedup=1.184x
+--- PASS: TestF16KVAttentionInterleavedAB (0.10s)
+=== RUN   TestFlashMMMatchesReference
+FMM seq=   8  maxRel=4.497e-05  NaN=0
+FMM seq=  32  maxRel=5.838e-05  NaN=0
+FMM seq=  64  maxRel=5.838e-05  NaN=0
+FMM seq= 129  maxRel=5.838e-05  NaN=0
+--- PASS: TestFlashMMMatchesReference (0.01s)
+=== RUN   TestGEMMColdWeightsMatchWarm
+COLD gate/up K=2048 N=5632 — 8 rotating weight buffers, arms alternated
+COLD M=   64  f16  67.5%  f32  51.6%   f32/f16 = 1.309  -> f16 faster
+COLD M=  128  f16  68.8%  f32  66.6%   f32/f16 = 1.033  -> f16 faster
+COLD M=  512  f16  74.3%  f32  76.5%   f32/f16 = 0.971  -> f32 faster
+COLD M= 1024  f16  75.9%  f32  78.3%   f32/f16 = 0.969  -> f32 faster
+--- PASS: TestGEMMColdWeightsMatchWarm (3.85s)
+=== RUN   TestGEMMDtypeInterleaved
+INTER gate/up K=2048 N=5632 — arms ALTERNATED, min of 6 alternations
+INTER M=  64  f16  67.8%  f32  52.8%   ratio f32/f16 = 1.283  -> f16 faster
+INTER M= 128  f16  69.0%  f32  67.3%   ratio f32/f16 = 1.025  -> f16 faster
+INTER M= 512  f16  74.5%  f32  76.7%   ratio f32/f16 = 0.970  -> f32 faster
+--- PASS: TestGEMMDtypeInterleaved (1.19s)
+=== RUN   TestGEMMF16OnlyWinsWhenBandwidthBound
+F16 M=  64 f32=   415.2us ( 3556 GFLOP/s) f16=   320.9us ( 4601 GFLOP/s)  1.29x
+F16 M= 256 f32=  1145.7us ( 5154 GFLOP/s) f16=  1180.9us ( 5001 GFLOP/s)  0.97x
+F16 M=1024 f32=  4437.2us ( 5324 GFLOP/s) f16=  4575.2us ( 5163 GFLOP/s)  0.97x
+--- PASS: TestGEMMF16OnlyWinsWhenBandwidthBound (0.35s)
+=== RUN   TestHandwrittenGEMMBaseline
+SGG M=   64  hand-written 2032.4 GFLOP/s (29.9%)   MPS f16 4622.4 (68.0%)   ratio 0.44
+SGG M=  512  hand-written 2597.6 GFLOP/s (38.2%)   MPS f16 5058.9 (74.4%)   ratio 0.51
+SGG M= 1024  hand-written 2612.0 GFLOP/s (38.4%)   MPS f16 5164.6 (76.0%)   ratio 0.51
+--- PASS: TestHandwrittenGEMMBaseline (3.63s)
+=== RUN   TestHandwrittenGEMMIsCorrect
+GCHK M= 64 K=  64 N= 32  maxRel=5.513e-03  NaN=0
+GCHK M= 64 K=2048 N= 64  maxRel=3.714e-02  NaN=0
+GCHK M= 96 K= 128 N= 48  maxRel=8.905e-03  NaN=0
+GCHK M=512 K= 256 N=128  maxRel=1.674e-02  NaN=0
+--- PASS: TestHandwrittenGEMMIsCorrect (0.04s)
+=== RUN   TestRecorderMatMulStridedB
+--- PASS: TestRecorderMatMulStridedB (0.00s)
+=== RUN   TestMatMulSquareShapesVsTorch
+SQ 256  goai-metal(MPS f32)   1891.5 GFLOP/s
+SQ 512  goai-metal(MPS f32)   4149.5 GFLOP/s
+SQ 1024  goai-metal(MPS f32)   4957.3 GFLOP/s
+--- PASS: TestMatMulSquareShapesVsTorch (0.10s)
+=== RUN   TestMeasurementNoiseFloor
+NOISE gpu  min=116.1 med=123.7 max=130.5 GB/s  cv=1.91%  (min/med spread 11.7%)
+--- PASS: TestMeasurementNoiseFloor (0.25s)
+=== RUN   TestMHADecodeCost
+MHA decode tinyllama  dk= 64 sk=  36  13.51 us/op
+MHA decode tinyllama  dk= 64 sk= 512  16.75 us/op
+MHA decode llama7b    dk=128 sk=  36  66.48 us/op
+MHA decode llama7b    dk=128 sk= 512  276.77 us/op
+--- PASS: TestMHADecodeCost (2.78s)
+=== RUN   TestMHATwoPassMatchesReference
+=== RUN   TestMHATwoPassMatchesReference/noncausal-dk64
+=== RUN   TestMHATwoPassMatchesReference/noncausal-dk64-gqa
+=== RUN   TestMHATwoPassMatchesReference/window-dk64
+=== RUN   TestMHATwoPassMatchesReference/noncausal-dk32
+=== RUN   TestMHATwoPassMatchesReference/noncausal-dk48
+--- PASS: TestMHATwoPassMatchesReference (0.00s)
+    --- PASS: TestMHATwoPassMatchesReference/noncausal-dk64 (0.00s)
+    --- PASS: TestMHATwoPassMatchesReference/noncausal-dk64-gqa (0.00s)
+    --- PASS: TestMHATwoPassMatchesReference/window-dk64 (0.00s)
+    --- PASS: TestMHATwoPassMatchesReference/noncausal-dk32 (0.00s)
+    --- PASS: TestMHATwoPassMatchesReference/noncausal-dk48 (0.00s)
+=== RUN   TestMixedQGroupExactExpansionAndBoundedParity
+    mixed_qgroup_test.go:153: M=64 segment=0 exact=0/16384 maxAbs=0.963257 nrmse=0.000229429
+    mixed_qgroup_test.go:153: M=64 segment=1 exact=0/4096 maxAbs=3.00488 nrmse=0.00026304
+    mixed_qgroup_test.go:153: M=64 segment=2 exact=0/4096 maxAbs=0.203621 nrmse=0.000888404
+    mixed_qgroup_test.go:153: M=512 segment=0 exact=0/131072 maxAbs=1.25708 nrmse=0.000241804
+    mixed_qgroup_test.go:153: M=512 segment=1 exact=8/32768 maxAbs=3.13135 nrmse=0.000259249
+    mixed_qgroup_test.go:153: M=512 segment=2 exact=1/32768 maxAbs=0.281738 nrmse=0.000897414
+--- PASS: TestMixedQGroupExactExpansionAndBoundedParity (0.02s)
+=== RUN   TestMixedQGroupProfileProvesOneGEMM
+--- PASS: TestMixedQGroupProfileProvesOneGEMM (0.00s)
+=== RUN   TestRoPEPairSplitExact
+--- PASS: TestRoPEPairSplitExact (0.00s)
+=== RUN   TestMixedQGroupProjectionGate
+    mixed_qgroup_test.go:364: set GOAI_MIXED_QKV_PERF=1 for the M2 promotion benchmark
+--- SKIP: TestMixedQGroupProjectionGate (0.00s)
+=== RUN   TestMPSEfficiencyCurveVsM
+CURVE gate/up K=2048 N=5632 — MPS efficiency vs M
+CURVE M=   32  f16  3181.7 GFLOP/s (46.8%)  f32  2871.9 (42.2%)   f16 weight-read  99.4 GB/s
+CURVE M=   64  f16  4687.6 GFLOP/s (68.9%)  f32  3174.9 (46.7%)   f16 weight-read  73.2 GB/s
+CURVE M=   96  f16  4224.9 GFLOP/s (62.1%)  f32  4312.9 (63.4%)   f16 weight-read  44.0 GB/s
+CURVE M=  128  f16  4159.6 GFLOP/s (61.2%)  f32  4051.2 (59.6%)   f16 weight-read  32.5 GB/s
+CURVE M=  192  f16  4745.3 GFLOP/s (69.8%)  f32  4370.4 (64.3%)   f16 weight-read  24.7 GB/s
+CURVE M=  256  f16  4958.5 GFLOP/s (72.9%)  f32  4689.6 (69.0%)   f16 weight-read  19.4 GB/s
+CURVE M=  512  f16  5019.5 GFLOP/s (73.8%)  f32  4781.5 (70.3%)   f16 weight-read   9.8 GB/s
+CURVE M= 1024  f16  5098.4 GFLOP/s (75.0%)  f32  4852.4 (71.4%)   f16 weight-read   5.0 GB/s
+--- PASS: TestMPSEfficiencyCurveVsM (0.66s)
+=== RUN   TestMPSGemmEfficiencyByShape
+MPS M= 512 q/o   2048x2048    f32  4534.9 GFLOP/s (66.7%)  f16  4734.3 (69.6%)
+MPS M= 512 k/v   2048x256     f32  3077.1 GFLOP/s (45.3%)  f16  3426.8 (50.4%)
+MPS M= 512 gate/up 2048x5632  f32  4759.5 GFLOP/s (70.0%)  f16  5014.6 (73.7%)
+MPS M= 512 down  5632x2048    f32  4493.1 GFLOP/s (66.1%)  f16  4735.2 (69.6%)
+MPS M=1024 q/o   2048x2048    f32  4871.2 GFLOP/s (71.6%)  f16  4986.7 (73.3%)
+MPS M=1024 k/v   2048x256     f32  4232.9 GFLOP/s (62.2%)  f16  4156.4 (61.1%)
+MPS M=1024 gate/up 2048x5632  f32  4834.7 GFLOP/s (71.1%)  f16  5094.4 (74.9%)
+MPS M=1024 down  5632x2048    f32  4851.3 GFLOP/s (71.3%)  f16  4979.9 (73.2%)
+--- PASS: TestMPSGemmEfficiencyByShape (1.01s)
+=== RUN   TestPrefillAttentionRouting
+prefill attention seq=64: decode-kernel vs flash agree to 2.38e-05
+prefill attention seq=128: decode-kernel vs flash agree to 2.38e-05
+--- PASS: TestPrefillAttentionRouting (0.01s)
+=== RUN   TestPrefillLeaveOneOut
+PLOO full prefill chain (22 layers, M=512) = 339.49 ms -> 1508 tok/s
+PLOO without matmul         21.33 ms   contribution 318.15 ms (93.7%)
+PLOO without attention     327.80 ms   contribution  11.69 ms ( 3.4%)
+PLOO without rmsnorm       339.77 ms   contribution  -0.29 ms (-0.1%)
+PLOO without elementwise   331.61 ms   contribution   7.87 ms ( 2.3%)
+--- PASS: TestPrefillLeaveOneOut (9.97s)
+=== RUN   TestPrefillOpCosts
+    prefill_ops_bench_test.go:108: prefill op RMSNorm rows=64 d=2048 smoke complete
+    prefill_ops_bench_test.go:108: prefill op SwiGLU 64x5632 smoke complete
+    prefill_ops_bench_test.go:108: prefill op residual add 64x2048 smoke complete
+    prefill_ops_bench_test.go:108: prefill op attention sq=64 sk=64 smoke complete
+    prefill_ops_bench_test.go:108: prefill op attention sq=64 sk=128 smoke complete
+--- PASS: TestPrefillOpCosts (0.00s)
+=== RUN   TestQ2KWordLoadRouteScope
+--- PASS: TestQ2KWordLoadRouteScope (0.00s)
+=== RUN   TestQ4KMatrixUnitHasNoCrossover
+    q4k_mm_crossover_test.go:68: timing guard calibrated for this project's M2; runner GPUs invert it
+--- SKIP: TestQ4KMatrixUnitHasNoCrossover (0.00s)
+=== RUN   TestQ4KMatrixUnitMatchesCooperative
+    q4k_mm_parity_test.go:93: M=8 K=256 N=8: max relative 0.000e+00
+    q4k_mm_parity_test.go:93: M=8 K=512 N=16: max relative 0.000e+00
+    q4k_mm_parity_test.go:93: M=9 K=256 N=13: max relative 0.000e+00
+    q4k_mm_parity_test.go:93: M=16 K=768 N=32: max relative 0.000e+00
+    q4k_mm_parity_test.go:93: M=33 K=256 N=40: max relative 0.000e+00
+    q4k_mm_parity_test.go:93: M=64 K=512 N=24: max relative 0.000e+00
+--- PASS: TestQ4KMatrixUnitMatchesCooperative (0.00s)
+=== RUN   TestQ4KDecodeRoofline
+Q4K roofline K=2048 N=2048 weight=2.2MB per-op=15.3us 154.5 GB/s
+Q4K roofline K=2048 N=5632 weight=6.2MB per-op=37.2us 174.2 GB/s
+Q4K roofline K=2048 N=16384 weight=18.0MB per-op=99.9us 188.9 GB/s
+Q4K roofline K=2048 N=131072 weight=144.0MB per-op=813.8us 185.5 GB/s
+--- PASS: TestQ4KDecodeRoofline (1.47s)
+=== RUN   TestQ5KWideLoadRouteScope
+--- PASS: TestQ5KWideLoadRouteScope (0.00s)
+=== RUN   TestQ6KDequantExact
+Q6DQ max abs weight error vs CPU decode = 0.000e+00
+--- PASS: TestQ6KDequantExact (0.00s)
+=== RUN   TestQ6KDequantGemmMatchesCooperative
+    q6k_dqgemm_parity_test.go:90: M=32 K=256 N=32: max relative 6.104e-05
+    q6k_dqgemm_parity_test.go:90: M=32 K=512 N=40: max relative 2.106e-04
+    q6k_dqgemm_parity_test.go:90: M=64 K=2048 N=64: max relative 1.326e-04
+    q6k_dqgemm_parity_test.go:90: M=24 K=768 N=33: max relative 1.206e-04
+--- PASS: TestQ6KDequantGemmMatchesCooperative (0.01s)
+=== RUN   TestQ6KDecodeRoofline
+    q6k_roofline_bench_test.go:19: Q6_K roofline allocates a cache-busting resident weight
+--- SKIP: TestQ6KDecodeRoofline (0.00s)
+=== RUN   TestQKVFusionValue
+FUSE M=64  current(12 fused,10 unfused)=8.274 ms  q|k for the 10=7.778 ms (6.0%)  all 22 fused=7.137 ms (13.7%)
+--- PASS: TestQKVFusionValue (0.18s)
+=== RUN   TestMetalReLUWideMLPRouteWorkloadParity
+--- PASS: TestMetalReLUWideMLPRouteWorkloadParity (0.01s)
+=== RUN   TestSplitKFusedNumericParity
+=== RUN   TestSplitKFusedNumericParity/gqa/sk128
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+=== RUN   TestSplitKFusedNumericParity/gqa/sk129
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+=== RUN   TestSplitKFusedNumericParity/gqa/sk512
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+=== RUN   TestSplitKFusedNumericParity/gqa/sk1024
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+=== RUN   TestSplitKFusedNumericParity/gqa/sk1536
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+=== RUN   TestSplitKFusedNumericParity/gqa/sk2048
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+=== RUN   TestSplitKFusedNumericParity/mha/sk128
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+=== RUN   TestSplitKFusedNumericParity/mha/sk129
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+=== RUN   TestSplitKFusedNumericParity/mha/sk512
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+=== RUN   TestSplitKFusedNumericParity/mha/sk1024
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+=== RUN   TestSplitKFusedNumericParity/mha/sk1536
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+=== RUN   TestSplitKFusedNumericParity/mha/sk2048
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+--- PASS: TestSplitKFusedNumericParity (0.02s)
+    --- PASS: TestSplitKFusedNumericParity/gqa/sk128 (0.00s)
+    --- PASS: TestSplitKFusedNumericParity/gqa/sk129 (0.00s)
+    --- PASS: TestSplitKFusedNumericParity/gqa/sk512 (0.00s)
+    --- PASS: TestSplitKFusedNumericParity/gqa/sk1024 (0.00s)
+    --- PASS: TestSplitKFusedNumericParity/gqa/sk1536 (0.00s)
+    --- PASS: TestSplitKFusedNumericParity/gqa/sk2048 (0.00s)
+    --- PASS: TestSplitKFusedNumericParity/mha/sk128 (0.00s)
+    --- PASS: TestSplitKFusedNumericParity/mha/sk129 (0.00s)
+    --- PASS: TestSplitKFusedNumericParity/mha/sk512 (0.00s)
+    --- PASS: TestSplitKFusedNumericParity/mha/sk1024 (0.00s)
+    --- PASS: TestSplitKFusedNumericParity/mha/sk1536 (0.00s)
+    --- PASS: TestSplitKFusedNumericParity/mha/sk2048 (0.00s)
+=== RUN   TestSplitKFusedProfileRoutingAndFallback
+--- PASS: TestSplitKFusedProfileRoutingAndFallback (0.01s)
+=== RUN   TestMetalMeasuredUnaryRouteThresholds
+--- PASS: TestMetalMeasuredUnaryRouteThresholds (0.00s)
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/neg/ceiling-to-cpu
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/neg/above-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/neg/strided-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/exp/ceiling-to-cpu
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/exp/above-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/exp/strided-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/log/ceiling-to-cpu
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/log/above-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/log/strided-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/tanh/ceiling-to-cpu
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/tanh/above-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/tanh/strided-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/relu/ceiling-to-cpu
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/relu/above-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/relu/strided-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/sigmoid/ceiling-to-cpu
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/sigmoid/above-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/sigmoid/strided-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/sqrt/ceiling-to-cpu
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/sqrt/above-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/sqrt/strided-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/abs/ceiling-to-cpu
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/abs/above-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/abs/strided-to-metal
+--- PASS: TestMetalMeasuredUnaryRoutesBothArms (0.55s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/neg/ceiling-to-cpu (0.10s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/neg/above-to-metal (0.12s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/neg/strided-to-metal (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/exp/ceiling-to-cpu (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/exp/above-to-metal (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/exp/strided-to-metal (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/log/ceiling-to-cpu (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/log/above-to-metal (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/log/strided-to-metal (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/tanh/ceiling-to-cpu (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/tanh/above-to-metal (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/tanh/strided-to-metal (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/relu/ceiling-to-cpu (0.02s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/relu/above-to-metal (0.03s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/relu/strided-to-metal (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/sigmoid/ceiling-to-cpu (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/sigmoid/above-to-metal (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/sigmoid/strided-to-metal (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/sqrt/ceiling-to-cpu (0.03s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/sqrt/above-to-metal (0.03s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/sqrt/strided-to-metal (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/abs/ceiling-to-cpu (0.10s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/abs/above-to-metal (0.11s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/abs/strided-to-metal (0.00s)
+=== RUN   TestAttentionMatmulFloor
+    zzz_attnfloor_internal_test.go:65: attention MATMUL-ONLY floor 512×8×64 (16 MPS matmuls, no softmax): 1.30 ms (415 GFLOP/s) — vs flash-kernel ~11ms, torch-mps ~0.45ms
+--- PASS: TestAttentionMatmulFloor (0.04s)
+=== RUN   TestBatchDispatchBench
+    zzz_batchbench_internal_test.go:30: 95 dispatches: per-op 11.29 ms (119 us/op) | batched(1 cmd-buffer) 0.53 ms | speedup 21.3x
+--- PASS: TestBatchDispatchBench (0.37s)
+=== RUN   TestChainMatMulReLU
+--- PASS: TestChainMatMulReLU (0.00s)
+=== RUN   TestConvMatmulFloor
+    zzz_convfloor_internal_test.go:82: conv2d N8 C16 HW32 F32 K3: conv total 0.301 ms (251 GFLOP/s) | GEMM-only floor 0.208 ms (362 GFLOP/s) | overhead 0.092 ms (31%)
+--- PASS: TestConvMatmulFloor (0.03s)
+=== RUN   TestDecodeLoopKVCache
+    zzz_decodeloop_internal_test.go:247: decode loop over 5 steps, D=32 H=4: GPU Recorder matches host float64 across a growing KV cache
+    zzz_decodeloop_internal_test.go:293: assembled attn-block step (11 ops) @L=5: per-op 1.542 ms | batched 0.294 ms | speedup 5.25x
+--- PASS: TestDecodeLoopKVCache (0.19s)
+=== RUN   TestFallbackAuditForward
+    zzz_fallbackaudit_internal_test.go:54: silent CPU fallbacks in GPT forward (metal ctx → ref): OpEmbed 0.04 ms | OpCrossEntropy 0.75 ms | sum 0.79 ms (vs ~32ms fwd / ~110ms training step §T399)
+    zzz_fallbackaudit_internal_test.go:74: backward-path OpSum fallbacks: [256,512]→ax0 0.07 ms | [256,4096]→ax0 0.54 ms
+--- PASS: TestFallbackAuditForward (0.05s)
+=== RUN   TestCrossEntropyForwardCrossReference
+--- PASS: TestCrossEntropyForwardCrossReference (0.00s)
+=== RUN   TestEmbedForwardCrossReference
+--- PASS: TestEmbedForwardCrossReference (0.00s)
+=== RUN   TestFullModelDecodeCorrectness
+    zzz_fullmodel_internal_test.go:314: full 2-layer decoder, D=64 V=48: GPU Recorder logits match host float64 across 4 steps
+--- PASS: TestFullModelDecodeCorrectness (0.00s)
+=== RUN   TestFullModelDecodeEmbedViaBlit
+    zzz_fullmodel_internal_test.go:390: autoregressive decode via on-device embed-blit, 5 steps: GPU logits match host each step
+--- PASS: TestFullModelDecodeEmbedViaBlit (0.01s)
+=== RUN   TestFullModelDecodeBench
+    zzz_fullmodel_internal_test.go:453: full decode step D=512 H=8 6-layer V=1024 @L=32 (98 ops): per-op 20.064 ms | batched 3.424 ms | speedup 5.86x
+--- PASS: TestFullModelDecodeBench (0.77s)
+=== RUN   TestLayerBatchBench
+    zzz_layerbench_internal_test.go:120: decode-ish D512 S1   (12 ops): per-op 2.221 ms | batched 0.516 ms | speedup 4.30x
+    zzz_layerbench_internal_test.go:120: decode-ish D1024 S1  (12 ops): per-op 2.926 ms | batched 1.102 ms | speedup 2.66x
+    zzz_layerbench_internal_test.go:120: prefill D512 S128    (12 ops): per-op 3.949 ms | batched 1.379 ms | speedup 2.86x
+    zzz_layerbench_internal_test.go:120: train D512 S256      (12 ops): per-op 3.527 ms | batched 1.701 ms | speedup 2.07x
+--- PASS: TestLayerBatchBench (0.91s)
+=== RUN   TestLlamaDecodeCorrectness
+    zzz_llama_internal_test.go:310: Llama-style decoder (GQA 8:2, SwiGLU), 2-layer D=64: Recorder logits match host across 4 steps
+--- PASS: TestLlamaDecodeCorrectness (0.00s)
+=== RUN   TestLlamaDecodeBench
+    zzz_llama_internal_test.go:362: Llama decode step D=512 GQA8:2 6-layer V=1024 @L=32 (110 ops): per-op 20.434 ms | batched 2.925 ms | speedup 6.99x
+--- PASS: TestLlamaDecodeBench (0.76s)
+=== RUN   TestMatMulNoCopyAB
+    zzz_matmulnocopy_internal_test.go:24: perf A/B — skipped in -short
+--- SKIP: TestMatMulNoCopyAB (0.00s)
+=== RUN   TestMHABackwardMPSCrossReference
+=== RUN   TestMHABackwardMPSCrossReference/mha-small
+=== RUN   TestMHABackwardMPSCrossReference/mha-mid
+=== RUN   TestMHABackwardMPSCrossReference/gqa
+=== RUN   TestMHABackwardMPSCrossReference/mqa
+--- PASS: TestMHABackwardMPSCrossReference (0.02s)
+    --- PASS: TestMHABackwardMPSCrossReference/mha-small (0.01s)
+    --- PASS: TestMHABackwardMPSCrossReference/mha-mid (0.00s)
+    --- PASS: TestMHABackwardMPSCrossReference/gqa (0.00s)
+    --- PASS: TestMHABackwardMPSCrossReference/mqa (0.00s)
+=== RUN   TestMHABackwardMPSvsFlashBench
+    zzz_mhabwdmps_internal_test.go:101: attention BACKWARD 512×8×64 causal: flash-backward 71.13 ms | MPS matmuls 4.10 ms | speedup 17.3x
+--- PASS: TestMHABackwardMPSvsFlashBench (1.21s)
+=== RUN   TestMHAMPSCrossReference
+--- PASS: TestMHAMPSCrossReference (0.00s)
+=== RUN   TestMHAMPSvsFlashBench
+    zzz_mhamps_internal_test.go:107: attention fwd 512×8×64 causal: flash-kernel 2.49 ms | MPS(Q·Kᵀ)→softmax→MPS(P·V) 1.90 ms | speedup 1.3x (torch-mps ~0.45ms)
+--- PASS: TestMHAMPSvsFlashBench (0.09s)
+=== RUN   TestRecorderRoPEAtOffsetParity
+--- PASS: TestRecorderRoPEAtOffsetParity (0.00s)
+=== RUN   TestRecorderMHAAtOffsetParity
+--- PASS: TestRecorderMHAAtOffsetParity (0.00s)
+=== RUN   TestRecorderCopy2DParity
+--- PASS: TestRecorderCopy2DParity (0.00s)
+=== RUN   TestOpMHADecodeLongContext
+    zzz_opmhalong_internal_test.go:36: per-op OpMHA sq=1 sk=1920: 1.79 ms/op (was ~40ms via the serial two-pass kernel, §T428 profile)
+--- PASS: TestOpMHADecodeLongContext (0.07s)
+=== RUN   TestRecorderUnaryChain
+--- PASS: TestRecorderUnaryChain (0.00s)
+=== RUN   TestRecorderMatMulChain
+--- PASS: TestRecorderMatMulChain (0.00s)
+=== RUN   TestRecorderRMSNormChain
+--- PASS: TestRecorderRMSNormChain (0.00s)
+=== RUN   TestRecorderSwiGLU
+--- PASS: TestRecorderSwiGLU (0.00s)
+=== RUN   TestRecorderLayerNormChain
+--- PASS: TestRecorderLayerNormChain (0.00s)
+=== RUN   TestRecorderFlashAttn
+--- PASS: TestRecorderFlashAttn (0.00s)
+=== RUN   TestRecorderDecodeAttn
+--- PASS: TestRecorderDecodeAttn (0.00s)
+=== RUN   TestRecorderRoPE
+--- PASS: TestRecorderRoPE (0.00s)
+=== RUN   TestRecorderKVAppend
+--- PASS: TestRecorderKVAppend (0.00s)
+=== RUN   TestRecorderQMatMulResident
+--- PASS: TestRecorderQMatMulResident (0.00s)
+=== RUN   TestRecorderBiasGELUMatchesSplitPrefixAndPreservesTail
+--- PASS: TestRecorderBiasGELUMatchesSplitPrefixAndPreservesTail (0.00s)
+=== RUN   TestRecorderBiasGELUProfileIsOneDispatch
+--- PASS: TestRecorderBiasGELUProfileIsOneDispatch (0.00s)
+=== RUN   TestMetalCrossEntropyGuardFallsBackForEveryField
+=== RUN   TestMetalCrossEntropyGuardFallsBackForEveryField/LabelSmoothing
+=== RUN   TestMetalCrossEntropyGuardFallsBackForEveryField/ZLoss
+=== RUN   TestMetalCrossEntropyGuardFallsBackForEveryField/IgnoreIndex
+=== RUN   TestMetalCrossEntropyGuardFallsBackForEveryField/HasIgnoreIndex
+=== RUN   TestMetalCrossEntropyGuardFallsBackForEveryField/Reduction
+=== RUN   TestMetalCrossEntropyGuardFallsBackForEveryField/IgnoreIndex+Smoothing
+=== RUN   TestMetalCrossEntropyGuardFallsBackForEveryField/IgnoreIndex+Sum
+=== RUN   TestMetalCrossEntropyGuardFallsBackForEveryField/IgnoreIndex+None+Smoothing
+--- PASS: TestMetalCrossEntropyGuardFallsBackForEveryField (0.00s)
+    --- PASS: TestMetalCrossEntropyGuardFallsBackForEveryField/LabelSmoothing (0.00s)
+    --- PASS: TestMetalCrossEntropyGuardFallsBackForEveryField/ZLoss (0.00s)
+    --- PASS: TestMetalCrossEntropyGuardFallsBackForEveryField/IgnoreIndex (0.00s)
+    --- PASS: TestMetalCrossEntropyGuardFallsBackForEveryField/HasIgnoreIndex (0.00s)
+    --- PASS: TestMetalCrossEntropyGuardFallsBackForEveryField/Reduction (0.00s)
+    --- PASS: TestMetalCrossEntropyGuardFallsBackForEveryField/IgnoreIndex+Smoothing (0.00s)
+    --- PASS: TestMetalCrossEntropyGuardFallsBackForEveryField/IgnoreIndex+Sum (0.00s)
+    --- PASS: TestMetalCrossEntropyGuardFallsBackForEveryField/IgnoreIndex+None+Smoothing (0.00s)
+=== RUN   TestGPTAdamWSessionMetalParitySyncAndLifetime
+--- PASS: TestGPTAdamWSessionMetalParitySyncAndLifetime (0.11s)
+=== RUN   TestGPTLossAndGradMetalParityAndImmutability
+--- PASS: TestGPTLossAndGradMetalParityAndImmutability (0.02s)
+=== RUN   TestMetalGPTInference
+    gpt_test.go:103: GPT inference runs on GPU with matching predictions
+--- PASS: TestMetalGPTInference (0.01s)
+=== RUN   TestMetalGPTTraining
+    gpt_test.go:157: GPU GPT training converged: CE 3.2907 → 0.0461 (cpu final 0.0461)
+--- PASS: TestMetalGPTTraining (0.82s)
+=== RUN   TestGPTDecodeBenchmarkCacheIsolation
+--- PASS: TestGPTDecodeBenchmarkCacheIsolation (0.00s)
+=== RUN   TestMetalQMatMulIQ1CrossReference
+=== RUN   TestMetalQMatMulIQ1CrossReference/IQ1_S
+    iq1_test.go:116: maximum relative difference 1.168e-07
+    iq1_test.go:116: maximum relative difference 6.544e-07
+    iq1_test.go:116: maximum relative difference 4.558e-07
+    iq1_test.go:116: maximum relative difference 2.665e-06
+    iq1_test.go:116: maximum relative difference 4.660e-07
+=== RUN   TestMetalQMatMulIQ1CrossReference/IQ1_M
+    iq1_test.go:116: maximum relative difference 1.168e-07
+    iq1_test.go:116: maximum relative difference 3.343e-07
+    iq1_test.go:116: maximum relative difference 3.830e-06
+    iq1_test.go:116: maximum relative difference 1.649e-06
+    iq1_test.go:116: maximum relative difference 4.997e-07
+--- PASS: TestMetalQMatMulIQ1CrossReference (0.00s)
+    --- PASS: TestMetalQMatMulIQ1CrossReference/IQ1_S (0.00s)
+    --- PASS: TestMetalQMatMulIQ1CrossReference/IQ1_M (0.00s)
+=== RUN   TestMetalQMatMulIQ1CooperativeMatchesScalar
+=== RUN   TestMetalQMatMulIQ1CooperativeMatchesScalar/IQ1_S
+    iq1_test.go:145: maximum relative difference 1.168e-07
+    iq1_test.go:145: maximum relative difference 2.181e-07
+    iq1_test.go:145: maximum relative difference 2.735e-07
+    iq1_test.go:145: maximum relative difference 4.581e-07
+    iq1_test.go:145: maximum relative difference 1.995e-06
+=== RUN   TestMetalQMatMulIQ1CooperativeMatchesScalar/IQ1_M
+    iq1_test.go:145: maximum relative difference 1.168e-07
+    iq1_test.go:145: maximum relative difference 2.533e-07
+    iq1_test.go:145: maximum relative difference 5.841e-06
+    iq1_test.go:145: maximum relative difference 8.188e-07
+    iq1_test.go:145: maximum relative difference 8.434e-06
+--- PASS: TestMetalQMatMulIQ1CooperativeMatchesScalar (0.01s)
+    --- PASS: TestMetalQMatMulIQ1CooperativeMatchesScalar/IQ1_S (0.00s)
+    --- PASS: TestMetalQMatMulIQ1CooperativeMatchesScalar/IQ1_M (0.00s)
+=== RUN   TestMetalQMatMulIQ1FloatingPointClass
+=== RUN   TestMetalQMatMulIQ1FloatingPointClass/IQ1_S
+=== RUN   TestMetalQMatMulIQ1FloatingPointClass/IQ1_M
+--- PASS: TestMetalQMatMulIQ1FloatingPointClass (0.00s)
+    --- PASS: TestMetalQMatMulIQ1FloatingPointClass/IQ1_S (0.00s)
+    --- PASS: TestMetalQMatMulIQ1FloatingPointClass/IQ1_M (0.00s)
+=== RUN   TestMetalQMatMulIQ1DispatchAndValidation
+=== RUN   TestMetalQMatMulIQ1DispatchAndValidation/IQ1_S
+=== RUN   TestMetalQMatMulIQ1DispatchAndValidation/IQ1_M
+--- PASS: TestMetalQMatMulIQ1DispatchAndValidation (0.00s)
+    --- PASS: TestMetalQMatMulIQ1DispatchAndValidation/IQ1_S (0.00s)
+    --- PASS: TestMetalQMatMulIQ1DispatchAndValidation/IQ1_M (0.00s)
+=== RUN   TestMetalQMatMulIQ1RecorderResident
+=== RUN   TestMetalQMatMulIQ1RecorderResident/IQ1_S
+    iq1_test.go:256: maximum relative difference 1.252e-06
+=== RUN   TestMetalQMatMulIQ1RecorderResident/IQ1_M
+    iq1_test.go:256: maximum relative difference 1.609e-06
+--- PASS: TestMetalQMatMulIQ1RecorderResident (0.00s)
+    --- PASS: TestMetalQMatMulIQ1RecorderResident/IQ1_S (0.00s)
+    --- PASS: TestMetalQMatMulIQ1RecorderResident/IQ1_M (0.00s)
+=== RUN   TestMetalQMatMulIQ2CrossReference
+=== RUN   TestMetalQMatMulIQ2CrossReference/IQ2_XXS
+    iq2_test.go:127: maximum relative difference 1.844e-07
+    iq2_test.go:127: maximum relative difference 7.416e-07
+    iq2_test.go:127: maximum relative difference 2.017e-06
+    iq2_test.go:127: maximum relative difference 2.139e-06
+    iq2_test.go:127: maximum relative difference 2.083e-06
+=== RUN   TestMetalQMatMulIQ2CrossReference/IQ2_XS
+    iq2_test.go:127: maximum relative difference 7.889e-07
+    iq2_test.go:127: maximum relative difference 2.055e-06
+    iq2_test.go:127: maximum relative difference 2.712e-07
+    iq2_test.go:127: maximum relative difference 8.966e-06
+    iq2_test.go:127: maximum relative difference 4.483e-07
+=== RUN   TestMetalQMatMulIQ2CrossReference/IQ2_S
+    iq2_test.go:127: maximum relative difference 4.021e-07
+    iq2_test.go:127: maximum relative difference 2.671e-07
+    iq2_test.go:127: maximum relative difference 1.827e-06
+    iq2_test.go:127: maximum relative difference 3.483e-06
+    iq2_test.go:127: maximum relative difference 2.077e-06
+--- PASS: TestMetalQMatMulIQ2CrossReference (0.00s)
+    --- PASS: TestMetalQMatMulIQ2CrossReference/IQ2_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2CrossReference/IQ2_XS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2CrossReference/IQ2_S (0.00s)
+=== RUN   TestMetalQMatMulIQ2CooperativeMatchesScalar
+=== RUN   TestMetalQMatMulIQ2CooperativeMatchesScalar/IQ2_XXS
+    iq2_test.go:156: maximum relative difference 2.766e-07
+    iq2_test.go:156: maximum relative difference 1.959e-06
+    iq2_test.go:156: maximum relative difference 3.362e-06
+    iq2_test.go:156: maximum relative difference 5.147e-07
+    iq2_test.go:156: maximum relative difference 4.983e-06
+=== RUN   TestMetalQMatMulIQ2CooperativeMatchesScalar/IQ2_XS
+    iq2_test.go:156: maximum relative difference 4.733e-06
+    iq2_test.go:156: maximum relative difference 4.951e-06
+    iq2_test.go:156: maximum relative difference 7.354e-07
+    iq2_test.go:156: maximum relative difference 1.481e-06
+    iq2_test.go:156: maximum relative difference 1.510e-05
+=== RUN   TestMetalQMatMulIQ2CooperativeMatchesScalar/IQ2_S
+    iq2_test.go:156: maximum relative difference 1.876e-06
+    iq2_test.go:156: maximum relative difference 1.870e-06
+    iq2_test.go:156: maximum relative difference 2.133e-06
+    iq2_test.go:156: maximum relative difference 2.211e-06
+    iq2_test.go:156: maximum relative difference 9.489e-06
+--- PASS: TestMetalQMatMulIQ2CooperativeMatchesScalar (0.01s)
+    --- PASS: TestMetalQMatMulIQ2CooperativeMatchesScalar/IQ2_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2CooperativeMatchesScalar/IQ2_XS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2CooperativeMatchesScalar/IQ2_S (0.00s)
+=== RUN   TestMetalQMatMulIQ2FloatingPointClass
+=== RUN   TestMetalQMatMulIQ2FloatingPointClass/IQ2_XXS
+=== RUN   TestMetalQMatMulIQ2FloatingPointClass/IQ2_XS
+=== RUN   TestMetalQMatMulIQ2FloatingPointClass/IQ2_S
+--- PASS: TestMetalQMatMulIQ2FloatingPointClass (0.00s)
+    --- PASS: TestMetalQMatMulIQ2FloatingPointClass/IQ2_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2FloatingPointClass/IQ2_XS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2FloatingPointClass/IQ2_S (0.00s)
+=== RUN   TestMetalQMatMulIQ2DispatchAndValidation
+=== RUN   TestMetalQMatMulIQ2DispatchAndValidation/IQ2_XXS
+    iq2_test.go:209: maximum relative difference 2.004e-07
+=== RUN   TestMetalQMatMulIQ2DispatchAndValidation/IQ2_XS
+    iq2_test.go:209: maximum relative difference 1.259e-07
+=== RUN   TestMetalQMatMulIQ2DispatchAndValidation/IQ2_S
+    iq2_test.go:209: maximum relative difference 2.671e-07
+--- PASS: TestMetalQMatMulIQ2DispatchAndValidation (0.00s)
+    --- PASS: TestMetalQMatMulIQ2DispatchAndValidation/IQ2_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2DispatchAndValidation/IQ2_XS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2DispatchAndValidation/IQ2_S (0.00s)
+=== RUN   TestMetalQMatMulIQ2RecorderResident
+=== RUN   TestMetalQMatMulIQ2RecorderResident/IQ2_XXS
+    iq2_test.go:271: maximum relative difference 9.765e-06
+=== RUN   TestMetalQMatMulIQ2RecorderResident/IQ2_XS
+    iq2_test.go:271: maximum relative difference 2.055e-06
+=== RUN   TestMetalQMatMulIQ2RecorderResident/IQ2_S
+    iq2_test.go:271: maximum relative difference 5.842e-07
+--- PASS: TestMetalQMatMulIQ2RecorderResident (0.00s)
+    --- PASS: TestMetalQMatMulIQ2RecorderResident/IQ2_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2RecorderResident/IQ2_XS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2RecorderResident/IQ2_S (0.00s)
+=== RUN   TestMetalQMatMulIQ3CrossReference
+=== RUN   TestMetalQMatMulIQ3CrossReference/IQ3_XXS
+    iq3_test.go:111: maximum relative difference 0.000e+00
+    iq3_test.go:111: maximum relative difference 6.998e-07
+    iq3_test.go:111: maximum relative difference 3.751e-06
+    iq3_test.go:111: maximum relative difference 1.150e-05
+    iq3_test.go:111: maximum relative difference 5.991e-06
+=== RUN   TestMetalQMatMulIQ3CrossReference/IQ3_S
+    iq3_test.go:111: maximum relative difference 0.000e+00
+    iq3_test.go:111: maximum relative difference 1.315e-07
+    iq3_test.go:111: maximum relative difference 1.566e-05
+    iq3_test.go:111: maximum relative difference 1.184e-06
+    iq3_test.go:111: maximum relative difference 1.725e-06
+--- PASS: TestMetalQMatMulIQ3CrossReference (0.00s)
+    --- PASS: TestMetalQMatMulIQ3CrossReference/IQ3_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ3CrossReference/IQ3_S (0.00s)
+=== RUN   TestMetalQMatMulIQ3CooperativeMatchesScalar
+=== RUN   TestMetalQMatMulIQ3CooperativeMatchesScalar/IQ3_XXS
+    iq3_test.go:140: maximum relative difference 1.076e-07
+    iq3_test.go:140: maximum relative difference 1.545e-06
+    iq3_test.go:140: maximum relative difference 7.106e-06
+    iq3_test.go:140: maximum relative difference 2.628e-07
+    iq3_test.go:140: maximum relative difference 2.373e-05
+=== RUN   TestMetalQMatMulIQ3CooperativeMatchesScalar/IQ3_S
+    iq3_test.go:140: maximum relative difference 0.000e+00
+    iq3_test.go:140: maximum relative difference 1.297e-06
+    iq3_test.go:140: maximum relative difference 3.113e-06
+    iq3_test.go:140: maximum relative difference 1.574e-06
+    iq3_test.go:140: maximum relative difference 5.682e-06
+--- PASS: TestMetalQMatMulIQ3CooperativeMatchesScalar (0.01s)
+    --- PASS: TestMetalQMatMulIQ3CooperativeMatchesScalar/IQ3_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ3CooperativeMatchesScalar/IQ3_S (0.00s)
+=== RUN   TestMetalQMatMulIQ3FloatingPointClass
+=== RUN   TestMetalQMatMulIQ3FloatingPointClass/IQ3_XXS
+=== RUN   TestMetalQMatMulIQ3FloatingPointClass/IQ3_S
+--- PASS: TestMetalQMatMulIQ3FloatingPointClass (0.00s)
+    --- PASS: TestMetalQMatMulIQ3FloatingPointClass/IQ3_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ3FloatingPointClass/IQ3_S (0.00s)
+=== RUN   TestMetalQMatMulIQ3DispatchAndValidation
+=== RUN   TestMetalQMatMulIQ3DispatchAndValidation/IQ3_XXS
+    iq3_test.go:193: maximum relative difference 6.998e-07
+=== RUN   TestMetalQMatMulIQ3DispatchAndValidation/IQ3_S
+    iq3_test.go:193: maximum relative difference 1.315e-07
+--- PASS: TestMetalQMatMulIQ3DispatchAndValidation (0.00s)
+    --- PASS: TestMetalQMatMulIQ3DispatchAndValidation/IQ3_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ3DispatchAndValidation/IQ3_S (0.00s)
+=== RUN   TestMetalQMatMulIQ3RecorderResident
+=== RUN   TestMetalQMatMulIQ3RecorderResident/IQ3_XXS
+    iq3_test.go:255: maximum relative difference 8.326e-07
+=== RUN   TestMetalQMatMulIQ3RecorderResident/IQ3_S
+    iq3_test.go:255: maximum relative difference 2.866e-07
+--- PASS: TestMetalQMatMulIQ3RecorderResident (0.00s)
+    --- PASS: TestMetalQMatMulIQ3RecorderResident/IQ3_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ3RecorderResident/IQ3_S (0.00s)
+=== RUN   TestMetalQMatMulIQ4NLCrossReference
+    iq4_nl_test.go:82: IQ4_NL max relative difference 1.802e-07
+    iq4_nl_test.go:82: IQ4_NL max relative difference 2.039e-07
+    iq4_nl_test.go:82: IQ4_NL max relative difference 9.961e-07
+    iq4_nl_test.go:82: IQ4_NL max relative difference 9.565e-08
+    iq4_nl_test.go:82: IQ4_NL max relative difference 6.720e-07
+--- PASS: TestMetalQMatMulIQ4NLCrossReference (0.00s)
+=== RUN   TestMetalQMatMulIQ4NLCooperativeMatchesScalar
+    iq4_nl_test.go:110: IQ4_NL max relative difference 1.802e-07
+    iq4_nl_test.go:110: IQ4_NL max relative difference 2.039e-07
+    iq4_nl_test.go:110: IQ4_NL max relative difference 1.175e-06
+    iq4_nl_test.go:110: IQ4_NL max relative difference 3.851e-06
+    iq4_nl_test.go:110: IQ4_NL max relative difference 2.633e-06
+--- PASS: TestMetalQMatMulIQ4NLCooperativeMatchesScalar (0.00s)
+=== RUN   TestMetalQMatMulIQ4NLFloatingPointClass
+--- PASS: TestMetalQMatMulIQ4NLFloatingPointClass (0.00s)
+=== RUN   TestMetalQMatMulIQ4NLDispatchAndValidation
+    iq4_nl_test.go:170: IQ4_NL max relative difference 7.137e-08
+--- PASS: TestMetalQMatMulIQ4NLDispatchAndValidation (0.00s)
+=== RUN   TestMetalQMatMulIQ4NLRecorderResident
+    iq4_nl_test.go:222: IQ4_NL max relative difference 4.392e-07
+--- PASS: TestMetalQMatMulIQ4NLRecorderResident (0.00s)
+=== RUN   TestMetalQMatMulIQ4XSCrossReference
+    iq4_xs_test.go:90: IQ4_XS max relative difference 0.000e+00
+    iq4_xs_test.go:90: IQ4_XS max relative difference 3.404e-07
+    iq4_xs_test.go:90: IQ4_XS max relative difference 2.723e-06
+    iq4_xs_test.go:90: IQ4_XS max relative difference 1.086e-05
+    iq4_xs_test.go:90: IQ4_XS max relative difference 4.837e-07
+--- PASS: TestMetalQMatMulIQ4XSCrossReference (0.00s)
+=== RUN   TestMetalQMatMulIQ4XSCooperativeMatchesScalar
+    iq4_xs_test.go:118: IQ4_XS max relative difference 8.707e-08
+    iq4_xs_test.go:118: IQ4_XS max relative difference 3.882e-07
+    iq4_xs_test.go:118: IQ4_XS max relative difference 3.971e-07
+    iq4_xs_test.go:118: IQ4_XS max relative difference 2.349e-06
+    iq4_xs_test.go:118: IQ4_XS max relative difference 1.976e-05
+--- PASS: TestMetalQMatMulIQ4XSCooperativeMatchesScalar (0.00s)
+=== RUN   TestMetalQMatMulIQ4XSFloatingPointClass
+--- PASS: TestMetalQMatMulIQ4XSFloatingPointClass (0.00s)
+=== RUN   TestMetalQMatMulIQ4XSDispatchAndValidation
+    iq4_xs_test.go:184: IQ4_XS max relative difference 9.963e-08
+--- PASS: TestMetalQMatMulIQ4XSDispatchAndValidation (0.00s)
+=== RUN   TestMetalQMatMulIQ4XSRecorderResident
+    iq4_xs_test.go:236: IQ4_XS max relative difference 6.156e-07
+--- PASS: TestMetalQMatMulIQ4XSRecorderResident (0.00s)
+=== RUN   TestLayerNormSequenceClassifierMetalParity
+--- PASS: TestLayerNormSequenceClassifierMetalParity (0.00s)
+=== RUN   TestLayerNormSequenceClassifierMetalGraphParity
+--- PASS: TestLayerNormSequenceClassifierMetalGraphParity (0.03s)
+=== RUN   TestLayerNormSequenceClassifierViTMetalParity
+--- PASS: TestLayerNormSequenceClassifierViTMetalParity (0.17s)
+=== RUN   TestMetalMemoryProber
+--- PASS: TestMetalMemoryProber (0.00s)
+=== RUN   TestMetalCrossReference
+--- PASS: TestMetalCrossReference (2.28s)
+=== RUN   TestMetalMHACrossReference
+=== RUN   TestMetalMHACrossReference/mha
+=== RUN   TestMetalMHACrossReference/causal
+=== RUN   TestMetalMHACrossReference/gqa
+=== RUN   TestMetalMHACrossReference/mqa
+=== RUN   TestMetalMHACrossReference/kvcache
+=== RUN   TestMetalMHACrossReference/attnscale
+--- PASS: TestMetalMHACrossReference (0.03s)
+    --- PASS: TestMetalMHACrossReference/mha (0.01s)
+    --- PASS: TestMetalMHACrossReference/causal (0.01s)
+    --- PASS: TestMetalMHACrossReference/gqa (0.01s)
+    --- PASS: TestMetalMHACrossReference/mqa (0.01s)
+    --- PASS: TestMetalMHACrossReference/kvcache (0.00s)
+    --- PASS: TestMetalMHACrossReference/attnscale (0.00s)
+=== RUN   TestMetalMHAMPSRaceRegression
+--- PASS: TestMetalMHAMPSRaceRegression (2.74s)
+=== RUN   TestMetalMHAWindowCrossReference
+=== RUN   TestMetalMHAWindowCrossReference/swa
+=== RUN   TestMetalMHAWindowCrossReference/swa-noncausal
+=== RUN   TestMetalMHAWindowCrossReference/swa-gqa
+=== RUN   TestMetalMHAWindowCrossReference/window>=seq
+=== RUN   TestMetalMHAWindowCrossReference/swa-kvcache
+=== RUN   TestMetalMHAWindowCrossReference/window1
+--- PASS: TestMetalMHAWindowCrossReference (0.00s)
+    --- PASS: TestMetalMHAWindowCrossReference/swa (0.00s)
+    --- PASS: TestMetalMHAWindowCrossReference/swa-noncausal (0.00s)
+    --- PASS: TestMetalMHAWindowCrossReference/swa-gqa (0.00s)
+    --- PASS: TestMetalMHAWindowCrossReference/window>=seq (0.00s)
+    --- PASS: TestMetalMHAWindowCrossReference/swa-kvcache (0.00s)
+    --- PASS: TestMetalMHAWindowCrossReference/window1 (0.00s)
+=== RUN   TestMetalMHAMPSGraphCrossReference
+=== RUN   TestMetalMHAMPSGraphCrossReference/mha
+=== RUN   TestMetalMHAMPSGraphCrossReference/causal
+=== RUN   TestMetalMHAMPSGraphCrossReference/gqa
+=== RUN   TestMetalMHAMPSGraphCrossReference/mqa
+=== RUN   TestMetalMHAMPSGraphCrossReference/attnscale
+=== RUN   TestMetalMHAMPSGraphCrossReference/prefill512
+=== RUN   TestMetalMHAMPSGraphCrossReference/gqa512
+=== RUN   TestMetalMHAMPSGraphCrossReference/prefill1024
+--- PASS: TestMetalMHAMPSGraphCrossReference (0.54s)
+    --- PASS: TestMetalMHAMPSGraphCrossReference/mha (0.00s)
+    --- PASS: TestMetalMHAMPSGraphCrossReference/causal (0.00s)
+    --- PASS: TestMetalMHAMPSGraphCrossReference/gqa (0.01s)
+    --- PASS: TestMetalMHAMPSGraphCrossReference/mqa (0.00s)
+    --- PASS: TestMetalMHAMPSGraphCrossReference/attnscale (0.00s)
+    --- PASS: TestMetalMHAMPSGraphCrossReference/prefill512 (0.10s)
+    --- PASS: TestMetalMHAMPSGraphCrossReference/gqa512 (0.09s)
+    --- PASS: TestMetalMHAMPSGraphCrossReference/prefill1024 (0.35s)
+=== RUN   TestMetalFlashAttnCrossReference
+=== RUN   TestMetalFlashAttnCrossReference/flash
+=== RUN   TestMetalFlashAttnCrossReference/causal
+=== RUN   TestMetalFlashAttnCrossReference/big
+=== RUN   TestMetalFlashAttnCrossReference/onehead
+=== RUN   TestMetalFlashAttnCrossReference/wide
+=== RUN   TestMetalFlashAttnCrossReference/gqa
+=== RUN   TestMetalFlashAttnCrossReference/mqa
+=== RUN   TestMetalFlashAttnCrossReference/gqa3
+=== RUN   TestMetalFlashAttnCrossReference/prefill512
+=== RUN   TestMetalFlashAttnCrossReference/gqa512
+=== RUN   TestMetalFlashAttnCrossReference/prefill1024
+--- PASS: TestMetalFlashAttnCrossReference (1.05s)
+    --- PASS: TestMetalFlashAttnCrossReference/flash (0.00s)
+    --- PASS: TestMetalFlashAttnCrossReference/causal (0.00s)
+    --- PASS: TestMetalFlashAttnCrossReference/big (0.00s)
+    --- PASS: TestMetalFlashAttnCrossReference/onehead (0.00s)
+    --- PASS: TestMetalFlashAttnCrossReference/wide (0.00s)
+    --- PASS: TestMetalFlashAttnCrossReference/gqa (0.00s)
+    --- PASS: TestMetalFlashAttnCrossReference/mqa (0.00s)
+    --- PASS: TestMetalFlashAttnCrossReference/gqa3 (0.00s)
+    --- PASS: TestMetalFlashAttnCrossReference/prefill512 (0.18s)
+    --- PASS: TestMetalFlashAttnCrossReference/gqa512 (0.18s)
+    --- PASS: TestMetalFlashAttnCrossReference/prefill1024 (0.69s)
+=== RUN   TestMetalMHABackwardCrossReference
+=== RUN   TestMetalMHABackwardCrossReference/mha
+=== RUN   TestMetalMHABackwardCrossReference/causal
+=== RUN   TestMetalMHABackwardCrossReference/gqa
+=== RUN   TestMetalMHABackwardCrossReference/mqa
+=== RUN   TestMetalMHABackwardCrossReference/attnscale
+=== RUN   TestMetalMHABackwardCrossReference/swa
+=== RUN   TestMetalMHABackwardCrossReference/swa-gqa
+=== RUN   TestMetalMHABackwardCrossReference/swa-window1
+--- PASS: TestMetalMHABackwardCrossReference (0.01s)
+    --- PASS: TestMetalMHABackwardCrossReference/mha (0.00s)
+    --- PASS: TestMetalMHABackwardCrossReference/causal (0.00s)
+    --- PASS: TestMetalMHABackwardCrossReference/gqa (0.00s)
+    --- PASS: TestMetalMHABackwardCrossReference/mqa (0.00s)
+    --- PASS: TestMetalMHABackwardCrossReference/attnscale (0.00s)
+    --- PASS: TestMetalMHABackwardCrossReference/swa (0.00s)
+    --- PASS: TestMetalMHABackwardCrossReference/swa-gqa (0.00s)
+    --- PASS: TestMetalMHABackwardCrossReference/swa-window1 (0.00s)
+=== RUN   TestMetalMHATrainingMatchesRef
+--- PASS: TestMetalMHATrainingMatchesRef (0.00s)
+=== RUN   TestMetalMHAFallbackFeatures
+--- PASS: TestMetalMHAFallbackFeatures (0.00s)
+=== RUN   TestMetalConv2DCrossReference
+=== RUN   TestMetalConv2DCrossReference/native/basic
+=== RUN   TestMetalConv2DCrossReference/native/pad
+=== RUN   TestMetalConv2DCrossReference/native/stride2
+=== RUN   TestMetalConv2DCrossReference/native/1x1
+=== RUN   TestMetalConv2DCrossReference/native/nonsquare
+=== RUN   TestMetalConv2DCrossReference/native/fmap32
+    metal_test.go:614: §T624 native/fmap32: k=144 rtol=6.1000000000000005e-05 maxRel=2.8014183044433594e-06 margin=21.77x
+=== RUN   TestMetalConv2DCrossReference/native/deep28
+    metal_test.go:614: §T624 native/deep28: k=576 rtol=0.00012100000000000001 maxRel=8.285045623779297e-06 margin=14.60x
+=== RUN   TestMetalConv2DCrossReference/native/conv1x1
+    metal_test.go:614: §T624 native/conv1x1: k=256 rtol=8.1e-05 maxRel=6.4373016357421875e-06 margin=12.58x
+=== RUN   TestMetalConv2DCrossReference/im2col/basic
+=== RUN   TestMetalConv2DCrossReference/im2col/pad
+=== RUN   TestMetalConv2DCrossReference/im2col/stride2
+=== RUN   TestMetalConv2DCrossReference/im2col/1x1
+=== RUN   TestMetalConv2DCrossReference/im2col/nonsquare
+--- PASS: TestMetalConv2DCrossReference (0.32s)
+    --- PASS: TestMetalConv2DCrossReference/native/basic (0.01s)
+    --- PASS: TestMetalConv2DCrossReference/native/pad (0.00s)
+    --- PASS: TestMetalConv2DCrossReference/native/stride2 (0.00s)
+    --- PASS: TestMetalConv2DCrossReference/native/1x1 (0.00s)
+    --- PASS: TestMetalConv2DCrossReference/native/nonsquare (0.00s)
+    --- PASS: TestMetalConv2DCrossReference/native/fmap32 (0.03s)
+    --- PASS: TestMetalConv2DCrossReference/native/deep28 (0.04s)
+    --- PASS: TestMetalConv2DCrossReference/native/conv1x1 (0.22s)
+    --- PASS: TestMetalConv2DCrossReference/im2col/basic (0.00s)
+    --- PASS: TestMetalConv2DCrossReference/im2col/pad (0.00s)
+    --- PASS: TestMetalConv2DCrossReference/im2col/stride2 (0.00s)
+    --- PASS: TestMetalConv2DCrossReference/im2col/1x1 (0.00s)
+    --- PASS: TestMetalConv2DCrossReference/im2col/nonsquare (0.00s)
+=== RUN   TestMetalConvCacheEviction
+=== RUN   TestMetalConvCacheEviction/same-shape-after-eviction
+--- PASS: TestMetalConvCacheEviction (0.09s)
+    --- PASS: TestMetalConvCacheEviction/same-shape-after-eviction (0.02s)
+=== RUN   TestMetalConv2DBackwardCrossReference
+=== RUN   TestMetalConv2DBackwardCrossReference/basic
+=== RUN   TestMetalConv2DBackwardCrossReference/pad
+=== RUN   TestMetalConv2DBackwardCrossReference/stride2
+=== RUN   TestMetalConv2DBackwardCrossReference/1x1
+=== RUN   TestMetalConv2DBackwardCrossReference/nonsquare
+--- PASS: TestMetalConv2DBackwardCrossReference (0.00s)
+    --- PASS: TestMetalConv2DBackwardCrossReference/basic (0.00s)
+    --- PASS: TestMetalConv2DBackwardCrossReference/pad (0.00s)
+    --- PASS: TestMetalConv2DBackwardCrossReference/stride2 (0.00s)
+    --- PASS: TestMetalConv2DBackwardCrossReference/1x1 (0.00s)
+    --- PASS: TestMetalConv2DBackwardCrossReference/nonsquare (0.00s)
+=== RUN   TestMetalFallback
+--- PASS: TestMetalFallback (0.00s)
+=== RUN   TestMetalRetentionCrossReference
+--- PASS: TestMetalRetentionCrossReference (0.00s)
+=== RUN   TestMetalRetentionBackwardCrossReference
+--- PASS: TestMetalRetentionBackwardCrossReference (0.00s)
+=== RUN   TestMetalRetentionTrainsE2E
+--- PASS: TestMetalRetentionTrainsE2E (0.00s)
+=== RUN   TestMetalRetentionValueExpansion
+--- PASS: TestMetalRetentionValueExpansion (0.00s)
+=== RUN   TestMetalRMSNormCrossReference
+--- PASS: TestMetalRMSNormCrossReference (0.00s)
+=== RUN   TestMetalRoPECrossReference
+--- PASS: TestMetalRoPECrossReference (0.00s)
+=== RUN   TestMetalSoftmaxCrossReference
+--- PASS: TestMetalSoftmaxCrossReference (0.00s)
+=== RUN   TestMetalLayerNormCrossReference
+--- PASS: TestMetalLayerNormCrossReference (0.00s)
+=== RUN   TestMetalUnaryCrossReference
+--- PASS: TestMetalUnaryCrossReference (0.00s)
+=== RUN   TestMetalBinaryCrossReference
+--- PASS: TestMetalBinaryCrossReference (0.00s)
+=== RUN   TestMetalMatMulTransposedCrossReference
+--- PASS: TestMetalMatMulTransposedCrossReference (0.30s)
+=== RUN   TestMetalAddBiasBackwardCrossReference
+--- PASS: TestMetalAddBiasBackwardCrossReference (0.00s)
+=== RUN   TestMetalSiLUBackwardCrossReference
+--- PASS: TestMetalSiLUBackwardCrossReference (0.02s)
+=== RUN   TestMetalGELUBackwardCrossReference
+--- PASS: TestMetalGELUBackwardCrossReference (0.02s)
+=== RUN   TestMetalAddBiasCrossReference
+--- PASS: TestMetalAddBiasCrossReference (0.00s)
+=== RUN   TestMetalRoPEBackwardCrossReference
+--- PASS: TestMetalRoPEBackwardCrossReference (0.00s)
+=== RUN   TestMetalRMSNormBackwardCrossReference
+--- PASS: TestMetalRMSNormBackwardCrossReference (0.00s)
+=== RUN   TestMetalLayerNormBackwardCrossReference
+--- PASS: TestMetalLayerNormBackwardCrossReference (0.00s)
+=== RUN   TestMetalCrossEntropyBackwardCrossReference
+--- PASS: TestMetalCrossEntropyBackwardCrossReference (0.01s)
+=== RUN   TestMetalEmbedBackwardCrossReference
+--- PASS: TestMetalEmbedBackwardCrossReference (0.00s)
+=== RUN   TestMetalDeviceBufferRoundTrip
+--- PASS: TestMetalDeviceBufferRoundTrip (0.00s)
+=== RUN   TestMetalMHABatchedCrossReference
+=== RUN   TestMetalMHABatchedCrossReference/mha
+=== RUN   TestMetalMHABatchedCrossReference/gqa
+=== RUN   TestMetalMHABatchedCrossReference/mqa
+=== RUN   TestMetalMHABatchedCrossReference/vit
+--- PASS: TestMetalMHABatchedCrossReference (0.12s)
+    --- PASS: TestMetalMHABatchedCrossReference/mha (0.03s)
+    --- PASS: TestMetalMHABatchedCrossReference/gqa (0.03s)
+    --- PASS: TestMetalMHABatchedCrossReference/mqa (0.03s)
+    --- PASS: TestMetalMHABatchedCrossReference/vit (0.03s)
+=== RUN   TestPatchEmbedSequenceMetalParity
+--- PASS: TestPatchEmbedSequenceMetalParity (0.01s)
+=== RUN   TestPatchEmbedSequenceViTMetalParity
+--- PASS: TestPatchEmbedSequenceViTMetalParity (0.04s)
+=== RUN   TestPatchEmbedSequenceMetalOffsetFallback
+--- PASS: TestPatchEmbedSequenceMetalOffsetFallback (0.02s)
+=== RUN   TestPreNormAttentionMetalParity
+--- PASS: TestPreNormAttentionMetalParity (0.03s)
+=== RUN   TestPreNormAttentionMetalRuntimeEpsilon
+--- PASS: TestPreNormAttentionMetalRuntimeEpsilon (0.01s)
+=== RUN   TestPreNormAttentionViTMetalParity
+--- PASS: TestPreNormAttentionViTMetalParity (0.02s)
+=== RUN   TestPreNormFFNMetalParity
+--- PASS: TestPreNormFFNMetalParity (0.02s)
+=== RUN   TestPreNormFFNViTMetalParity
+--- PASS: TestPreNormFFNViTMetalParity (0.03s)
+=== RUN   TestPreNormTransformerBlockMetalParity
+--- PASS: TestPreNormTransformerBlockMetalParity (0.03s)
+=== RUN   TestPreNormTransformerBlockMetalRuntimeEpsilons
+--- PASS: TestPreNormTransformerBlockMetalRuntimeEpsilons (0.01s)
+=== RUN   TestPreNormTransformerBlockViTMetalParity
+--- PASS: TestPreNormTransformerBlockViTMetalParity (0.03s)
+=== RUN   TestPreNormTransformerStackMetalParity
+--- PASS: TestPreNormTransformerStackMetalParity (0.03s)
+=== RUN   TestPreNormTransformerStackViTMetalParity
+--- PASS: TestPreNormTransformerStackViTMetalParity (0.02s)
+=== RUN   TestMetalCompactQuantCrossReference
+=== RUN   TestMetalCompactQuantCrossReference/Q1_0
+    q1_mxfp4_test.go:104: maximum relative difference 1.118e-07
+    q1_mxfp4_test.go:104: maximum relative difference 1.810e-07
+    q1_mxfp4_test.go:104: maximum relative difference 5.674e-07
+    q1_mxfp4_test.go:104: maximum relative difference 6.085e-07
+    q1_mxfp4_test.go:104: maximum relative difference 1.794e-06
+=== RUN   TestMetalCompactQuantCrossReference/MXFP4
+    q1_mxfp4_test.go:104: maximum relative difference 1.538e-07
+    q1_mxfp4_test.go:104: maximum relative difference 3.059e-07
+    q1_mxfp4_test.go:104: maximum relative difference 4.867e-06
+    q1_mxfp4_test.go:104: maximum relative difference 5.114e-06
+    q1_mxfp4_test.go:104: maximum relative difference 2.773e-06
+--- PASS: TestMetalCompactQuantCrossReference (0.00s)
+    --- PASS: TestMetalCompactQuantCrossReference/Q1_0 (0.00s)
+    --- PASS: TestMetalCompactQuantCrossReference/MXFP4 (0.00s)
+=== RUN   TestMetalCompactQuantCooperativeMatchesScalar
+=== RUN   TestMetalCompactQuantCooperativeMatchesScalar/Q1_0
+    q1_mxfp4_test.go:133: maximum relative difference 3.355e-07
+    q1_mxfp4_test.go:133: maximum relative difference 3.669e-07
+    q1_mxfp4_test.go:133: maximum relative difference 2.020e-06
+    q1_mxfp4_test.go:133: maximum relative difference 5.772e-07
+    q1_mxfp4_test.go:133: maximum relative difference 1.180e-05
+=== RUN   TestMetalCompactQuantCooperativeMatchesScalar/MXFP4
+    q1_mxfp4_test.go:133: maximum relative difference 7.691e-08
+    q1_mxfp4_test.go:133: maximum relative difference 4.589e-07
+    q1_mxfp4_test.go:133: maximum relative difference 2.619e-06
+    q1_mxfp4_test.go:133: maximum relative difference 7.026e-07
+    q1_mxfp4_test.go:133: maximum relative difference 1.345e-05
+--- PASS: TestMetalCompactQuantCooperativeMatchesScalar (0.00s)
+    --- PASS: TestMetalCompactQuantCooperativeMatchesScalar/Q1_0 (0.00s)
+    --- PASS: TestMetalCompactQuantCooperativeMatchesScalar/MXFP4 (0.00s)
+=== RUN   TestMetalCompactQuantFloatingPointClass
+=== RUN   TestMetalCompactQuantFloatingPointClass/Q1_0
+=== RUN   TestMetalCompactQuantFloatingPointClass/MXFP4
+--- PASS: TestMetalCompactQuantFloatingPointClass (0.00s)
+    --- PASS: TestMetalCompactQuantFloatingPointClass/Q1_0 (0.00s)
+    --- PASS: TestMetalCompactQuantFloatingPointClass/MXFP4 (0.00s)
+=== RUN   TestMetalMXFP4ExactNibbleCodebook
+--- PASS: TestMetalMXFP4ExactNibbleCodebook (0.00s)
+=== RUN   TestMetalCompactQuantDispatchAndValidation
+=== RUN   TestMetalCompactQuantDispatchAndValidation/Q1_0
+    q1_mxfp4_test.go:224: maximum relative difference 1.788e-07
+=== RUN   TestMetalCompactQuantDispatchAndValidation/MXFP4
+    q1_mxfp4_test.go:224: maximum relative difference 6.552e-08
+--- PASS: TestMetalCompactQuantDispatchAndValidation (0.00s)
+    --- PASS: TestMetalCompactQuantDispatchAndValidation/Q1_0 (0.00s)
+    --- PASS: TestMetalCompactQuantDispatchAndValidation/MXFP4 (0.00s)
+=== RUN   TestMetalCompactQuantRecorderResident
+=== RUN   TestMetalCompactQuantRecorderResident/Q1_0
+    q1_mxfp4_test.go:287: maximum relative difference 1.788e-07
+=== RUN   TestMetalCompactQuantRecorderResident/MXFP4
+    q1_mxfp4_test.go:287: maximum relative difference 1.241e-07
+--- PASS: TestMetalCompactQuantRecorderResident (0.00s)
+    --- PASS: TestMetalCompactQuantRecorderResident/Q1_0 (0.00s)
+    --- PASS: TestMetalCompactQuantRecorderResident/MXFP4 (0.00s)
+=== RUN   TestMetalQMatMulQ2KCooperativeMatchesScalar
+    q2k_cooperative_test.go:60: k=2048 n=7: Q2_K cooperative vs scalar max relative difference 1.618e-06
+    q2k_cooperative_test.go:60: k=256 n=8: Q2_K cooperative vs scalar max relative difference 4.398e-07
+    q2k_cooperative_test.go:60: k=512 n=1: Q2_K cooperative vs scalar max relative difference 4.631e-07
+    q2k_cooperative_test.go:60: k=4096 n=3: Q2_K cooperative vs scalar max relative difference 1.702e-06
+    q2k_cooperative_test.go:60: k=2048 n=64: Q2_K cooperative vs scalar max relative difference 1.618e-06
+--- PASS: TestMetalQMatMulQ2KCooperativeMatchesScalar (0.00s)
+=== RUN   TestMetalQMatMulQ2KWordLoadMatchesControl
+    q2k_word_load_test.go:94: k=256 n=8: Q2_K word-load candidate vs scalar max relative difference 2.757e-07
+    q2k_word_load_test.go:94: k=512 n=7: Q2_K word-load candidate vs scalar max relative difference 5.905e-07
+    q2k_word_load_test.go:94: k=2048 n=64: Q2_K word-load candidate vs scalar max relative difference 1.292e-06
+    q2k_word_load_test.go:94: k=4096 n=3: Q2_K word-load candidate vs scalar max relative difference 6.929e-07
+    q2k_word_load_test.go:94: k=2048 n=3072: Q2_K word-load candidate vs scalar max relative difference 2.068e-06
+--- PASS: TestMetalQMatMulQ2KWordLoadMatchesControl (0.06s)
+=== RUN   TestMetalQMatMulQ3KCooperativeMatchesScalar
+    q3k_cooperative_test.go:60: k=2048 n=7: Q3_K cooperative vs scalar max relative difference 3.754e-07
+    q3k_cooperative_test.go:60: k=256 n=8: Q3_K cooperative vs scalar max relative difference 9.409e-08
+    q3k_cooperative_test.go:60: k=512 n=1: Q3_K cooperative vs scalar max relative difference 5.992e-08
+    q3k_cooperative_test.go:60: k=4096 n=3: Q3_K cooperative vs scalar max relative difference 1.793e-07
+    q3k_cooperative_test.go:60: k=2048 n=64: Q3_K cooperative vs scalar max relative difference 5.379e-07
+--- PASS: TestMetalQMatMulQ3KCooperativeMatchesScalar (0.01s)
+=== RUN   TestMetalQMatMulQ4_0CooperativeMatchesScalar
+    q4_0_cooperative_test.go:60: k=2048 n=7: Q4_0 cooperative vs scalar max relative difference 3.598e-07
+    q4_0_cooperative_test.go:60: k=256 n=8: Q4_0 cooperative vs scalar max relative difference 1.254e-07
+    q4_0_cooperative_test.go:60: k=512 n=1: Q4_0 cooperative vs scalar max relative difference 6.212e-08
+    q4_0_cooperative_test.go:60: k=4096 n=3: Q4_0 cooperative vs scalar max relative difference 7.512e-08
+    q4_0_cooperative_test.go:60: k=2048 n=64: Q4_0 cooperative vs scalar max relative difference 3.598e-07
+--- PASS: TestMetalQMatMulQ4_0CooperativeMatchesScalar (0.00s)
+=== RUN   TestMetalQMatMulQ4_1CrossReference
+    q4_1_test.go:72: Q4_1 max relative difference 0.000e+00
+    q4_1_test.go:72: Q4_1 max relative difference 1.176e-07
+    q4_1_test.go:72: Q4_1 max relative difference 1.186e-07
+    q4_1_test.go:72: Q4_1 max relative difference 1.626e-07
+    q4_1_test.go:72: Q4_1 max relative difference 7.318e-08
+--- PASS: TestMetalQMatMulQ4_1CrossReference (0.00s)
+=== RUN   TestMetalQMatMulQ4_1CooperativeMatchesScalar
+    q4_1_test.go:104: Q4_1 max relative difference 1.242e-07
+    q4_1_test.go:104: Q4_1 max relative difference 2.350e-07
+    q4_1_test.go:104: Q4_1 max relative difference 5.025e-07
+    q4_1_test.go:104: Q4_1 max relative difference 8.782e-07
+    q4_1_test.go:104: Q4_1 max relative difference 1.460e-06
+--- PASS: TestMetalQMatMulQ4_1CooperativeMatchesScalar (0.00s)
+=== RUN   TestMetalQMatMulQ4_1FloatingPointClass
+--- PASS: TestMetalQMatMulQ4_1FloatingPointClass (0.00s)
+=== RUN   TestMetalQMatMulQ4_1DispatchAndValidation
+    q4_1_test.go:158: Q4_1 max relative difference 6.058e-08
+--- PASS: TestMetalQMatMulQ4_1DispatchAndValidation (0.00s)
+=== RUN   TestMetalQMatMulQ4_1RecorderResident
+    q4_1_test.go:210: Q4_1 max relative difference 1.176e-07
+--- PASS: TestMetalQMatMulQ4_1RecorderResident (0.00s)
+=== RUN   TestMetalQ4KColdProfile
+    q4k_bench_test.go:22: set GOAI_Q4K_COLD_PROFILE=1
+--- SKIP: TestMetalQ4KColdProfile (0.00s)
+=== RUN   TestMetalQ4KGateUpFusionMatchesSeparate
+--- PASS: TestMetalQ4KGateUpFusionMatchesSeparate (0.01s)
+=== RUN   TestMetalQMatMulQ5KCooperativeMatchesScalar
+    q5k_cooperative_test.go:97: k=2048 n=7: Q5_K vector-load candidate vs scalar max relative difference 1.100e-06
+    q5k_cooperative_test.go:97: k=256 n=8: Q5_K vector-load candidate vs scalar max relative difference 3.129e-07
+    q5k_cooperative_test.go:97: k=512 n=1: Q5_K vector-load candidate vs scalar max relative difference 1.217e-07
+    q5k_cooperative_test.go:97: k=4096 n=3: Q5_K vector-load candidate vs scalar max relative difference 1.437e-06
+    q5k_cooperative_test.go:97: k=2048 n=64: Q5_K vector-load candidate vs scalar max relative difference 1.883e-06
+    q5k_cooperative_test.go:97: k=2048 n=3072: Q5_K vector-load candidate vs scalar max relative difference 2.475e-06
+--- PASS: TestMetalQMatMulQ5KCooperativeMatchesScalar (0.07s)
+=== RUN   TestMetalQ6KColdProfile
+    q6k_bench_test.go:21: set GOAI_Q6K_COLD_PROFILE=1
+--- SKIP: TestMetalQ6KColdProfile (0.00s)
+=== RUN   TestQ6KTwoRowBitExact
+--- PASS: TestQ6KTwoRowBitExact (0.00s)
+=== RUN   TestMetalQMatMulQ8_0CooperativeMatchesScalar
+    q8_0_cooperative_test.go:60: k=2048 n=7: Q8_0 cooperative vs scalar max relative difference 3.443e-07
+    q8_0_cooperative_test.go:60: k=256 n=8: Q8_0 cooperative vs scalar max relative difference 6.988e-08
+    q8_0_cooperative_test.go:60: k=512 n=1: Q8_0 cooperative vs scalar max relative difference 1.219e-07
+    q8_0_cooperative_test.go:60: k=4096 n=3: Q8_0 cooperative vs scalar max relative difference 1.829e-07
+    q8_0_cooperative_test.go:60: k=2048 n=64: Q8_0 cooperative vs scalar max relative difference 5.207e-07
+--- PASS: TestMetalQMatMulQ8_0CooperativeMatchesScalar (0.00s)
+=== RUN   TestMetalQMatMulQ8CrossReference
+    qmatmul_test.go:77: Q8_0 K=32: maxRel=1.01e-07 (tol 5.66e-06)
+    qmatmul_test.go:77: Q8_0 K=256: maxRel=8.93e-08 (tol 1.60e-05)
+    qmatmul_test.go:77: Q8_0 K=64: maxRel=1.19e-07 (tol 8.00e-06)
+    qmatmul_test.go:77: Q8_0 K=128: maxRel=1.19e-07 (tol 1.13e-05)
+    qmatmul_test.go:77: Q8_0 K=512: maxRel=1.17e-07 (tol 2.26e-05)
+    qmatmul_test.go:77: Q8_0 K=256: maxRel=1.12e-07 (tol 1.60e-05)
+    qmatmul_test.go:77: Q8_0 K=1024: maxRel=1.05e-07 (tol 3.20e-05)
+    qmatmul_test.go:77: Q8_0 K=2048: maxRel=8.32e-08 (tol 4.53e-05)
+    qmatmul_test.go:77: Q8_0 K=4096: maxRel=7.37e-08 (tol 6.40e-05)
+--- PASS: TestMetalQMatMulQ8CrossReference (0.00s)
+=== RUN   TestMetalQMatMulQ4KCrossReference
+    qmatmul_test.go:139: Q4_K K=256: maxRel=1.73e-07 (tol 1.60e-05)
+    qmatmul_test.go:139: Q4_K K=256: maxRel=1.08e-07 (tol 1.60e-05)
+    qmatmul_test.go:139: Q4_K K=512: maxRel=1.84e-07 (tol 2.26e-05)
+    qmatmul_test.go:139: Q4_K K=512: maxRel=1.19e-07 (tol 2.26e-05)
+    qmatmul_test.go:139: Q4_K K=256: maxRel=1.17e-07 (tol 1.60e-05)
+    qmatmul_test.go:139: Q4_K K=1024: maxRel=1.05e-07 (tol 3.20e-05)
+    qmatmul_test.go:139: Q4_K K=2048: maxRel=7.11e-08 (tol 4.53e-05)
+    qmatmul_test.go:139: Q4_K K=4096: maxRel=7.33e-08 (tol 6.40e-05)
+--- PASS: TestMetalQMatMulQ4KCrossReference (0.00s)
+=== RUN   TestMetalQMatMulQ6KCooperativeMatchesScalar
+    qmatmul_test.go:188: Q6_K cooperative vs scalar max relative difference 3.846e-07
+--- PASS: TestMetalQMatMulQ6KCooperativeMatchesScalar (0.00s)
+=== RUN   TestMetalQMatMulQ4KValidation
+--- PASS: TestMetalQMatMulQ4KValidation (0.00s)
+=== RUN   TestMetalQMatMulQ4KCooperativeMatchesScalar
+    qmatmul_test.go:246: Q4_K cooperative vs scalar max relative difference 1.026e-06
+--- PASS: TestMetalQMatMulQ4KCooperativeMatchesScalar (0.00s)
+=== RUN   TestMetalQMatMulQ6KCrossReference
+--- PASS: TestMetalQMatMulQ6KCrossReference (0.00s)
+=== RUN   TestMetalQMatMulQ6KValidation
+--- PASS: TestMetalQMatMulQ6KValidation (0.00s)
+=== RUN   TestMetalQMatMulQ5KCrossReference
+--- PASS: TestMetalQMatMulQ5KCrossReference (0.00s)
+=== RUN   TestMetalQMatMulQ5KValidation
+--- PASS: TestMetalQMatMulQ5KValidation (0.00s)
+=== RUN   TestMetalQMatMulQ2KCrossReference
+--- PASS: TestMetalQMatMulQ2KCrossReference (0.00s)
+=== RUN   TestMetalQMatMulQ2KValidation
+--- PASS: TestMetalQMatMulQ2KValidation (0.00s)
+=== RUN   TestMetalQMatMulQ3KCrossReference
+--- PASS: TestMetalQMatMulQ3KCrossReference (0.00s)
+=== RUN   TestMetalQMatMulQ3KValidation
+--- PASS: TestMetalQMatMulQ3KValidation (0.00s)
+=== RUN   TestMetalQMatMulQ8Validation
+--- PASS: TestMetalQMatMulQ8Validation (0.00s)
+=== RUN   TestMetalQMatMulQ4_0CrossReference
+--- PASS: TestMetalQMatMulQ4_0CrossReference (0.00s)
+=== RUN   TestMetalQMatMulQ4_0Dispatch
+--- PASS: TestMetalQMatMulQ4_0Dispatch (0.00s)
+=== RUN   TestMetalQMatMulQ4_0Validation
+--- PASS: TestMetalQMatMulQ4_0Validation (0.00s)
+=== RUN   TestRecorderProfileLabelsDurationsAndParity
+--- PASS: TestRecorderProfileLabelsDurationsAndParity (0.00s)
+=== RUN   TestRecorderProfileLabelsRemainOwnedAfterFree
+--- PASS: TestRecorderProfileLabelsRemainOwnedAfterFree (0.00s)
+=== RUN   TestRecorderProfileCommitWaitOverflowAndMPSOmission
+=== RUN   TestRecorderProfileCommitWaitOverflowAndMPSOmission/commit-wait
+=== RUN   TestRecorderProfileCommitWaitOverflowAndMPSOmission/overflow
+=== RUN   TestRecorderProfileCommitWaitOverflowAndMPSOmission/mps
+--- PASS: TestRecorderProfileCommitWaitOverflowAndMPSOmission (0.00s)
+    --- PASS: TestRecorderProfileCommitWaitOverflowAndMPSOmission/commit-wait (0.00s)
+    --- PASS: TestRecorderProfileCommitWaitOverflowAndMPSOmission/overflow (0.00s)
+    --- PASS: TestRecorderProfileCommitWaitOverflowAndMPSOmission/mps (0.00s)
+=== RUN   TestRecorderProfileSpecializedPaths
+=== RUN   TestRecorderProfileSpecializedPaths/dequant-q4k
+=== RUN   TestRecorderProfileSpecializedPaths/q4k-f16-prefill
+=== RUN   TestRecorderProfileSpecializedPaths/flash-mm
+--- PASS: TestRecorderProfileSpecializedPaths (0.00s)
+    --- PASS: TestRecorderProfileSpecializedPaths/dequant-q4k (0.00s)
+    --- PASS: TestRecorderProfileSpecializedPaths/q4k-f16-prefill (0.00s)
+    --- PASS: TestRecorderProfileSpecializedPaths/flash-mm (0.00s)
+=== RUN   TestRecorderProfileErrorsAreExplicit
+--- PASS: TestRecorderProfileErrorsAreExplicit (0.00s)
+=== RUN   TestMetalResidentAutoFree
+--- PASS: TestMetalResidentAutoFree (0.02s)
+=== RUN   TestMetalBackendResidentQuantMatMuler
+--- PASS: TestMetalBackendResidentQuantMatMuler (0.00s)
+=== RUN   TestMetalResidentQWeight
+--- PASS: TestMetalResidentQWeight (0.01s)
+=== RUN   TestMetalResidentValidation
+--- PASS: TestMetalResidentValidation (0.00s)
+=== RUN   TestMetalResidentTopKN
+--- PASS: TestMetalResidentTopKN (0.11s)
+=== RUN   TestMetalResidentTopKNTiesAndGuards
+--- PASS: TestMetalResidentTopKNTiesAndGuards (0.00s)
+=== RUN   TestMetalQMatMulTQCrossReference
+=== RUN   TestMetalQMatMulTQCrossReference/TQ1_0
+    tq_test.go:95: maximum relative difference 2.980e-08
+    tq_test.go:95: maximum relative difference 2.235e-07
+    tq_test.go:95: maximum relative difference 9.090e-07
+    tq_test.go:95: maximum relative difference 7.242e-07
+    tq_test.go:95: maximum relative difference 2.354e-06
+=== RUN   TestMetalQMatMulTQCrossReference/TQ2_0
+    tq_test.go:95: maximum relative difference 7.451e-09
+    tq_test.go:95: maximum relative difference 2.208e-07
+    tq_test.go:95: maximum relative difference 8.941e-07
+    tq_test.go:95: maximum relative difference 4.894e-07
+    tq_test.go:95: maximum relative difference 9.500e-07
+--- PASS: TestMetalQMatMulTQCrossReference (0.00s)
+    --- PASS: TestMetalQMatMulTQCrossReference/TQ1_0 (0.00s)
+    --- PASS: TestMetalQMatMulTQCrossReference/TQ2_0 (0.00s)
+=== RUN   TestMetalQMatMulTQCooperativeMatchesScalar
+=== RUN   TestMetalQMatMulTQCooperativeMatchesScalar/TQ1_0
+    tq_test.go:124: maximum relative difference 0.000e+00
+    tq_test.go:124: maximum relative difference 3.576e-07
+    tq_test.go:124: maximum relative difference 7.153e-07
+    tq_test.go:124: maximum relative difference 1.884e-07
+    tq_test.go:124: maximum relative difference 1.801e-06
+=== RUN   TestMetalQMatMulTQCooperativeMatchesScalar/TQ2_0
+    tq_test.go:124: maximum relative difference 0.000e+00
+    tq_test.go:124: maximum relative difference 2.208e-07
+    tq_test.go:124: maximum relative difference 1.252e-06
+    tq_test.go:124: maximum relative difference 9.259e-07
+    tq_test.go:124: maximum relative difference 7.522e-07
+--- PASS: TestMetalQMatMulTQCooperativeMatchesScalar (0.01s)
+    --- PASS: TestMetalQMatMulTQCooperativeMatchesScalar/TQ1_0 (0.01s)
+    --- PASS: TestMetalQMatMulTQCooperativeMatchesScalar/TQ2_0 (0.00s)
+=== RUN   TestMetalQMatMulTQFloatingPointClass
+=== RUN   TestMetalQMatMulTQFloatingPointClass/TQ1_0
+=== RUN   TestMetalQMatMulTQFloatingPointClass/TQ2_0
+--- PASS: TestMetalQMatMulTQFloatingPointClass (0.00s)
+    --- PASS: TestMetalQMatMulTQFloatingPointClass/TQ1_0 (0.00s)
+    --- PASS: TestMetalQMatMulTQFloatingPointClass/TQ2_0 (0.00s)
+=== RUN   TestMetalQMatMulTQ2RawCodeThreeIsPlusTwo
+--- PASS: TestMetalQMatMulTQ2RawCodeThreeIsPlusTwo (0.00s)
+=== RUN   TestMetalQMatMulTQDispatchAndValidation
+=== RUN   TestMetalQMatMulTQDispatchAndValidation/TQ1_0
+    tq_test.go:208: maximum relative difference 7.284e-08
+=== RUN   TestMetalQMatMulTQDispatchAndValidation/TQ2_0
+    tq_test.go:208: maximum relative difference 2.201e-07
+--- PASS: TestMetalQMatMulTQDispatchAndValidation (0.00s)
+    --- PASS: TestMetalQMatMulTQDispatchAndValidation/TQ1_0 (0.00s)
+    --- PASS: TestMetalQMatMulTQDispatchAndValidation/TQ2_0 (0.00s)
+=== RUN   TestMetalQMatMulTQRecorderResident
+=== RUN   TestMetalQMatMulTQRecorderResident/TQ1_0
+    tq_test.go:270: maximum relative difference 5.364e-07
+=== RUN   TestMetalQMatMulTQRecorderResident/TQ2_0
+    tq_test.go:270: maximum relative difference 7.535e-07
+--- PASS: TestMetalQMatMulTQRecorderResident (0.00s)
+    --- PASS: TestMetalQMatMulTQRecorderResident/TQ1_0 (0.00s)
+    --- PASS: TestMetalQMatMulTQRecorderResident/TQ2_0 (0.00s)
+=== RUN   TestMetalGPUTraining
+    train_test.go:94: GPU training converged: gpu loss 0.0371, cpu loss 0.0371
+--- PASS: TestMetalGPUTraining (0.02s)
+=== RUN   TestMetalServesMatmul
+--- PASS: TestMetalServesMatmul (0.00s)
+=== RUN   TestBinaryRoutingRecordsOnce
+--- PASS: TestBinaryRoutingRecordsOnce (0.00s)
+=== RUN   TestFallbackUnderTapeRecordsOnce
+--- PASS: TestFallbackUnderTapeRecordsOnce (0.00s)
+=== RUN   TestMetalMeasuredUnaryRoutingRecordsOnce
+=== RUN   TestMetalMeasuredUnaryRoutingRecordsOnce/neg
+=== RUN   TestMetalMeasuredUnaryRoutingRecordsOnce/exp
+=== RUN   TestMetalMeasuredUnaryRoutingRecordsOnce/log
+=== RUN   TestMetalMeasuredUnaryRoutingRecordsOnce/tanh
+=== RUN   TestMetalMeasuredUnaryRoutingRecordsOnce/relu
+=== RUN   TestMetalMeasuredUnaryRoutingRecordsOnce/sigmoid
+=== RUN   TestMetalMeasuredUnaryRoutingRecordsOnce/sqrt
+=== RUN   TestMetalMeasuredUnaryRoutingRecordsOnce/abs
+--- PASS: TestMetalMeasuredUnaryRoutingRecordsOnce (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutingRecordsOnce/neg (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutingRecordsOnce/exp (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutingRecordsOnce/log (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutingRecordsOnce/tanh (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutingRecordsOnce/relu (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutingRecordsOnce/sigmoid (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutingRecordsOnce/sqrt (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutingRecordsOnce/abs (0.00s)
+=== RUN   TestMetalRGLRUUnaryRouteWorkloadParity
+--- PASS: TestMetalRGLRUUnaryRouteWorkloadParity (0.01s)
+=== RUN   TestViTAdamWSessionMetalParitySyncAndLifetime
+--- PASS: TestViTAdamWSessionMetalParitySyncAndLifetime (0.17s)
+=== RUN   TestViTLossAndGradMetalParityAndImmutability
+--- PASS: TestViTLossAndGradMetalParityAndImmutability (0.02s)
+PASS
+ok  	github.com/jxsl13/goai/backend/metal	43.087s
+
+=== metal-short-simd ===
+=== RUN   TestMetalSIMDActivationMeasuredThresholdRoutesBothArms
+=== RUN   TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/gelu/within-to-cpu
+=== RUN   TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/gelu/strided-to-metal
+=== RUN   TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/gelu/above-to-metal
+=== RUN   TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/gelu_backward/within-to-cpu
+=== RUN   TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/gelu_backward/strided-to-metal
+=== RUN   TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/gelu_backward/above-to-metal
+=== RUN   TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/silu/within-to-cpu
+=== RUN   TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/silu/strided-to-metal
+=== RUN   TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/silu/above-to-metal
+=== RUN   TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/silu_backward/within-to-cpu
+=== RUN   TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/silu_backward/strided-to-metal
+=== RUN   TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/silu_backward/above-to-metal
+--- PASS: TestMetalSIMDActivationMeasuredThresholdRoutesBothArms (0.18s)
+    --- PASS: TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/gelu/within-to-cpu (0.00s)
+    --- PASS: TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/gelu/strided-to-metal (0.01s)
+    --- PASS: TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/gelu/above-to-metal (0.04s)
+    --- PASS: TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/gelu_backward/within-to-cpu (0.00s)
+    --- PASS: TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/gelu_backward/strided-to-metal (0.00s)
+    --- PASS: TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/gelu_backward/above-to-metal (0.05s)
+    --- PASS: TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/silu/within-to-cpu (0.00s)
+    --- PASS: TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/silu/strided-to-metal (0.00s)
+    --- PASS: TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/silu/above-to-metal (0.03s)
+    --- PASS: TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/silu_backward/within-to-cpu (0.00s)
+    --- PASS: TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/silu_backward/strided-to-metal (0.00s)
+    --- PASS: TestMetalSIMDActivationMeasuredThresholdRoutesBothArms/silu_backward/above-to-metal (0.05s)
+=== RUN   TestMetalAddBiasBackwardMeasuredThresholdRoutesBothArms
+=== RUN   TestMetalAddBiasBackwardMeasuredThresholdRoutesBothArms/below-to-cpu
+=== RUN   TestMetalAddBiasBackwardMeasuredThresholdRoutesBothArms/above-to-metal
+--- PASS: TestMetalAddBiasBackwardMeasuredThresholdRoutesBothArms (0.02s)
+    --- PASS: TestMetalAddBiasBackwardMeasuredThresholdRoutesBothArms/below-to-cpu (0.00s)
+    --- PASS: TestMetalAddBiasBackwardMeasuredThresholdRoutesBothArms/above-to-metal (0.02s)
+=== RUN   TestMetalAddBiasMeasuredThresholdRoutesBothArms
+=== RUN   TestMetalAddBiasMeasuredThresholdRoutesBothArms/below-to-cpu
+=== RUN   TestMetalAddBiasMeasuredThresholdRoutesBothArms/above-to-metal
+--- PASS: TestMetalAddBiasMeasuredThresholdRoutesBothArms (0.06s)
+    --- PASS: TestMetalAddBiasMeasuredThresholdRoutesBothArms/below-to-cpu (0.01s)
+    --- PASS: TestMetalAddBiasMeasuredThresholdRoutesBothArms/above-to-metal (0.06s)
+=== RUN   TestAttnDK64Specializations
+    attn_dk64_bench_test.go:39: timing guard calibrated for this project's M2; runner GPUs invert it
+--- SKIP: TestAttnDK64Specializations (0.00s)
+=== RUN   TestConcurrentRecorderToggleDependenciesAndBoundaries
+--- PASS: TestConcurrentRecorderToggleDependenciesAndBoundaries (0.00s)
+=== RUN   TestRecorderResetRequiresFreeAndReopensSelectedMode
+--- PASS: TestRecorderResetRequiresFreeAndReopensSelectedMode (0.00s)
+=== RUN   TestDecodeAttnOccupancy
+OCC mha_decode generic=1024 dk64=384 dk128=1024 splitK_p1=384 splitK_p2=448
+--- PASS: TestDecodeAttnOccupancy (0.00s)
+=== RUN   TestDecodeAttnRoofline
+ROOF sk=  512    51.00us    20.6 GB/s (11.4% of 180)     82.2 GFLOP/s ( 1.2% of 6800)
+ROOF   f16 KV would cut bytes to 0.5 MB -> saves at most 2.91us of 51.00us (5.7%)
+ROOF sk= 1536    40.98us    76.8 GB/s (42.6% of 180)    307.0 GFLOP/s ( 4.5% of 6800)
+ROOF   f16 KV would cut bytes to 1.6 MB -> saves at most 8.74us of 40.98us (21.3%)
+ROOF sk= 2048    54.16us    77.4 GB/s (43.0% of 180)    309.7 GFLOP/s ( 4.6% of 6800)
+ROOF   f16 KV would cut bytes to 2.1 MB -> saves at most 11.65us of 54.16us (21.5%)
+--- PASS: TestDecodeAttnRoofline (0.05s)
+=== RUN   TestDecodeMatmulIsAtMemoryCeiling
+    decode_bandwidth_ceiling_test.go:60: timing guard calibrated for this project's M2; runner GPUs invert it
+--- SKIP: TestDecodeMatmulIsAtMemoryCeiling (0.00s)
+=== RUN   TestDecodeLeaveOneOut
+LOO full chain (22 layers) = 4681.4us  -> 213.6 tok/s if this were the whole token
+LOO without matmul          678.1us   contribution  4003.3us (85.5%)
+LOO without attention      4300.1us   contribution   381.3us ( 8.1%)
+LOO without rmsnorm        4344.3us   contribution   337.2us ( 7.2%)
+LOO without elementwise    4544.4us   contribution   137.0us ( 2.9%)
+--- PASS: TestDecodeLeaveOneOut (0.54s)
+=== RUN   TestDecodeNonMatmulBreakdown
+DEC --- attention vs context length (sq=1) ---
+DEC   sk=   64     14.14us  reads   0.13 MB     9.3 GB/s
+DEC   sk=  128      7.94us  reads   0.26 MB    33.0 GB/s
+DEC   sk=  256     11.17us  reads   0.52 MB    47.0 GB/s
+DEC   sk=  512     15.91us  reads   1.05 MB    65.9 GB/s
+DEC   sk= 1024     30.63us  reads   2.10 MB    68.5 GB/s
+DEC   sk= 2048     52.68us  reads   4.19 MB    79.6 GB/s
+DEC op                 n/tok    us/each   us/token
+DEC rmsnorm (1 row)       44       4.68      205.7
+DEC attention sq=1        22      16.44      361.7
+DEC binary dim            44       1.64       72.3
+DEC binary hidden         22       1.67       36.7
+DEC silu hidden           22       1.75       38.5
+DEC SUM                                      715.0 us/token (non-matmul, measured pieces)
+--- PASS: TestDecodeNonMatmulBreakdown (0.06s)
+=== RUN   TestDequantGemmCrossover
+dequant+GEMM M= 64: coop 1955.7us vs 738.8us = 2.65x (maxRel 8.09e-05)
+dequant+GEMM M=256: coop 18867.6us vs 1423.6us = 13.25x (maxRel 0.00e+00)
+--- PASS: TestDequantGemmCrossover (1.18s)
+=== RUN   TestIsolatedOpCostIsNotAdditive
+FIX rmsnorm rows-sweep (dim=2048):
+FIX   rows=  1     4.73us  (   24.0 KB,  4.84 GB/s)
+FIX   rows=  2     4.71us  (   48.0 KB,  9.71 GB/s)
+FIX   rows=  4     4.80us  (   96.0 KB, 19.06 GB/s)
+FIX   rows=  8     4.91us  (  192.0 KB, 37.27 GB/s)
+FIX   rows= 16     4.91us  (  384.0 KB, 74.64 GB/s)
+FIX   rows= 32     4.98us  (  768.0 KB, 147.22 GB/s)
+FIX   rows= 64     5.70us  ( 1536.0 KB, 256.80 GB/s)
+FIX   fit: fixed = 4.64us/dispatch, marginal = 0.017us/row
+FIX   at rows=1 the fixed part is 98% of the call
+FIX pair: qmatmul alone 36.72us, rmsnorm+qmatmul 43.72us -> fusing saves 7.00us (16%)
+FIX projected: 44 rmsnorm/token x 7.00us = 308us of a ~5740us token (5.4%)
+--- PASS: TestIsolatedOpCostIsNotAdditive (0.05s)
+=== RUN   TestDQGemmCostSplit
+SPLIT dequant-only = 242.3us (writes 46.1 MB f32)
+SPLIT M=  64 gemm-only =    377.8us  dequant share = 39.1%
+SPLIT M= 256 gemm-only =   1146.7us  dequant share = 17.4%
+SPLIT M=1024 gemm-only =   4428.7us  dequant share =  5.2%
+--- PASS: TestDQGemmCostSplit (0.19s)
+=== RUN   TestEncodeHostCost
+encode host cost: 0.45 us/dispatch
+--- PASS: TestEncodeHostCost (0.05s)
+=== RUN   TestEncoderOverheadIsBelowNoise
+ENC n=330 per-encoder=  1     459.2us total    1.39us/dispatch
+ENC n=330 per-encoder=  2     435.7us total    1.32us/dispatch
+ENC n=330 per-encoder=  4     432.5us total    1.31us/dispatch
+ENC n=330 per-encoder=  8     424.4us total    1.29us/dispatch
+ENC n=330 per-encoder= 16     425.2us total    1.29us/dispatch
+ENC n=330 per-encoder=330     416.2us total    1.26us/dispatch
+--- PASS: TestEncoderOverheadIsBelowNoise (0.09s)
+=== RUN   TestRoPEF16KVAppendExactParityAndCacheBounds
+=== RUN   TestRoPEF16KVAppendExactParityAndCacheBounds/pos0
+=== RUN   TestRoPEF16KVAppendExactParityAndCacheBounds/pos1
+=== RUN   TestRoPEF16KVAppendExactParityAndCacheBounds/pos127
+--- PASS: TestRoPEF16KVAppendExactParityAndCacheBounds (0.00s)
+    --- PASS: TestRoPEF16KVAppendExactParityAndCacheBounds/pos0 (0.00s)
+    --- PASS: TestRoPEF16KVAppendExactParityAndCacheBounds/pos1 (0.00s)
+    --- PASS: TestRoPEF16KVAppendExactParityAndCacheBounds/pos127 (0.00s)
+=== RUN   TestRoPEPairF16KVAppendExactParityAndCacheBounds
+=== RUN   TestRoPEPairF16KVAppendExactParityAndCacheBounds/pos0
+=== RUN   TestRoPEPairF16KVAppendExactParityAndCacheBounds/pos1
+=== RUN   TestRoPEPairF16KVAppendExactParityAndCacheBounds/pos127
+--- PASS: TestRoPEPairF16KVAppendExactParityAndCacheBounds (0.00s)
+    --- PASS: TestRoPEPairF16KVAppendExactParityAndCacheBounds/pos0 (0.00s)
+    --- PASS: TestRoPEPairF16KVAppendExactParityAndCacheBounds/pos1 (0.00s)
+    --- PASS: TestRoPEPairF16KVAppendExactParityAndCacheBounds/pos127 (0.00s)
+=== RUN   TestRoPEPairF16KVAppendProfileProvesDistinctToggleArms
+=== RUN   TestRoPEPairF16KVAppendProfileProvesDistinctToggleArms/control
+=== RUN   TestRoPEPairF16KVAppendProfileProvesDistinctToggleArms/candidate
+--- PASS: TestRoPEPairF16KVAppendProfileProvesDistinctToggleArms (0.00s)
+    --- PASS: TestRoPEPairF16KVAppendProfileProvesDistinctToggleArms/control (0.00s)
+    --- PASS: TestRoPEPairF16KVAppendProfileProvesDistinctToggleArms/candidate (0.00s)
+=== RUN   TestRoPEF16KVAppendProfileProvesDistinctToggleArms
+=== RUN   TestRoPEF16KVAppendProfileProvesDistinctToggleArms/control
+=== RUN   TestRoPEF16KVAppendProfileProvesDistinctToggleArms/candidate
+--- PASS: TestRoPEF16KVAppendProfileProvesDistinctToggleArms (0.00s)
+    --- PASS: TestRoPEF16KVAppendProfileProvesDistinctToggleArms/control (0.00s)
+    --- PASS: TestRoPEF16KVAppendProfileProvesDistinctToggleArms/candidate (0.00s)
+=== RUN   TestRoPEF16KVAppendInterleavedCampaigns
+    f16kv_test.go:478: timing-only Metal promotion campaign; skipped in -short
+--- SKIP: TestRoPEF16KVAppendInterleavedCampaigns (0.00s)
+=== RUN   TestMedianSpeedupThreshold
+=== RUN   TestMedianSpeedupThreshold/accept_exact_threshold
+=== RUN   TestMedianSpeedupThreshold/reject_below_threshold
+--- PASS: TestMedianSpeedupThreshold (0.00s)
+    --- PASS: TestMedianSpeedupThreshold/accept_exact_threshold (0.00s)
+    --- PASS: TestMedianSpeedupThreshold/reject_below_threshold (0.00s)
+=== RUN   TestF32ToF16CacheRoundingGolden
+--- PASS: TestF32ToF16CacheRoundingGolden (0.00s)
+=== RUN   TestF16KVAttentionParityAndStorage
+=== RUN   TestF16KVAttentionParityAndStorage/ctx1
+=== RUN   TestF16KVAttentionParityAndStorage/ctx127
+=== RUN   TestF16KVAttentionParityAndStorage/ctx512
+--- PASS: TestF16KVAttentionParityAndStorage (0.00s)
+    --- PASS: TestF16KVAttentionParityAndStorage/ctx1 (0.00s)
+    --- PASS: TestF16KVAttentionParityAndStorage/ctx127 (0.00s)
+    --- PASS: TestF16KVAttentionParityAndStorage/ctx512 (0.00s)
+=== RUN   TestF16KVAttentionProfileProvesSpecializedPath
+--- PASS: TestF16KVAttentionProfileProvesSpecializedPath (0.00s)
+=== RUN   TestF16KVAttentionInterleavedAB
+    f16kv_test.go:866: ctx=128 f32_gpu=14.04us f16kv_gpu=10.21us gpu_speedup=1.375x f32_host=174.00us f16kv_host=163.29us host_speedup=1.066x
+    f16kv_test.go:866: ctx=512 f32_gpu=21.62us f16kv_gpu=13.38us gpu_speedup=1.617x f32_host=177.33us f16kv_host=167.67us host_speedup=1.058x
+    f16kv_test.go:866: ctx=1024 f32_gpu=37.37us f16kv_gpu=17.42us gpu_speedup=2.146x f32_host=194.50us f16kv_host=169.54us host_speedup=1.147x
+    f16kv_test.go:866: ctx=2048 f32_gpu=62.83us f16kv_gpu=29.50us gpu_speedup=2.130x f32_host=217.79us f16kv_host=182.67us host_speedup=1.192x
+--- PASS: TestF16KVAttentionInterleavedAB (0.10s)
+=== RUN   TestFlashMMMatchesReference
+FMM seq=   8  maxRel=4.497e-05  NaN=0
+FMM seq=  32  maxRel=5.838e-05  NaN=0
+FMM seq=  64  maxRel=5.838e-05  NaN=0
+FMM seq= 129  maxRel=5.838e-05  NaN=0
+--- PASS: TestFlashMMMatchesReference (0.01s)
+=== RUN   TestGEMMColdWeightsMatchWarm
+COLD gate/up K=2048 N=5632 — 8 rotating weight buffers, arms alternated
+COLD M=   64  f16  67.3%  f32  51.5%   f32/f16 = 1.305  -> f16 faster
+COLD M=  128  f16  68.6%  f32  66.4%   f32/f16 = 1.032  -> f16 faster
+COLD M=  512  f16  74.3%  f32  76.6%   f32/f16 = 0.971  -> f32 faster
+COLD M= 1024  f16  75.9%  f32  78.3%   f32/f16 = 0.969  -> f32 faster
+--- PASS: TestGEMMColdWeightsMatchWarm (3.82s)
+=== RUN   TestGEMMDtypeInterleaved
+INTER gate/up K=2048 N=5632 — arms ALTERNATED, min of 6 alternations
+INTER M=  64  f16  67.7%  f32  52.6%   ratio f32/f16 = 1.287  -> f16 faster
+INTER M= 128  f16  69.0%  f32  68.0%   ratio f32/f16 = 1.014  -> f16 faster
+INTER M= 512  f16  74.4%  f32  76.7%   ratio f32/f16 = 0.970  -> f32 faster
+--- PASS: TestGEMMDtypeInterleaved (1.18s)
+=== RUN   TestGEMMF16OnlyWinsWhenBandwidthBound
+F16 M=  64 f32=   416.4us ( 3546 GFLOP/s) f16=   319.7us ( 4618 GFLOP/s)  1.30x
+F16 M= 256 f32=  1146.6us ( 5151 GFLOP/s) f16=  1182.1us ( 4996 GFLOP/s)  0.97x
+F16 M=1024 f32=  4441.5us ( 5319 GFLOP/s) f16=  4576.3us ( 5162 GFLOP/s)  0.97x
+--- PASS: TestGEMMF16OnlyWinsWhenBandwidthBound (0.35s)
+=== RUN   TestHandwrittenGEMMBaseline
+SGG M=   64  hand-written 2039.9 GFLOP/s (30.0%)   MPS f16 4598.8 (67.6%)   ratio 0.44
+SGG M=  512  hand-written 2600.3 GFLOP/s (38.2%)   MPS f16 5060.9 (74.4%)   ratio 0.51
+SGG M= 1024  hand-written 2606.1 GFLOP/s (38.3%)   MPS f16 5163.9 (75.9%)   ratio 0.50
+--- PASS: TestHandwrittenGEMMBaseline (3.63s)
+=== RUN   TestHandwrittenGEMMIsCorrect
+GCHK M= 64 K=  64 N= 32  maxRel=5.513e-03  NaN=0
+GCHK M= 64 K=2048 N= 64  maxRel=3.714e-02  NaN=0
+GCHK M= 96 K= 128 N= 48  maxRel=8.905e-03  NaN=0
+GCHK M=512 K= 256 N=128  maxRel=1.674e-02  NaN=0
+--- PASS: TestHandwrittenGEMMIsCorrect (0.04s)
+=== RUN   TestRecorderMatMulStridedB
+--- PASS: TestRecorderMatMulStridedB (0.00s)
+=== RUN   TestMatMulSquareShapesVsTorch
+SQ 256  goai-metal(MPS f32)   1978.2 GFLOP/s
+SQ 512  goai-metal(MPS f32)   4320.0 GFLOP/s
+SQ 1024  goai-metal(MPS f32)   4967.0 GFLOP/s
+--- PASS: TestMatMulSquareShapesVsTorch (0.10s)
+=== RUN   TestMeasurementNoiseFloor
+NOISE gpu  min=116.5 med=118.8 max=131.2 GB/s  cv=3.74%  (min/med spread 11.5%)
+--- PASS: TestMeasurementNoiseFloor (0.26s)
+=== RUN   TestMHADecodeCost
+MHA decode tinyllama  dk= 64 sk=  36  13.14 us/op
+MHA decode tinyllama  dk= 64 sk= 512  16.24 us/op
+MHA decode llama7b    dk=128 sk=  36  65.43 us/op
+MHA decode llama7b    dk=128 sk= 512  278.78 us/op
+--- PASS: TestMHADecodeCost (2.79s)
+=== RUN   TestMHATwoPassMatchesReference
+=== RUN   TestMHATwoPassMatchesReference/noncausal-dk64
+=== RUN   TestMHATwoPassMatchesReference/noncausal-dk64-gqa
+=== RUN   TestMHATwoPassMatchesReference/window-dk64
+=== RUN   TestMHATwoPassMatchesReference/noncausal-dk32
+=== RUN   TestMHATwoPassMatchesReference/noncausal-dk48
+--- PASS: TestMHATwoPassMatchesReference (0.00s)
+    --- PASS: TestMHATwoPassMatchesReference/noncausal-dk64 (0.00s)
+    --- PASS: TestMHATwoPassMatchesReference/noncausal-dk64-gqa (0.00s)
+    --- PASS: TestMHATwoPassMatchesReference/window-dk64 (0.00s)
+    --- PASS: TestMHATwoPassMatchesReference/noncausal-dk32 (0.00s)
+    --- PASS: TestMHATwoPassMatchesReference/noncausal-dk48 (0.00s)
+=== RUN   TestMixedQGroupExactExpansionAndBoundedParity
+    mixed_qgroup_test.go:153: M=64 segment=0 exact=0/16384 maxAbs=0.963257 nrmse=0.000229429
+    mixed_qgroup_test.go:153: M=64 segment=1 exact=0/4096 maxAbs=3.00488 nrmse=0.00026304
+    mixed_qgroup_test.go:153: M=64 segment=2 exact=0/4096 maxAbs=0.203621 nrmse=0.000888404
+    mixed_qgroup_test.go:153: M=512 segment=0 exact=0/131072 maxAbs=1.25708 nrmse=0.000241804
+    mixed_qgroup_test.go:153: M=512 segment=1 exact=8/32768 maxAbs=3.13135 nrmse=0.000259249
+    mixed_qgroup_test.go:153: M=512 segment=2 exact=1/32768 maxAbs=0.281738 nrmse=0.000897414
+--- PASS: TestMixedQGroupExactExpansionAndBoundedParity (0.02s)
+=== RUN   TestMixedQGroupProfileProvesOneGEMM
+--- PASS: TestMixedQGroupProfileProvesOneGEMM (0.00s)
+=== RUN   TestRoPEPairSplitExact
+--- PASS: TestRoPEPairSplitExact (0.00s)
+=== RUN   TestMixedQGroupProjectionGate
+    mixed_qgroup_test.go:364: set GOAI_MIXED_QKV_PERF=1 for the M2 promotion benchmark
+--- SKIP: TestMixedQGroupProjectionGate (0.00s)
+=== RUN   TestMPSEfficiencyCurveVsM
+CURVE gate/up K=2048 N=5632 — MPS efficiency vs M
+CURVE M=   32  f16  3161.1 GFLOP/s (46.5%)  f32  2839.8 (41.8%)   f16 weight-read  98.8 GB/s
+CURVE M=   64  f16  4663.9 GFLOP/s (68.6%)  f32  3115.8 (45.8%)   f16 weight-read  72.9 GB/s
+CURVE M=   96  f16  4232.7 GFLOP/s (62.2%)  f32  4331.0 (63.7%)   f16 weight-read  44.1 GB/s
+CURVE M=  128  f16  4399.8 GFLOP/s (64.7%)  f32  4004.5 (58.9%)   f16 weight-read  34.4 GB/s
+CURVE M=  192  f16  4732.7 GFLOP/s (69.6%)  f32  4365.2 (64.2%)   f16 weight-read  24.6 GB/s
+CURVE M=  256  f16  4977.1 GFLOP/s (73.2%)  f32  4675.4 (68.8%)   f16 weight-read  19.4 GB/s
+CURVE M=  512  f16  5015.3 GFLOP/s (73.8%)  f32  4768.5 (70.1%)   f16 weight-read   9.8 GB/s
+CURVE M= 1024  f16  5097.6 GFLOP/s (75.0%)  f32  4851.3 (71.3%)   f16 weight-read   5.0 GB/s
+--- PASS: TestMPSEfficiencyCurveVsM (0.66s)
+=== RUN   TestMPSGemmEfficiencyByShape
+MPS M= 512 q/o   2048x2048    f32  4495.9 GFLOP/s (66.1%)  f16  4736.1 (69.6%)
+MPS M= 512 k/v   2048x256     f32  3070.0 GFLOP/s (45.1%)  f16  3468.3 (51.0%)
+MPS M= 512 gate/up 2048x5632  f32  4764.3 GFLOP/s (70.1%)  f16  5014.9 (73.7%)
+MPS M= 512 down  5632x2048    f32  4494.4 GFLOP/s (66.1%)  f16  4829.5 (71.0%)
+MPS M=1024 q/o   2048x2048    f32  4865.6 GFLOP/s (71.6%)  f16  4991.0 (73.4%)
+MPS M=1024 k/v   2048x256     f32  4239.1 GFLOP/s (62.3%)  f16  4145.7 (61.0%)
+MPS M=1024 gate/up 2048x5632  f32  4860.7 GFLOP/s (71.5%)  f16  5099.3 (75.0%)
+MPS M=1024 down  5632x2048    f32  4848.8 GFLOP/s (71.3%)  f16  4974.6 (73.2%)
+--- PASS: TestMPSGemmEfficiencyByShape (1.01s)
+=== RUN   TestPrefillAttentionRouting
+prefill attention seq=64: decode-kernel vs flash agree to 2.38e-05
+prefill attention seq=128: decode-kernel vs flash agree to 2.38e-05
+--- PASS: TestPrefillAttentionRouting (0.01s)
+=== RUN   TestPrefillLeaveOneOut
+PLOO full prefill chain (22 layers, M=512) = 341.03 ms -> 1501 tok/s
+PLOO without matmul         21.25 ms   contribution 319.77 ms (93.8%)
+PLOO without attention     328.36 ms   contribution  12.67 ms ( 3.7%)
+PLOO without rmsnorm       339.46 ms   contribution   1.57 ms ( 0.5%)
+PLOO without elementwise   331.52 ms   contribution   9.51 ms ( 2.8%)
+--- PASS: TestPrefillLeaveOneOut (9.98s)
+=== RUN   TestPrefillOpCosts
+    prefill_ops_bench_test.go:108: prefill op RMSNorm rows=64 d=2048 smoke complete
+    prefill_ops_bench_test.go:108: prefill op SwiGLU 64x5632 smoke complete
+    prefill_ops_bench_test.go:108: prefill op residual add 64x2048 smoke complete
+    prefill_ops_bench_test.go:108: prefill op attention sq=64 sk=64 smoke complete
+    prefill_ops_bench_test.go:108: prefill op attention sq=64 sk=128 smoke complete
+--- PASS: TestPrefillOpCosts (0.00s)
+=== RUN   TestQ2KWordLoadRouteScope
+--- PASS: TestQ2KWordLoadRouteScope (0.00s)
+=== RUN   TestQ4KMatrixUnitHasNoCrossover
+    q4k_mm_crossover_test.go:68: timing guard calibrated for this project's M2; runner GPUs invert it
+--- SKIP: TestQ4KMatrixUnitHasNoCrossover (0.00s)
+=== RUN   TestQ4KMatrixUnitMatchesCooperative
+    q4k_mm_parity_test.go:93: M=8 K=256 N=8: max relative 0.000e+00
+    q4k_mm_parity_test.go:93: M=8 K=512 N=16: max relative 0.000e+00
+    q4k_mm_parity_test.go:93: M=9 K=256 N=13: max relative 0.000e+00
+    q4k_mm_parity_test.go:93: M=16 K=768 N=32: max relative 0.000e+00
+    q4k_mm_parity_test.go:93: M=33 K=256 N=40: max relative 0.000e+00
+    q4k_mm_parity_test.go:93: M=64 K=512 N=24: max relative 0.000e+00
+--- PASS: TestQ4KMatrixUnitMatchesCooperative (0.00s)
+=== RUN   TestQ4KDecodeRoofline
+Q4K roofline K=2048 N=2048 weight=2.2MB per-op=15.3us 154.0 GB/s
+Q4K roofline K=2048 N=5632 weight=6.2MB per-op=37.1us 175.0 GB/s
+Q4K roofline K=2048 N=16384 weight=18.0MB per-op=99.5us 189.6 GB/s
+Q4K roofline K=2048 N=131072 weight=144.0MB per-op=816.5us 184.9 GB/s
+--- PASS: TestQ4KDecodeRoofline (1.46s)
+=== RUN   TestQ5KWideLoadRouteScope
+--- PASS: TestQ5KWideLoadRouteScope (0.00s)
+=== RUN   TestQ6KDequantExact
+Q6DQ max abs weight error vs CPU decode = 0.000e+00
+--- PASS: TestQ6KDequantExact (0.00s)
+=== RUN   TestQ6KDequantGemmMatchesCooperative
+    q6k_dqgemm_parity_test.go:90: M=32 K=256 N=32: max relative 6.104e-05
+    q6k_dqgemm_parity_test.go:90: M=32 K=512 N=40: max relative 2.106e-04
+    q6k_dqgemm_parity_test.go:90: M=64 K=2048 N=64: max relative 1.326e-04
+    q6k_dqgemm_parity_test.go:90: M=24 K=768 N=33: max relative 1.206e-04
+--- PASS: TestQ6KDequantGemmMatchesCooperative (0.01s)
+=== RUN   TestQ6KDecodeRoofline
+    q6k_roofline_bench_test.go:19: Q6_K roofline allocates a cache-busting resident weight
+--- SKIP: TestQ6KDecodeRoofline (0.00s)
+=== RUN   TestQKVFusionValue
+FUSE M=64  current(12 fused,10 unfused)=8.407 ms  q|k for the 10=7.798 ms (7.2%)  all 22 fused=7.095 ms (15.6%)
+--- PASS: TestQKVFusionValue (0.18s)
+=== RUN   TestMetalReLUWideMLPRouteWorkloadParity
+--- PASS: TestMetalReLUWideMLPRouteWorkloadParity (0.00s)
+=== RUN   TestSplitKFusedNumericParity
+=== RUN   TestSplitKFusedNumericParity/gqa/sk128
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+=== RUN   TestSplitKFusedNumericParity/gqa/sk129
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+=== RUN   TestSplitKFusedNumericParity/gqa/sk512
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+=== RUN   TestSplitKFusedNumericParity/gqa/sk1024
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+=== RUN   TestSplitKFusedNumericParity/gqa/sk1536
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+=== RUN   TestSplitKFusedNumericParity/gqa/sk2048
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+=== RUN   TestSplitKFusedNumericParity/mha/sk128
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+=== RUN   TestSplitKFusedNumericParity/mha/sk129
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+=== RUN   TestSplitKFusedNumericParity/mha/sk512
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+=== RUN   TestSplitKFusedNumericParity/mha/sk1024
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+=== RUN   TestSplitKFusedNumericParity/mha/sk1536
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+=== RUN   TestSplitKFusedNumericParity/mha/sk2048
+    splitk_fused_test.go:127: maximum relative difference 0.000e+00
+--- PASS: TestSplitKFusedNumericParity (0.02s)
+    --- PASS: TestSplitKFusedNumericParity/gqa/sk128 (0.00s)
+    --- PASS: TestSplitKFusedNumericParity/gqa/sk129 (0.00s)
+    --- PASS: TestSplitKFusedNumericParity/gqa/sk512 (0.00s)
+    --- PASS: TestSplitKFusedNumericParity/gqa/sk1024 (0.00s)
+    --- PASS: TestSplitKFusedNumericParity/gqa/sk1536 (0.00s)
+    --- PASS: TestSplitKFusedNumericParity/gqa/sk2048 (0.00s)
+    --- PASS: TestSplitKFusedNumericParity/mha/sk128 (0.00s)
+    --- PASS: TestSplitKFusedNumericParity/mha/sk129 (0.00s)
+    --- PASS: TestSplitKFusedNumericParity/mha/sk512 (0.00s)
+    --- PASS: TestSplitKFusedNumericParity/mha/sk1024 (0.00s)
+    --- PASS: TestSplitKFusedNumericParity/mha/sk1536 (0.00s)
+    --- PASS: TestSplitKFusedNumericParity/mha/sk2048 (0.00s)
+=== RUN   TestSplitKFusedProfileRoutingAndFallback
+--- PASS: TestSplitKFusedProfileRoutingAndFallback (0.01s)
+=== RUN   TestMetalMeasuredUnaryRouteThresholds
+--- PASS: TestMetalMeasuredUnaryRouteThresholds (0.00s)
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/neg/ceiling-to-cpu
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/neg/above-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/neg/strided-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/exp/ceiling-to-cpu
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/exp/above-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/exp/strided-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/log/ceiling-to-cpu
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/log/above-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/log/strided-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/tanh/ceiling-to-cpu
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/tanh/above-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/tanh/strided-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/relu/ceiling-to-cpu
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/relu/above-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/relu/strided-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/sigmoid/ceiling-to-cpu
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/sigmoid/above-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/sigmoid/strided-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/sqrt/ceiling-to-cpu
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/sqrt/above-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/sqrt/strided-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/abs/ceiling-to-cpu
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/abs/above-to-metal
+=== RUN   TestMetalMeasuredUnaryRoutesBothArms/abs/strided-to-metal
+--- PASS: TestMetalMeasuredUnaryRoutesBothArms (0.72s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/neg/ceiling-to-cpu (0.10s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/neg/above-to-metal (0.12s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/neg/strided-to-metal (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/exp/ceiling-to-cpu (0.02s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/exp/above-to-metal (0.03s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/exp/strided-to-metal (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/log/ceiling-to-cpu (0.03s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/log/above-to-metal (0.03s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/log/strided-to-metal (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/tanh/ceiling-to-cpu (0.02s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/tanh/above-to-metal (0.03s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/tanh/strided-to-metal (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/relu/ceiling-to-cpu (0.02s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/relu/above-to-metal (0.03s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/relu/strided-to-metal (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/sigmoid/ceiling-to-cpu (0.02s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/sigmoid/above-to-metal (0.03s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/sigmoid/strided-to-metal (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/sqrt/ceiling-to-cpu (0.02s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/sqrt/above-to-metal (0.03s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/sqrt/strided-to-metal (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/abs/ceiling-to-cpu (0.10s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/abs/above-to-metal (0.11s)
+    --- PASS: TestMetalMeasuredUnaryRoutesBothArms/abs/strided-to-metal (0.00s)
+=== RUN   TestAttentionMatmulFloor
+    zzz_attnfloor_internal_test.go:65: attention MATMUL-ONLY floor 512×8×64 (16 MPS matmuls, no softmax): 1.39 ms (388 GFLOP/s) — vs flash-kernel ~11ms, torch-mps ~0.45ms
+--- PASS: TestAttentionMatmulFloor (0.05s)
+=== RUN   TestBatchDispatchBench
+    zzz_batchbench_internal_test.go:30: 95 dispatches: per-op 12.95 ms (136 us/op) | batched(1 cmd-buffer) 0.53 ms | speedup 24.3x
+--- PASS: TestBatchDispatchBench (0.42s)
+=== RUN   TestChainMatMulReLU
+--- PASS: TestChainMatMulReLU (0.00s)
+=== RUN   TestConvMatmulFloor
+    zzz_convfloor_internal_test.go:82: conv2d N8 C16 HW32 F32 K3: conv total 0.316 ms (239 GFLOP/s) | GEMM-only floor 0.187 ms (403 GFLOP/s) | overhead 0.129 ms (41%)
+--- PASS: TestConvMatmulFloor (0.03s)
+=== RUN   TestDecodeLoopKVCache
+    zzz_decodeloop_internal_test.go:247: decode loop over 5 steps, D=32 H=4: GPU Recorder matches host float64 across a growing KV cache
+    zzz_decodeloop_internal_test.go:293: assembled attn-block step (11 ops) @L=5: per-op 1.647 ms | batched 0.291 ms | speedup 5.66x
+--- PASS: TestDecodeLoopKVCache (0.20s)
+=== RUN   TestFallbackAuditForward
+    zzz_fallbackaudit_internal_test.go:54: silent CPU fallbacks in GPT forward (metal ctx → ref): OpEmbed 0.04 ms | OpCrossEntropy 0.69 ms | sum 0.74 ms (vs ~32ms fwd / ~110ms training step §T399)
+    zzz_fallbackaudit_internal_test.go:74: backward-path OpSum fallbacks: [256,512]→ax0 0.08 ms | [256,4096]→ax0 0.55 ms
+--- PASS: TestFallbackAuditForward (0.05s)
+=== RUN   TestCrossEntropyForwardCrossReference
+--- PASS: TestCrossEntropyForwardCrossReference (0.00s)
+=== RUN   TestEmbedForwardCrossReference
+--- PASS: TestEmbedForwardCrossReference (0.00s)
+=== RUN   TestFullModelDecodeCorrectness
+    zzz_fullmodel_internal_test.go:314: full 2-layer decoder, D=64 V=48: GPU Recorder logits match host float64 across 4 steps
+--- PASS: TestFullModelDecodeCorrectness (0.00s)
+=== RUN   TestFullModelDecodeEmbedViaBlit
+    zzz_fullmodel_internal_test.go:390: autoregressive decode via on-device embed-blit, 5 steps: GPU logits match host each step
+--- PASS: TestFullModelDecodeEmbedViaBlit (0.01s)
+=== RUN   TestFullModelDecodeBench
+    zzz_fullmodel_internal_test.go:453: full decode step D=512 H=8 6-layer V=1024 @L=32 (98 ops): per-op 19.967 ms | batched 3.072 ms | speedup 6.50x
+--- PASS: TestFullModelDecodeBench (0.76s)
+=== RUN   TestLayerBatchBench
+    zzz_layerbench_internal_test.go:120: decode-ish D512 S1   (12 ops): per-op 2.127 ms | batched 0.511 ms | speedup 4.17x
+    zzz_layerbench_internal_test.go:120: decode-ish D1024 S1  (12 ops): per-op 2.828 ms | batched 1.227 ms | speedup 2.30x
+    zzz_layerbench_internal_test.go:120: prefill D512 S128    (12 ops): per-op 3.433 ms | batched 1.475 ms | speedup 2.33x
+    zzz_layerbench_internal_test.go:120: train D512 S256      (12 ops): per-op 3.378 ms | batched 1.674 ms | speedup 2.02x
+--- PASS: TestLayerBatchBench (0.87s)
+=== RUN   TestLlamaDecodeCorrectness
+    zzz_llama_internal_test.go:310: Llama-style decoder (GQA 8:2, SwiGLU), 2-layer D=64: Recorder logits match host across 4 steps
+--- PASS: TestLlamaDecodeCorrectness (0.00s)
+=== RUN   TestLlamaDecodeBench
+    zzz_llama_internal_test.go:362: Llama decode step D=512 GQA8:2 6-layer V=1024 @L=32 (110 ops): per-op 24.090 ms | batched 3.506 ms | speedup 6.87x
+--- PASS: TestLlamaDecodeBench (0.91s)
+=== RUN   TestMatMulNoCopyAB
+    zzz_matmulnocopy_internal_test.go:24: perf A/B — skipped in -short
+--- SKIP: TestMatMulNoCopyAB (0.00s)
+=== RUN   TestMHABackwardMPSCrossReference
+=== RUN   TestMHABackwardMPSCrossReference/mha-small
+=== RUN   TestMHABackwardMPSCrossReference/mha-mid
+=== RUN   TestMHABackwardMPSCrossReference/gqa
+=== RUN   TestMHABackwardMPSCrossReference/mqa
+--- PASS: TestMHABackwardMPSCrossReference (0.02s)
+    --- PASS: TestMHABackwardMPSCrossReference/mha-small (0.02s)
+    --- PASS: TestMHABackwardMPSCrossReference/mha-mid (0.00s)
+    --- PASS: TestMHABackwardMPSCrossReference/gqa (0.00s)
+    --- PASS: TestMHABackwardMPSCrossReference/mqa (0.00s)
+=== RUN   TestMHABackwardMPSvsFlashBench
+    zzz_mhabwdmps_internal_test.go:101: attention BACKWARD 512×8×64 causal: flash-backward 77.21 ms | MPS matmuls 4.16 ms | speedup 18.6x
+--- PASS: TestMHABackwardMPSvsFlashBench (1.30s)
+=== RUN   TestMHAMPSCrossReference
+--- PASS: TestMHAMPSCrossReference (0.00s)
+=== RUN   TestMHAMPSvsFlashBench
+    zzz_mhamps_internal_test.go:107: attention fwd 512×8×64 causal: flash-kernel 2.46 ms | MPS(Q·Kᵀ)→softmax→MPS(P·V) 1.86 ms | speedup 1.3x (torch-mps ~0.45ms)
+--- PASS: TestMHAMPSvsFlashBench (0.09s)
+=== RUN   TestRecorderRoPEAtOffsetParity
+--- PASS: TestRecorderRoPEAtOffsetParity (0.00s)
+=== RUN   TestRecorderMHAAtOffsetParity
+--- PASS: TestRecorderMHAAtOffsetParity (0.00s)
+=== RUN   TestRecorderCopy2DParity
+--- PASS: TestRecorderCopy2DParity (0.00s)
+=== RUN   TestOpMHADecodeLongContext
+    zzz_opmhalong_internal_test.go:36: per-op OpMHA sq=1 sk=1920: 1.80 ms/op (was ~40ms via the serial two-pass kernel, §T428 profile)
+--- PASS: TestOpMHADecodeLongContext (0.07s)
+=== RUN   TestRecorderUnaryChain
+--- PASS: TestRecorderUnaryChain (0.00s)
+=== RUN   TestRecorderMatMulChain
+--- PASS: TestRecorderMatMulChain (0.00s)
+=== RUN   TestRecorderRMSNormChain
+--- PASS: TestRecorderRMSNormChain (0.00s)
+=== RUN   TestRecorderSwiGLU
+--- PASS: TestRecorderSwiGLU (0.00s)
+=== RUN   TestRecorderLayerNormChain
+--- PASS: TestRecorderLayerNormChain (0.00s)
+=== RUN   TestRecorderFlashAttn
+--- PASS: TestRecorderFlashAttn (0.00s)
+=== RUN   TestRecorderDecodeAttn
+--- PASS: TestRecorderDecodeAttn (0.00s)
+=== RUN   TestRecorderRoPE
+--- PASS: TestRecorderRoPE (0.00s)
+=== RUN   TestRecorderKVAppend
+--- PASS: TestRecorderKVAppend (0.00s)
+=== RUN   TestRecorderQMatMulResident
+--- PASS: TestRecorderQMatMulResident (0.00s)
+=== RUN   TestMetalSIMDActivationRoutingRecordsOnce
+=== RUN   TestMetalSIMDActivationRoutingRecordsOnce/gelu
+=== RUN   TestMetalSIMDActivationRoutingRecordsOnce/silu
+--- PASS: TestMetalSIMDActivationRoutingRecordsOnce (0.00s)
+    --- PASS: TestMetalSIMDActivationRoutingRecordsOnce/gelu (0.00s)
+    --- PASS: TestMetalSIMDActivationRoutingRecordsOnce/silu (0.00s)
+=== RUN   TestRecorderBiasGELUMatchesSplitPrefixAndPreservesTail
+--- PASS: TestRecorderBiasGELUMatchesSplitPrefixAndPreservesTail (0.00s)
+=== RUN   TestRecorderBiasGELUProfileIsOneDispatch
+--- PASS: TestRecorderBiasGELUProfileIsOneDispatch (0.00s)
+=== RUN   TestMetalCrossEntropyGuardFallsBackForEveryField
+=== RUN   TestMetalCrossEntropyGuardFallsBackForEveryField/LabelSmoothing
+=== RUN   TestMetalCrossEntropyGuardFallsBackForEveryField/ZLoss
+=== RUN   TestMetalCrossEntropyGuardFallsBackForEveryField/IgnoreIndex
+=== RUN   TestMetalCrossEntropyGuardFallsBackForEveryField/HasIgnoreIndex
+=== RUN   TestMetalCrossEntropyGuardFallsBackForEveryField/Reduction
+=== RUN   TestMetalCrossEntropyGuardFallsBackForEveryField/IgnoreIndex+Smoothing
+=== RUN   TestMetalCrossEntropyGuardFallsBackForEveryField/IgnoreIndex+Sum
+=== RUN   TestMetalCrossEntropyGuardFallsBackForEveryField/IgnoreIndex+None+Smoothing
+--- PASS: TestMetalCrossEntropyGuardFallsBackForEveryField (0.00s)
+    --- PASS: TestMetalCrossEntropyGuardFallsBackForEveryField/LabelSmoothing (0.00s)
+    --- PASS: TestMetalCrossEntropyGuardFallsBackForEveryField/ZLoss (0.00s)
+    --- PASS: TestMetalCrossEntropyGuardFallsBackForEveryField/IgnoreIndex (0.00s)
+    --- PASS: TestMetalCrossEntropyGuardFallsBackForEveryField/HasIgnoreIndex (0.00s)
+    --- PASS: TestMetalCrossEntropyGuardFallsBackForEveryField/Reduction (0.00s)
+    --- PASS: TestMetalCrossEntropyGuardFallsBackForEveryField/IgnoreIndex+Smoothing (0.00s)
+    --- PASS: TestMetalCrossEntropyGuardFallsBackForEveryField/IgnoreIndex+Sum (0.00s)
+    --- PASS: TestMetalCrossEntropyGuardFallsBackForEveryField/IgnoreIndex+None+Smoothing (0.00s)
+=== RUN   TestGPTAdamWSessionMetalParitySyncAndLifetime
+--- PASS: TestGPTAdamWSessionMetalParitySyncAndLifetime (0.07s)
+=== RUN   TestGPTLossAndGradMetalParityAndImmutability
+--- PASS: TestGPTLossAndGradMetalParityAndImmutability (0.02s)
+=== RUN   TestMetalGPTInference
+    gpt_test.go:103: GPT inference runs on GPU with matching predictions
+--- PASS: TestMetalGPTInference (0.01s)
+=== RUN   TestMetalGPTTraining
+    gpt_test.go:157: GPU GPT training converged: CE 3.2907 → 0.0461 (cpu final 0.0461)
+--- PASS: TestMetalGPTTraining (0.76s)
+=== RUN   TestGPTDecodeBenchmarkCacheIsolation
+--- PASS: TestGPTDecodeBenchmarkCacheIsolation (0.00s)
+=== RUN   TestMetalQMatMulIQ1CrossReference
+=== RUN   TestMetalQMatMulIQ1CrossReference/IQ1_S
+    iq1_test.go:116: maximum relative difference 1.168e-07
+    iq1_test.go:116: maximum relative difference 6.544e-07
+    iq1_test.go:116: maximum relative difference 4.558e-07
+    iq1_test.go:116: maximum relative difference 2.665e-06
+    iq1_test.go:116: maximum relative difference 4.660e-07
+=== RUN   TestMetalQMatMulIQ1CrossReference/IQ1_M
+    iq1_test.go:116: maximum relative difference 1.168e-07
+    iq1_test.go:116: maximum relative difference 3.343e-07
+    iq1_test.go:116: maximum relative difference 3.830e-06
+    iq1_test.go:116: maximum relative difference 1.649e-06
+    iq1_test.go:116: maximum relative difference 4.997e-07
+--- PASS: TestMetalQMatMulIQ1CrossReference (0.00s)
+    --- PASS: TestMetalQMatMulIQ1CrossReference/IQ1_S (0.00s)
+    --- PASS: TestMetalQMatMulIQ1CrossReference/IQ1_M (0.00s)
+=== RUN   TestMetalQMatMulIQ1CooperativeMatchesScalar
+=== RUN   TestMetalQMatMulIQ1CooperativeMatchesScalar/IQ1_S
+    iq1_test.go:145: maximum relative difference 1.168e-07
+    iq1_test.go:145: maximum relative difference 2.181e-07
+    iq1_test.go:145: maximum relative difference 2.735e-07
+    iq1_test.go:145: maximum relative difference 4.581e-07
+    iq1_test.go:145: maximum relative difference 1.995e-06
+=== RUN   TestMetalQMatMulIQ1CooperativeMatchesScalar/IQ1_M
+    iq1_test.go:145: maximum relative difference 1.168e-07
+    iq1_test.go:145: maximum relative difference 2.533e-07
+    iq1_test.go:145: maximum relative difference 5.841e-06
+    iq1_test.go:145: maximum relative difference 8.188e-07
+    iq1_test.go:145: maximum relative difference 8.434e-06
+--- PASS: TestMetalQMatMulIQ1CooperativeMatchesScalar (0.01s)
+    --- PASS: TestMetalQMatMulIQ1CooperativeMatchesScalar/IQ1_S (0.00s)
+    --- PASS: TestMetalQMatMulIQ1CooperativeMatchesScalar/IQ1_M (0.00s)
+=== RUN   TestMetalQMatMulIQ1FloatingPointClass
+=== RUN   TestMetalQMatMulIQ1FloatingPointClass/IQ1_S
+=== RUN   TestMetalQMatMulIQ1FloatingPointClass/IQ1_M
+--- PASS: TestMetalQMatMulIQ1FloatingPointClass (0.00s)
+    --- PASS: TestMetalQMatMulIQ1FloatingPointClass/IQ1_S (0.00s)
+    --- PASS: TestMetalQMatMulIQ1FloatingPointClass/IQ1_M (0.00s)
+=== RUN   TestMetalQMatMulIQ1DispatchAndValidation
+=== RUN   TestMetalQMatMulIQ1DispatchAndValidation/IQ1_S
+=== RUN   TestMetalQMatMulIQ1DispatchAndValidation/IQ1_M
+--- PASS: TestMetalQMatMulIQ1DispatchAndValidation (0.00s)
+    --- PASS: TestMetalQMatMulIQ1DispatchAndValidation/IQ1_S (0.00s)
+    --- PASS: TestMetalQMatMulIQ1DispatchAndValidation/IQ1_M (0.00s)
+=== RUN   TestMetalQMatMulIQ1RecorderResident
+=== RUN   TestMetalQMatMulIQ1RecorderResident/IQ1_S
+    iq1_test.go:256: maximum relative difference 1.252e-06
+=== RUN   TestMetalQMatMulIQ1RecorderResident/IQ1_M
+    iq1_test.go:256: maximum relative difference 1.609e-06
+--- PASS: TestMetalQMatMulIQ1RecorderResident (0.00s)
+    --- PASS: TestMetalQMatMulIQ1RecorderResident/IQ1_S (0.00s)
+    --- PASS: TestMetalQMatMulIQ1RecorderResident/IQ1_M (0.00s)
+=== RUN   TestMetalQMatMulIQ2CrossReference
+=== RUN   TestMetalQMatMulIQ2CrossReference/IQ2_XXS
+    iq2_test.go:127: maximum relative difference 1.844e-07
+    iq2_test.go:127: maximum relative difference 7.416e-07
+    iq2_test.go:127: maximum relative difference 2.017e-06
+    iq2_test.go:127: maximum relative difference 2.139e-06
+    iq2_test.go:127: maximum relative difference 2.083e-06
+=== RUN   TestMetalQMatMulIQ2CrossReference/IQ2_XS
+    iq2_test.go:127: maximum relative difference 7.889e-07
+    iq2_test.go:127: maximum relative difference 2.055e-06
+    iq2_test.go:127: maximum relative difference 2.712e-07
+    iq2_test.go:127: maximum relative difference 8.966e-06
+    iq2_test.go:127: maximum relative difference 4.483e-07
+=== RUN   TestMetalQMatMulIQ2CrossReference/IQ2_S
+    iq2_test.go:127: maximum relative difference 4.021e-07
+    iq2_test.go:127: maximum relative difference 2.671e-07
+    iq2_test.go:127: maximum relative difference 1.827e-06
+    iq2_test.go:127: maximum relative difference 3.483e-06
+    iq2_test.go:127: maximum relative difference 2.077e-06
+--- PASS: TestMetalQMatMulIQ2CrossReference (0.00s)
+    --- PASS: TestMetalQMatMulIQ2CrossReference/IQ2_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2CrossReference/IQ2_XS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2CrossReference/IQ2_S (0.00s)
+=== RUN   TestMetalQMatMulIQ2CooperativeMatchesScalar
+=== RUN   TestMetalQMatMulIQ2CooperativeMatchesScalar/IQ2_XXS
+    iq2_test.go:156: maximum relative difference 2.766e-07
+    iq2_test.go:156: maximum relative difference 1.959e-06
+    iq2_test.go:156: maximum relative difference 3.362e-06
+    iq2_test.go:156: maximum relative difference 5.147e-07
+    iq2_test.go:156: maximum relative difference 4.983e-06
+=== RUN   TestMetalQMatMulIQ2CooperativeMatchesScalar/IQ2_XS
+    iq2_test.go:156: maximum relative difference 4.733e-06
+    iq2_test.go:156: maximum relative difference 4.951e-06
+    iq2_test.go:156: maximum relative difference 7.354e-07
+    iq2_test.go:156: maximum relative difference 1.481e-06
+    iq2_test.go:156: maximum relative difference 1.510e-05
+=== RUN   TestMetalQMatMulIQ2CooperativeMatchesScalar/IQ2_S
+    iq2_test.go:156: maximum relative difference 1.876e-06
+    iq2_test.go:156: maximum relative difference 1.870e-06
+    iq2_test.go:156: maximum relative difference 2.133e-06
+    iq2_test.go:156: maximum relative difference 2.211e-06
+    iq2_test.go:156: maximum relative difference 9.489e-06
+--- PASS: TestMetalQMatMulIQ2CooperativeMatchesScalar (0.01s)
+    --- PASS: TestMetalQMatMulIQ2CooperativeMatchesScalar/IQ2_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2CooperativeMatchesScalar/IQ2_XS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2CooperativeMatchesScalar/IQ2_S (0.00s)
+=== RUN   TestMetalQMatMulIQ2FloatingPointClass
+=== RUN   TestMetalQMatMulIQ2FloatingPointClass/IQ2_XXS
+=== RUN   TestMetalQMatMulIQ2FloatingPointClass/IQ2_XS
+=== RUN   TestMetalQMatMulIQ2FloatingPointClass/IQ2_S
+--- PASS: TestMetalQMatMulIQ2FloatingPointClass (0.00s)
+    --- PASS: TestMetalQMatMulIQ2FloatingPointClass/IQ2_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2FloatingPointClass/IQ2_XS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2FloatingPointClass/IQ2_S (0.00s)
+=== RUN   TestMetalQMatMulIQ2DispatchAndValidation
+=== RUN   TestMetalQMatMulIQ2DispatchAndValidation/IQ2_XXS
+    iq2_test.go:209: maximum relative difference 2.004e-07
+=== RUN   TestMetalQMatMulIQ2DispatchAndValidation/IQ2_XS
+    iq2_test.go:209: maximum relative difference 1.259e-07
+=== RUN   TestMetalQMatMulIQ2DispatchAndValidation/IQ2_S
+    iq2_test.go:209: maximum relative difference 2.671e-07
+--- PASS: TestMetalQMatMulIQ2DispatchAndValidation (0.00s)
+    --- PASS: TestMetalQMatMulIQ2DispatchAndValidation/IQ2_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2DispatchAndValidation/IQ2_XS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2DispatchAndValidation/IQ2_S (0.00s)
+=== RUN   TestMetalQMatMulIQ2RecorderResident
+=== RUN   TestMetalQMatMulIQ2RecorderResident/IQ2_XXS
+    iq2_test.go:271: maximum relative difference 9.765e-06
+=== RUN   TestMetalQMatMulIQ2RecorderResident/IQ2_XS
+    iq2_test.go:271: maximum relative difference 2.055e-06
+=== RUN   TestMetalQMatMulIQ2RecorderResident/IQ2_S
+    iq2_test.go:271: maximum relative difference 5.842e-07
+--- PASS: TestMetalQMatMulIQ2RecorderResident (0.00s)
+    --- PASS: TestMetalQMatMulIQ2RecorderResident/IQ2_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2RecorderResident/IQ2_XS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2RecorderResident/IQ2_S (0.00s)
+=== RUN   TestMetalQMatMulIQ3CrossReference
+=== RUN   TestMetalQMatMulIQ3CrossReference/IQ3_XXS
+    iq3_test.go:111: maximum relative difference 0.000e+00
+    iq3_test.go:111: maximum relative difference 6.998e-07
+    iq3_test.go:111: maximum relative difference 3.751e-06
+    iq3_test.go:111: maximum relative difference 1.150e-05
+    iq3_test.go:111: maximum relative difference 5.991e-06
+=== RUN   TestMetalQMatMulIQ3CrossReference/IQ3_S
+    iq3_test.go:111: maximum relative difference 0.000e+00
+    iq3_test.go:111: maximum relative difference 1.315e-07
+    iq3_test.go:111: maximum relative difference 1.566e-05
+    iq3_test.go:111: maximum relative difference 1.184e-06
+    iq3_test.go:111: maximum relative difference 1.725e-06
+--- PASS: TestMetalQMatMulIQ3CrossReference (0.00s)
+    --- PASS: TestMetalQMatMulIQ3CrossReference/IQ3_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ3CrossReference/IQ3_S (0.00s)
+=== RUN   TestMetalQMatMulIQ3CooperativeMatchesScalar
+=== RUN   TestMetalQMatMulIQ3CooperativeMatchesScalar/IQ3_XXS
+    iq3_test.go:140: maximum relative difference 1.076e-07
+    iq3_test.go:140: maximum relative difference 1.545e-06
+    iq3_test.go:140: maximum relative difference 7.106e-06
+    iq3_test.go:140: maximum relative difference 2.628e-07
+    iq3_test.go:140: maximum relative difference 2.373e-05
+=== RUN   TestMetalQMatMulIQ3CooperativeMatchesScalar/IQ3_S
+    iq3_test.go:140: maximum relative difference 0.000e+00
+    iq3_test.go:140: maximum relative difference 1.297e-06
+    iq3_test.go:140: maximum relative difference 3.113e-06
+    iq3_test.go:140: maximum relative difference 1.574e-06
+    iq3_test.go:140: maximum relative difference 5.682e-06
+--- PASS: TestMetalQMatMulIQ3CooperativeMatchesScalar (0.01s)
+    --- PASS: TestMetalQMatMulIQ3CooperativeMatchesScalar/IQ3_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ3CooperativeMatchesScalar/IQ3_S (0.00s)
+=== RUN   TestMetalQMatMulIQ3FloatingPointClass
+=== RUN   TestMetalQMatMulIQ3FloatingPointClass/IQ3_XXS
+=== RUN   TestMetalQMatMulIQ3FloatingPointClass/IQ3_S
+--- PASS: TestMetalQMatMulIQ3FloatingPointClass (0.00s)
+    --- PASS: TestMetalQMatMulIQ3FloatingPointClass/IQ3_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ3FloatingPointClass/IQ3_S (0.00s)
+=== RUN   TestMetalQMatMulIQ3DispatchAndValidation
+=== RUN   TestMetalQMatMulIQ3DispatchAndValidation/IQ3_XXS
+    iq3_test.go:193: maximum relative difference 6.998e-07
+=== RUN   TestMetalQMatMulIQ3DispatchAndValidation/IQ3_S
+    iq3_test.go:193: maximum relative difference 1.315e-07
+--- PASS: TestMetalQMatMulIQ3DispatchAndValidation (0.00s)
+    --- PASS: TestMetalQMatMulIQ3DispatchAndValidation/IQ3_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ3DispatchAndValidation/IQ3_S (0.00s)
+=== RUN   TestMetalQMatMulIQ3RecorderResident
+=== RUN   TestMetalQMatMulIQ3RecorderResident/IQ3_XXS
+    iq3_test.go:255: maximum relative difference 8.326e-07
+=== RUN   TestMetalQMatMulIQ3RecorderResident/IQ3_S
+    iq3_test.go:255: maximum relative difference 2.866e-07
+--- PASS: TestMetalQMatMulIQ3RecorderResident (0.00s)
+    --- PASS: TestMetalQMatMulIQ3RecorderResident/IQ3_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ3RecorderResident/IQ3_S (0.00s)
+=== RUN   TestMetalQMatMulIQ4NLCrossReference
+    iq4_nl_test.go:82: IQ4_NL max relative difference 1.802e-07
+    iq4_nl_test.go:82: IQ4_NL max relative difference 2.039e-07
+    iq4_nl_test.go:82: IQ4_NL max relative difference 9.961e-07
+    iq4_nl_test.go:82: IQ4_NL max relative difference 9.565e-08
+    iq4_nl_test.go:82: IQ4_NL max relative difference 6.720e-07
+--- PASS: TestMetalQMatMulIQ4NLCrossReference (0.00s)
+=== RUN   TestMetalQMatMulIQ4NLCooperativeMatchesScalar
+    iq4_nl_test.go:110: IQ4_NL max relative difference 1.802e-07
+    iq4_nl_test.go:110: IQ4_NL max relative difference 2.039e-07
+    iq4_nl_test.go:110: IQ4_NL max relative difference 1.175e-06
+    iq4_nl_test.go:110: IQ4_NL max relative difference 3.851e-06
+    iq4_nl_test.go:110: IQ4_NL max relative difference 2.633e-06
+--- PASS: TestMetalQMatMulIQ4NLCooperativeMatchesScalar (0.00s)
+=== RUN   TestMetalQMatMulIQ4NLFloatingPointClass
+--- PASS: TestMetalQMatMulIQ4NLFloatingPointClass (0.00s)
+=== RUN   TestMetalQMatMulIQ4NLDispatchAndValidation
+    iq4_nl_test.go:170: IQ4_NL max relative difference 7.137e-08
+--- PASS: TestMetalQMatMulIQ4NLDispatchAndValidation (0.00s)
+=== RUN   TestMetalQMatMulIQ4NLRecorderResident
+    iq4_nl_test.go:222: IQ4_NL max relative difference 4.392e-07
+--- PASS: TestMetalQMatMulIQ4NLRecorderResident (0.00s)
+=== RUN   TestMetalQMatMulIQ4XSCrossReference
+    iq4_xs_test.go:90: IQ4_XS max relative difference 0.000e+00
+    iq4_xs_test.go:90: IQ4_XS max relative difference 3.404e-07
+    iq4_xs_test.go:90: IQ4_XS max relative difference 2.723e-06
+    iq4_xs_test.go:90: IQ4_XS max relative difference 1.086e-05
+    iq4_xs_test.go:90: IQ4_XS max relative difference 4.837e-07
+--- PASS: TestMetalQMatMulIQ4XSCrossReference (0.00s)
+=== RUN   TestMetalQMatMulIQ4XSCooperativeMatchesScalar
+    iq4_xs_test.go:118: IQ4_XS max relative difference 8.707e-08
+    iq4_xs_test.go:118: IQ4_XS max relative difference 3.882e-07
+    iq4_xs_test.go:118: IQ4_XS max relative difference 3.971e-07
+    iq4_xs_test.go:118: IQ4_XS max relative difference 2.349e-06
+    iq4_xs_test.go:118: IQ4_XS max relative difference 1.976e-05
+--- PASS: TestMetalQMatMulIQ4XSCooperativeMatchesScalar (0.00s)
+=== RUN   TestMetalQMatMulIQ4XSFloatingPointClass
+--- PASS: TestMetalQMatMulIQ4XSFloatingPointClass (0.00s)
+=== RUN   TestMetalQMatMulIQ4XSDispatchAndValidation
+    iq4_xs_test.go:184: IQ4_XS max relative difference 9.963e-08
+--- PASS: TestMetalQMatMulIQ4XSDispatchAndValidation (0.00s)
+=== RUN   TestMetalQMatMulIQ4XSRecorderResident
+    iq4_xs_test.go:236: IQ4_XS max relative difference 6.156e-07
+--- PASS: TestMetalQMatMulIQ4XSRecorderResident (0.00s)
+=== RUN   TestLayerNormSequenceClassifierMetalParity
+--- PASS: TestLayerNormSequenceClassifierMetalParity (0.00s)
+=== RUN   TestLayerNormSequenceClassifierMetalGraphParity
+--- PASS: TestLayerNormSequenceClassifierMetalGraphParity (0.02s)
+=== RUN   TestLayerNormSequenceClassifierViTMetalParity
+--- PASS: TestLayerNormSequenceClassifierViTMetalParity (0.15s)
+=== RUN   TestMetalMemoryProber
+--- PASS: TestMetalMemoryProber (0.00s)
+=== RUN   TestMetalCrossReference
+--- PASS: TestMetalCrossReference (2.34s)
+=== RUN   TestMetalMHACrossReference
+=== RUN   TestMetalMHACrossReference/mha
+=== RUN   TestMetalMHACrossReference/causal
+=== RUN   TestMetalMHACrossReference/gqa
+=== RUN   TestMetalMHACrossReference/mqa
+=== RUN   TestMetalMHACrossReference/kvcache
+=== RUN   TestMetalMHACrossReference/attnscale
+--- PASS: TestMetalMHACrossReference (0.03s)
+    --- PASS: TestMetalMHACrossReference/mha (0.01s)
+    --- PASS: TestMetalMHACrossReference/causal (0.01s)
+    --- PASS: TestMetalMHACrossReference/gqa (0.01s)
+    --- PASS: TestMetalMHACrossReference/mqa (0.00s)
+    --- PASS: TestMetalMHACrossReference/kvcache (0.00s)
+    --- PASS: TestMetalMHACrossReference/attnscale (0.00s)
+=== RUN   TestMetalMHAMPSRaceRegression
+--- PASS: TestMetalMHAMPSRaceRegression (2.92s)
+=== RUN   TestMetalMHAWindowCrossReference
+=== RUN   TestMetalMHAWindowCrossReference/swa
+=== RUN   TestMetalMHAWindowCrossReference/swa-noncausal
+=== RUN   TestMetalMHAWindowCrossReference/swa-gqa
+=== RUN   TestMetalMHAWindowCrossReference/window>=seq
+=== RUN   TestMetalMHAWindowCrossReference/swa-kvcache
+=== RUN   TestMetalMHAWindowCrossReference/window1
+--- PASS: TestMetalMHAWindowCrossReference (0.00s)
+    --- PASS: TestMetalMHAWindowCrossReference/swa (0.00s)
+    --- PASS: TestMetalMHAWindowCrossReference/swa-noncausal (0.00s)
+    --- PASS: TestMetalMHAWindowCrossReference/swa-gqa (0.00s)
+    --- PASS: TestMetalMHAWindowCrossReference/window>=seq (0.00s)
+    --- PASS: TestMetalMHAWindowCrossReference/swa-kvcache (0.00s)
+    --- PASS: TestMetalMHAWindowCrossReference/window1 (0.00s)
+=== RUN   TestMetalMHAMPSGraphCrossReference
+=== RUN   TestMetalMHAMPSGraphCrossReference/mha
+=== RUN   TestMetalMHAMPSGraphCrossReference/causal
+=== RUN   TestMetalMHAMPSGraphCrossReference/gqa
+=== RUN   TestMetalMHAMPSGraphCrossReference/mqa
+=== RUN   TestMetalMHAMPSGraphCrossReference/attnscale
+=== RUN   TestMetalMHAMPSGraphCrossReference/prefill512
+=== RUN   TestMetalMHAMPSGraphCrossReference/gqa512
+=== RUN   TestMetalMHAMPSGraphCrossReference/prefill1024
+--- PASS: TestMetalMHAMPSGraphCrossReference (0.59s)
+    --- PASS: TestMetalMHAMPSGraphCrossReference/mha (0.00s)
+    --- PASS: TestMetalMHAMPSGraphCrossReference/causal (0.00s)
+    --- PASS: TestMetalMHAMPSGraphCrossReference/gqa (0.01s)
+    --- PASS: TestMetalMHAMPSGraphCrossReference/mqa (0.00s)
+    --- PASS: TestMetalMHAMPSGraphCrossReference/attnscale (0.00s)
+    --- PASS: TestMetalMHAMPSGraphCrossReference/prefill512 (0.10s)
+    --- PASS: TestMetalMHAMPSGraphCrossReference/gqa512 (0.10s)
+    --- PASS: TestMetalMHAMPSGraphCrossReference/prefill1024 (0.37s)
+=== RUN   TestMetalFlashAttnCrossReference
+=== RUN   TestMetalFlashAttnCrossReference/flash
+=== RUN   TestMetalFlashAttnCrossReference/causal
+=== RUN   TestMetalFlashAttnCrossReference/big
+=== RUN   TestMetalFlashAttnCrossReference/onehead
+=== RUN   TestMetalFlashAttnCrossReference/wide
+=== RUN   TestMetalFlashAttnCrossReference/gqa
+=== RUN   TestMetalFlashAttnCrossReference/mqa
+=== RUN   TestMetalFlashAttnCrossReference/gqa3
+=== RUN   TestMetalFlashAttnCrossReference/prefill512
+=== RUN   TestMetalFlashAttnCrossReference/gqa512
+=== RUN   TestMetalFlashAttnCrossReference/prefill1024
+--- PASS: TestMetalFlashAttnCrossReference (1.09s)
+    --- PASS: TestMetalFlashAttnCrossReference/flash (0.00s)
+    --- PASS: TestMetalFlashAttnCrossReference/causal (0.00s)
+    --- PASS: TestMetalFlashAttnCrossReference/big (0.00s)
+    --- PASS: TestMetalFlashAttnCrossReference/onehead (0.00s)
+    --- PASS: TestMetalFlashAttnCrossReference/wide (0.00s)
+    --- PASS: TestMetalFlashAttnCrossReference/gqa (0.00s)
+    --- PASS: TestMetalFlashAttnCrossReference/mqa (0.00s)
+    --- PASS: TestMetalFlashAttnCrossReference/gqa3 (0.00s)
+    --- PASS: TestMetalFlashAttnCrossReference/prefill512 (0.19s)
+    --- PASS: TestMetalFlashAttnCrossReference/gqa512 (0.18s)
+    --- PASS: TestMetalFlashAttnCrossReference/prefill1024 (0.71s)
+=== RUN   TestMetalMHABackwardCrossReference
+=== RUN   TestMetalMHABackwardCrossReference/mha
+=== RUN   TestMetalMHABackwardCrossReference/causal
+=== RUN   TestMetalMHABackwardCrossReference/gqa
+=== RUN   TestMetalMHABackwardCrossReference/mqa
+=== RUN   TestMetalMHABackwardCrossReference/attnscale
+=== RUN   TestMetalMHABackwardCrossReference/swa
+=== RUN   TestMetalMHABackwardCrossReference/swa-gqa
+=== RUN   TestMetalMHABackwardCrossReference/swa-window1
+--- PASS: TestMetalMHABackwardCrossReference (0.01s)
+    --- PASS: TestMetalMHABackwardCrossReference/mha (0.00s)
+    --- PASS: TestMetalMHABackwardCrossReference/causal (0.00s)
+    --- PASS: TestMetalMHABackwardCrossReference/gqa (0.00s)
+    --- PASS: TestMetalMHABackwardCrossReference/mqa (0.00s)
+    --- PASS: TestMetalMHABackwardCrossReference/attnscale (0.00s)
+    --- PASS: TestMetalMHABackwardCrossReference/swa (0.00s)
+    --- PASS: TestMetalMHABackwardCrossReference/swa-gqa (0.00s)
+    --- PASS: TestMetalMHABackwardCrossReference/swa-window1 (0.00s)
+=== RUN   TestMetalMHATrainingMatchesRef
+--- PASS: TestMetalMHATrainingMatchesRef (0.00s)
+=== RUN   TestMetalMHAFallbackFeatures
+--- PASS: TestMetalMHAFallbackFeatures (0.00s)
+=== RUN   TestMetalConv2DCrossReference
+=== RUN   TestMetalConv2DCrossReference/native/basic
+=== RUN   TestMetalConv2DCrossReference/native/pad
+=== RUN   TestMetalConv2DCrossReference/native/stride2
+=== RUN   TestMetalConv2DCrossReference/native/1x1
+=== RUN   TestMetalConv2DCrossReference/native/nonsquare
+=== RUN   TestMetalConv2DCrossReference/native/fmap32
+    metal_test.go:614: §T624 native/fmap32: k=144 rtol=6.1000000000000005e-05 maxRel=2.8014183044433594e-06 margin=21.77x
+=== RUN   TestMetalConv2DCrossReference/native/deep28
+    metal_test.go:614: §T624 native/deep28: k=576 rtol=0.00012100000000000001 maxRel=8.285045623779297e-06 margin=14.60x
+=== RUN   TestMetalConv2DCrossReference/native/conv1x1
+    metal_test.go:614: §T624 native/conv1x1: k=256 rtol=8.1e-05 maxRel=6.4373016357421875e-06 margin=12.58x
+=== RUN   TestMetalConv2DCrossReference/im2col/basic
+=== RUN   TestMetalConv2DCrossReference/im2col/pad
+=== RUN   TestMetalConv2DCrossReference/im2col/stride2
+=== RUN   TestMetalConv2DCrossReference/im2col/1x1
+=== RUN   TestMetalConv2DCrossReference/im2col/nonsquare
+--- PASS: TestMetalConv2DCrossReference (0.32s)
+    --- PASS: TestMetalConv2DCrossReference/native/basic (0.00s)
+    --- PASS: TestMetalConv2DCrossReference/native/pad (0.00s)
+    --- PASS: TestMetalConv2DCrossReference/native/stride2 (0.00s)
+    --- PASS: TestMetalConv2DCrossReference/native/1x1 (0.00s)
+    --- PASS: TestMetalConv2DCrossReference/native/nonsquare (0.00s)
+    --- PASS: TestMetalConv2DCrossReference/native/fmap32 (0.03s)
+    --- PASS: TestMetalConv2DCrossReference/native/deep28 (0.04s)
+    --- PASS: TestMetalConv2DCrossReference/native/conv1x1 (0.22s)
+    --- PASS: TestMetalConv2DCrossReference/im2col/basic (0.00s)
+    --- PASS: TestMetalConv2DCrossReference/im2col/pad (0.00s)
+    --- PASS: TestMetalConv2DCrossReference/im2col/stride2 (0.00s)
+    --- PASS: TestMetalConv2DCrossReference/im2col/1x1 (0.00s)
+    --- PASS: TestMetalConv2DCrossReference/im2col/nonsquare (0.00s)
+=== RUN   TestMetalConvCacheEviction
+=== RUN   TestMetalConvCacheEviction/same-shape-after-eviction
+--- PASS: TestMetalConvCacheEviction (0.11s)
+    --- PASS: TestMetalConvCacheEviction/same-shape-after-eviction (0.02s)
+=== RUN   TestMetalConv2DBackwardCrossReference
+=== RUN   TestMetalConv2DBackwardCrossReference/basic
+=== RUN   TestMetalConv2DBackwardCrossReference/pad
+=== RUN   TestMetalConv2DBackwardCrossReference/stride2
+=== RUN   TestMetalConv2DBackwardCrossReference/1x1
+=== RUN   TestMetalConv2DBackwardCrossReference/nonsquare
+--- PASS: TestMetalConv2DBackwardCrossReference (0.00s)
+    --- PASS: TestMetalConv2DBackwardCrossReference/basic (0.00s)
+    --- PASS: TestMetalConv2DBackwardCrossReference/pad (0.00s)
+    --- PASS: TestMetalConv2DBackwardCrossReference/stride2 (0.00s)
+    --- PASS: TestMetalConv2DBackwardCrossReference/1x1 (0.00s)
+    --- PASS: TestMetalConv2DBackwardCrossReference/nonsquare (0.00s)
+=== RUN   TestMetalFallback
+--- PASS: TestMetalFallback (0.00s)
+=== RUN   TestMetalRetentionCrossReference
+--- PASS: TestMetalRetentionCrossReference (0.00s)
+=== RUN   TestMetalRetentionBackwardCrossReference
+--- PASS: TestMetalRetentionBackwardCrossReference (0.00s)
+=== RUN   TestMetalRetentionTrainsE2E
+--- PASS: TestMetalRetentionTrainsE2E (0.00s)
+=== RUN   TestMetalRetentionValueExpansion
+--- PASS: TestMetalRetentionValueExpansion (0.00s)
+=== RUN   TestMetalRMSNormCrossReference
+--- PASS: TestMetalRMSNormCrossReference (0.00s)
+=== RUN   TestMetalRoPECrossReference
+--- PASS: TestMetalRoPECrossReference (0.00s)
+=== RUN   TestMetalSoftmaxCrossReference
+--- PASS: TestMetalSoftmaxCrossReference (0.00s)
+=== RUN   TestMetalLayerNormCrossReference
+--- PASS: TestMetalLayerNormCrossReference (0.00s)
+=== RUN   TestMetalUnaryCrossReference
+--- PASS: TestMetalUnaryCrossReference (0.00s)
+=== RUN   TestMetalBinaryCrossReference
+--- PASS: TestMetalBinaryCrossReference (0.00s)
+=== RUN   TestMetalMatMulTransposedCrossReference
+--- PASS: TestMetalMatMulTransposedCrossReference (0.31s)
+=== RUN   TestMetalAddBiasBackwardCrossReference
+--- PASS: TestMetalAddBiasBackwardCrossReference (0.00s)
+=== RUN   TestMetalSiLUBackwardCrossReference
+--- PASS: TestMetalSiLUBackwardCrossReference (0.01s)
+=== RUN   TestMetalGELUBackwardCrossReference
+--- PASS: TestMetalGELUBackwardCrossReference (0.02s)
+=== RUN   TestMetalAddBiasCrossReference
+--- PASS: TestMetalAddBiasCrossReference (0.00s)
+=== RUN   TestMetalRoPEBackwardCrossReference
+--- PASS: TestMetalRoPEBackwardCrossReference (0.00s)
+=== RUN   TestMetalRMSNormBackwardCrossReference
+--- PASS: TestMetalRMSNormBackwardCrossReference (0.00s)
+=== RUN   TestMetalLayerNormBackwardCrossReference
+--- PASS: TestMetalLayerNormBackwardCrossReference (0.00s)
+=== RUN   TestMetalCrossEntropyBackwardCrossReference
+--- PASS: TestMetalCrossEntropyBackwardCrossReference (0.01s)
+=== RUN   TestMetalEmbedBackwardCrossReference
+--- PASS: TestMetalEmbedBackwardCrossReference (0.00s)
+=== RUN   TestMetalDeviceBufferRoundTrip
+--- PASS: TestMetalDeviceBufferRoundTrip (0.00s)
+=== RUN   TestMetalMHABatchedCrossReference
+=== RUN   TestMetalMHABatchedCrossReference/mha
+=== RUN   TestMetalMHABatchedCrossReference/gqa
+=== RUN   TestMetalMHABatchedCrossReference/mqa
+=== RUN   TestMetalMHABatchedCrossReference/vit
+--- PASS: TestMetalMHABatchedCrossReference (0.10s)
+    --- PASS: TestMetalMHABatchedCrossReference/mha (0.02s)
+    --- PASS: TestMetalMHABatchedCrossReference/gqa (0.02s)
+    --- PASS: TestMetalMHABatchedCrossReference/mqa (0.02s)
+    --- PASS: TestMetalMHABatchedCrossReference/vit (0.03s)
+=== RUN   TestPatchEmbedSequenceMetalParity
+--- PASS: TestPatchEmbedSequenceMetalParity (0.01s)
+=== RUN   TestPatchEmbedSequenceViTMetalParity
+--- PASS: TestPatchEmbedSequenceViTMetalParity (0.05s)
+=== RUN   TestPatchEmbedSequenceMetalOffsetFallback
+--- PASS: TestPatchEmbedSequenceMetalOffsetFallback (0.02s)
+=== RUN   TestPreNormAttentionMetalParity
+--- PASS: TestPreNormAttentionMetalParity (0.02s)
+=== RUN   TestPreNormAttentionMetalRuntimeEpsilon
+--- PASS: TestPreNormAttentionMetalRuntimeEpsilon (0.01s)
+=== RUN   TestPreNormAttentionViTMetalParity
+--- PASS: TestPreNormAttentionViTMetalParity (0.03s)
+=== RUN   TestPreNormFFNMetalParity
+--- PASS: TestPreNormFFNMetalParity (0.02s)
+=== RUN   TestPreNormFFNViTMetalParity
+--- PASS: TestPreNormFFNViTMetalParity (0.03s)
+=== RUN   TestPreNormTransformerBlockMetalParity
+--- PASS: TestPreNormTransformerBlockMetalParity (0.03s)
+=== RUN   TestPreNormTransformerBlockMetalRuntimeEpsilons
+--- PASS: TestPreNormTransformerBlockMetalRuntimeEpsilons (0.01s)
+=== RUN   TestPreNormTransformerBlockViTMetalParity
+--- PASS: TestPreNormTransformerBlockViTMetalParity (0.04s)
+=== RUN   TestPreNormTransformerStackMetalParity
+--- PASS: TestPreNormTransformerStackMetalParity (0.04s)
+=== RUN   TestPreNormTransformerStackViTMetalParity
+--- PASS: TestPreNormTransformerStackViTMetalParity (0.04s)
+=== RUN   TestMetalCompactQuantCrossReference
+=== RUN   TestMetalCompactQuantCrossReference/Q1_0
+    q1_mxfp4_test.go:104: maximum relative difference 1.118e-07
+    q1_mxfp4_test.go:104: maximum relative difference 1.810e-07
+    q1_mxfp4_test.go:104: maximum relative difference 5.674e-07
+    q1_mxfp4_test.go:104: maximum relative difference 6.085e-07
+    q1_mxfp4_test.go:104: maximum relative difference 1.794e-06
+=== RUN   TestMetalCompactQuantCrossReference/MXFP4
+    q1_mxfp4_test.go:104: maximum relative difference 1.538e-07
+    q1_mxfp4_test.go:104: maximum relative difference 3.059e-07
+    q1_mxfp4_test.go:104: maximum relative difference 4.867e-06
+    q1_mxfp4_test.go:104: maximum relative difference 5.114e-06
+    q1_mxfp4_test.go:104: maximum relative difference 2.773e-06
+--- PASS: TestMetalCompactQuantCrossReference (0.00s)
+    --- PASS: TestMetalCompactQuantCrossReference/Q1_0 (0.00s)
+    --- PASS: TestMetalCompactQuantCrossReference/MXFP4 (0.00s)
+=== RUN   TestMetalCompactQuantCooperativeMatchesScalar
+=== RUN   TestMetalCompactQuantCooperativeMatchesScalar/Q1_0
+    q1_mxfp4_test.go:133: maximum relative difference 3.355e-07
+    q1_mxfp4_test.go:133: maximum relative difference 3.669e-07
+    q1_mxfp4_test.go:133: maximum relative difference 2.020e-06
+    q1_mxfp4_test.go:133: maximum relative difference 5.772e-07
+    q1_mxfp4_test.go:133: maximum relative difference 1.180e-05
+=== RUN   TestMetalCompactQuantCooperativeMatchesScalar/MXFP4
+    q1_mxfp4_test.go:133: maximum relative difference 7.691e-08
+    q1_mxfp4_test.go:133: maximum relative difference 4.589e-07
+    q1_mxfp4_test.go:133: maximum relative difference 2.619e-06
+    q1_mxfp4_test.go:133: maximum relative difference 7.026e-07
+    q1_mxfp4_test.go:133: maximum relative difference 1.345e-05
+--- PASS: TestMetalCompactQuantCooperativeMatchesScalar (0.01s)
+    --- PASS: TestMetalCompactQuantCooperativeMatchesScalar/Q1_0 (0.00s)
+    --- PASS: TestMetalCompactQuantCooperativeMatchesScalar/MXFP4 (0.00s)
+=== RUN   TestMetalCompactQuantFloatingPointClass
+=== RUN   TestMetalCompactQuantFloatingPointClass/Q1_0
+=== RUN   TestMetalCompactQuantFloatingPointClass/MXFP4
+--- PASS: TestMetalCompactQuantFloatingPointClass (0.00s)
+    --- PASS: TestMetalCompactQuantFloatingPointClass/Q1_0 (0.00s)
+    --- PASS: TestMetalCompactQuantFloatingPointClass/MXFP4 (0.00s)
+=== RUN   TestMetalMXFP4ExactNibbleCodebook
+--- PASS: TestMetalMXFP4ExactNibbleCodebook (0.00s)
+=== RUN   TestMetalCompactQuantDispatchAndValidation
+=== RUN   TestMetalCompactQuantDispatchAndValidation/Q1_0
+    q1_mxfp4_test.go:224: maximum relative difference 1.788e-07
+=== RUN   TestMetalCompactQuantDispatchAndValidation/MXFP4
+    q1_mxfp4_test.go:224: maximum relative difference 6.552e-08
+--- PASS: TestMetalCompactQuantDispatchAndValidation (0.00s)
+    --- PASS: TestMetalCompactQuantDispatchAndValidation/Q1_0 (0.00s)
+    --- PASS: TestMetalCompactQuantDispatchAndValidation/MXFP4 (0.00s)
+=== RUN   TestMetalCompactQuantRecorderResident
+=== RUN   TestMetalCompactQuantRecorderResident/Q1_0
+    q1_mxfp4_test.go:287: maximum relative difference 1.788e-07
+=== RUN   TestMetalCompactQuantRecorderResident/MXFP4
+    q1_mxfp4_test.go:287: maximum relative difference 1.241e-07
+--- PASS: TestMetalCompactQuantRecorderResident (0.00s)
+    --- PASS: TestMetalCompactQuantRecorderResident/Q1_0 (0.00s)
+    --- PASS: TestMetalCompactQuantRecorderResident/MXFP4 (0.00s)
+=== RUN   TestMetalQMatMulQ2KCooperativeMatchesScalar
+    q2k_cooperative_test.go:60: k=2048 n=7: Q2_K cooperative vs scalar max relative difference 1.618e-06
+    q2k_cooperative_test.go:60: k=256 n=8: Q2_K cooperative vs scalar max relative difference 4.398e-07
+    q2k_cooperative_test.go:60: k=512 n=1: Q2_K cooperative vs scalar max relative difference 4.631e-07
+    q2k_cooperative_test.go:60: k=4096 n=3: Q2_K cooperative vs scalar max relative difference 1.702e-06
+    q2k_cooperative_test.go:60: k=2048 n=64: Q2_K cooperative vs scalar max relative difference 1.618e-06
+--- PASS: TestMetalQMatMulQ2KCooperativeMatchesScalar (0.01s)
+=== RUN   TestMetalQMatMulQ2KWordLoadMatchesControl
+    q2k_word_load_test.go:94: k=256 n=8: Q2_K word-load candidate vs scalar max relative difference 2.757e-07
+    q2k_word_load_test.go:94: k=512 n=7: Q2_K word-load candidate vs scalar max relative difference 5.905e-07
+    q2k_word_load_test.go:94: k=2048 n=64: Q2_K word-load candidate vs scalar max relative difference 1.292e-06
+    q2k_word_load_test.go:94: k=4096 n=3: Q2_K word-load candidate vs scalar max relative difference 6.929e-07
+    q2k_word_load_test.go:94: k=2048 n=3072: Q2_K word-load candidate vs scalar max relative difference 2.068e-06
+--- PASS: TestMetalQMatMulQ2KWordLoadMatchesControl (0.07s)
+=== RUN   TestMetalQMatMulQ3KCooperativeMatchesScalar
+    q3k_cooperative_test.go:60: k=2048 n=7: Q3_K cooperative vs scalar max relative difference 3.754e-07
+    q3k_cooperative_test.go:60: k=256 n=8: Q3_K cooperative vs scalar max relative difference 9.409e-08
+    q3k_cooperative_test.go:60: k=512 n=1: Q3_K cooperative vs scalar max relative difference 5.992e-08
+    q3k_cooperative_test.go:60: k=4096 n=3: Q3_K cooperative vs scalar max relative difference 1.793e-07
+    q3k_cooperative_test.go:60: k=2048 n=64: Q3_K cooperative vs scalar max relative difference 5.379e-07
+--- PASS: TestMetalQMatMulQ3KCooperativeMatchesScalar (0.01s)
+=== RUN   TestMetalQMatMulQ4_0CooperativeMatchesScalar
+    q4_0_cooperative_test.go:60: k=2048 n=7: Q4_0 cooperative vs scalar max relative difference 3.598e-07
+    q4_0_cooperative_test.go:60: k=256 n=8: Q4_0 cooperative vs scalar max relative difference 1.254e-07
+    q4_0_cooperative_test.go:60: k=512 n=1: Q4_0 cooperative vs scalar max relative difference 6.212e-08
+    q4_0_cooperative_test.go:60: k=4096 n=3: Q4_0 cooperative vs scalar max relative difference 7.512e-08
+    q4_0_cooperative_test.go:60: k=2048 n=64: Q4_0 cooperative vs scalar max relative difference 3.598e-07
+--- PASS: TestMetalQMatMulQ4_0CooperativeMatchesScalar (0.00s)
+=== RUN   TestMetalQMatMulQ4_1CrossReference
+    q4_1_test.go:72: Q4_1 max relative difference 0.000e+00
+    q4_1_test.go:72: Q4_1 max relative difference 1.176e-07
+    q4_1_test.go:72: Q4_1 max relative difference 1.186e-07
+    q4_1_test.go:72: Q4_1 max relative difference 1.626e-07
+    q4_1_test.go:72: Q4_1 max relative difference 7.318e-08
+--- PASS: TestMetalQMatMulQ4_1CrossReference (0.00s)
+=== RUN   TestMetalQMatMulQ4_1CooperativeMatchesScalar
+    q4_1_test.go:104: Q4_1 max relative difference 1.242e-07
+    q4_1_test.go:104: Q4_1 max relative difference 2.350e-07
+    q4_1_test.go:104: Q4_1 max relative difference 5.025e-07
+    q4_1_test.go:104: Q4_1 max relative difference 8.782e-07
+    q4_1_test.go:104: Q4_1 max relative difference 1.460e-06
+--- PASS: TestMetalQMatMulQ4_1CooperativeMatchesScalar (0.00s)
+=== RUN   TestMetalQMatMulQ4_1FloatingPointClass
+--- PASS: TestMetalQMatMulQ4_1FloatingPointClass (0.00s)
+=== RUN   TestMetalQMatMulQ4_1DispatchAndValidation
+    q4_1_test.go:158: Q4_1 max relative difference 6.058e-08
+--- PASS: TestMetalQMatMulQ4_1DispatchAndValidation (0.00s)
+=== RUN   TestMetalQMatMulQ4_1RecorderResident
+    q4_1_test.go:210: Q4_1 max relative difference 1.176e-07
+--- PASS: TestMetalQMatMulQ4_1RecorderResident (0.00s)
+=== RUN   TestMetalQ4KColdProfile
+    q4k_bench_test.go:22: set GOAI_Q4K_COLD_PROFILE=1
+--- SKIP: TestMetalQ4KColdProfile (0.00s)
+=== RUN   TestMetalQ4KGateUpFusionMatchesSeparate
+--- PASS: TestMetalQ4KGateUpFusionMatchesSeparate (0.01s)
+=== RUN   TestMetalQMatMulQ5KCooperativeMatchesScalar
+    q5k_cooperative_test.go:97: k=2048 n=7: Q5_K vector-load candidate vs scalar max relative difference 1.100e-06
+    q5k_cooperative_test.go:97: k=256 n=8: Q5_K vector-load candidate vs scalar max relative difference 3.129e-07
+    q5k_cooperative_test.go:97: k=512 n=1: Q5_K vector-load candidate vs scalar max relative difference 1.217e-07
+    q5k_cooperative_test.go:97: k=4096 n=3: Q5_K vector-load candidate vs scalar max relative difference 1.437e-06
+    q5k_cooperative_test.go:97: k=2048 n=64: Q5_K vector-load candidate vs scalar max relative difference 1.883e-06
+    q5k_cooperative_test.go:97: k=2048 n=3072: Q5_K vector-load candidate vs scalar max relative difference 2.475e-06
+--- PASS: TestMetalQMatMulQ5KCooperativeMatchesScalar (0.07s)
+=== RUN   TestMetalQ6KColdProfile
+    q6k_bench_test.go:21: set GOAI_Q6K_COLD_PROFILE=1
+--- SKIP: TestMetalQ6KColdProfile (0.00s)
+=== RUN   TestQ6KTwoRowBitExact
+--- PASS: TestQ6KTwoRowBitExact (0.00s)
+=== RUN   TestMetalQMatMulQ8_0CooperativeMatchesScalar
+    q8_0_cooperative_test.go:60: k=2048 n=7: Q8_0 cooperative vs scalar max relative difference 3.443e-07
+    q8_0_cooperative_test.go:60: k=256 n=8: Q8_0 cooperative vs scalar max relative difference 6.988e-08
+    q8_0_cooperative_test.go:60: k=512 n=1: Q8_0 cooperative vs scalar max relative difference 1.219e-07
+    q8_0_cooperative_test.go:60: k=4096 n=3: Q8_0 cooperative vs scalar max relative difference 1.829e-07
+    q8_0_cooperative_test.go:60: k=2048 n=64: Q8_0 cooperative vs scalar max relative difference 5.207e-07
+--- PASS: TestMetalQMatMulQ8_0CooperativeMatchesScalar (0.00s)
+=== RUN   TestMetalQMatMulQ8CrossReference
+    qmatmul_test.go:77: Q8_0 K=32: maxRel=1.01e-07 (tol 5.66e-06)
+    qmatmul_test.go:77: Q8_0 K=256: maxRel=8.93e-08 (tol 1.60e-05)
+    qmatmul_test.go:77: Q8_0 K=64: maxRel=1.19e-07 (tol 8.00e-06)
+    qmatmul_test.go:77: Q8_0 K=128: maxRel=1.19e-07 (tol 1.13e-05)
+    qmatmul_test.go:77: Q8_0 K=512: maxRel=1.17e-07 (tol 2.26e-05)
+    qmatmul_test.go:77: Q8_0 K=256: maxRel=1.12e-07 (tol 1.60e-05)
+    qmatmul_test.go:77: Q8_0 K=1024: maxRel=1.05e-07 (tol 3.20e-05)
+    qmatmul_test.go:77: Q8_0 K=2048: maxRel=8.32e-08 (tol 4.53e-05)
+    qmatmul_test.go:77: Q8_0 K=4096: maxRel=7.37e-08 (tol 6.40e-05)
+--- PASS: TestMetalQMatMulQ8CrossReference (0.00s)
+=== RUN   TestMetalQMatMulQ4KCrossReference
+    qmatmul_test.go:139: Q4_K K=256: maxRel=1.73e-07 (tol 1.60e-05)
+    qmatmul_test.go:139: Q4_K K=256: maxRel=1.08e-07 (tol 1.60e-05)
+    qmatmul_test.go:139: Q4_K K=512: maxRel=1.84e-07 (tol 2.26e-05)
+    qmatmul_test.go:139: Q4_K K=512: maxRel=1.19e-07 (tol 2.26e-05)
+    qmatmul_test.go:139: Q4_K K=256: maxRel=1.17e-07 (tol 1.60e-05)
+    qmatmul_test.go:139: Q4_K K=1024: maxRel=1.05e-07 (tol 3.20e-05)
+    qmatmul_test.go:139: Q4_K K=2048: maxRel=7.11e-08 (tol 4.53e-05)
+    qmatmul_test.go:139: Q4_K K=4096: maxRel=7.33e-08 (tol 6.40e-05)
+--- PASS: TestMetalQMatMulQ4KCrossReference (0.00s)
+=== RUN   TestMetalQMatMulQ6KCooperativeMatchesScalar
+    qmatmul_test.go:188: Q6_K cooperative vs scalar max relative difference 3.846e-07
+--- PASS: TestMetalQMatMulQ6KCooperativeMatchesScalar (0.00s)
+=== RUN   TestMetalQMatMulQ4KValidation
+--- PASS: TestMetalQMatMulQ4KValidation (0.00s)
+=== RUN   TestMetalQMatMulQ4KCooperativeMatchesScalar
+    qmatmul_test.go:246: Q4_K cooperative vs scalar max relative difference 1.026e-06
+--- PASS: TestMetalQMatMulQ4KCooperativeMatchesScalar (0.00s)
+=== RUN   TestMetalQMatMulQ6KCrossReference
+--- PASS: TestMetalQMatMulQ6KCrossReference (0.00s)
+=== RUN   TestMetalQMatMulQ6KValidation
+--- PASS: TestMetalQMatMulQ6KValidation (0.00s)
+=== RUN   TestMetalQMatMulQ5KCrossReference
+--- PASS: TestMetalQMatMulQ5KCrossReference (0.00s)
+=== RUN   TestMetalQMatMulQ5KValidation
+--- PASS: TestMetalQMatMulQ5KValidation (0.00s)
+=== RUN   TestMetalQMatMulQ2KCrossReference
+--- PASS: TestMetalQMatMulQ2KCrossReference (0.00s)
+=== RUN   TestMetalQMatMulQ2KValidation
+--- PASS: TestMetalQMatMulQ2KValidation (0.00s)
+=== RUN   TestMetalQMatMulQ3KCrossReference
+--- PASS: TestMetalQMatMulQ3KCrossReference (0.00s)
+=== RUN   TestMetalQMatMulQ3KValidation
+--- PASS: TestMetalQMatMulQ3KValidation (0.00s)
+=== RUN   TestMetalQMatMulQ8Validation
+--- PASS: TestMetalQMatMulQ8Validation (0.00s)
+=== RUN   TestMetalQMatMulQ4_0CrossReference
+--- PASS: TestMetalQMatMulQ4_0CrossReference (0.00s)
+=== RUN   TestMetalQMatMulQ4_0Dispatch
+--- PASS: TestMetalQMatMulQ4_0Dispatch (0.00s)
+=== RUN   TestMetalQMatMulQ4_0Validation
+--- PASS: TestMetalQMatMulQ4_0Validation (0.00s)
+=== RUN   TestRecorderProfileLabelsDurationsAndParity
+--- PASS: TestRecorderProfileLabelsDurationsAndParity (0.00s)
+=== RUN   TestRecorderProfileLabelsRemainOwnedAfterFree
+--- PASS: TestRecorderProfileLabelsRemainOwnedAfterFree (0.00s)
+=== RUN   TestRecorderProfileCommitWaitOverflowAndMPSOmission
+=== RUN   TestRecorderProfileCommitWaitOverflowAndMPSOmission/commit-wait
+=== RUN   TestRecorderProfileCommitWaitOverflowAndMPSOmission/overflow
+=== RUN   TestRecorderProfileCommitWaitOverflowAndMPSOmission/mps
+--- PASS: TestRecorderProfileCommitWaitOverflowAndMPSOmission (0.00s)
+    --- PASS: TestRecorderProfileCommitWaitOverflowAndMPSOmission/commit-wait (0.00s)
+    --- PASS: TestRecorderProfileCommitWaitOverflowAndMPSOmission/overflow (0.00s)
+    --- PASS: TestRecorderProfileCommitWaitOverflowAndMPSOmission/mps (0.00s)
+=== RUN   TestRecorderProfileSpecializedPaths
+=== RUN   TestRecorderProfileSpecializedPaths/dequant-q4k
+=== RUN   TestRecorderProfileSpecializedPaths/q4k-f16-prefill
+=== RUN   TestRecorderProfileSpecializedPaths/flash-mm
+--- PASS: TestRecorderProfileSpecializedPaths (0.00s)
+    --- PASS: TestRecorderProfileSpecializedPaths/dequant-q4k (0.00s)
+    --- PASS: TestRecorderProfileSpecializedPaths/q4k-f16-prefill (0.00s)
+    --- PASS: TestRecorderProfileSpecializedPaths/flash-mm (0.00s)
+=== RUN   TestRecorderProfileErrorsAreExplicit
+--- PASS: TestRecorderProfileErrorsAreExplicit (0.00s)
+=== RUN   TestMetalResidentAutoFree
+--- PASS: TestMetalResidentAutoFree (0.02s)
+=== RUN   TestMetalBackendResidentQuantMatMuler
+--- PASS: TestMetalBackendResidentQuantMatMuler (0.00s)
+=== RUN   TestMetalResidentQWeight
+--- PASS: TestMetalResidentQWeight (0.01s)
+=== RUN   TestMetalResidentValidation
+--- PASS: TestMetalResidentValidation (0.00s)
+=== RUN   TestMetalResidentTopKN
+--- PASS: TestMetalResidentTopKN (0.11s)
+=== RUN   TestMetalResidentTopKNTiesAndGuards
+--- PASS: TestMetalResidentTopKNTiesAndGuards (0.00s)
+=== RUN   TestMetalQMatMulTQCrossReference
+=== RUN   TestMetalQMatMulTQCrossReference/TQ1_0
+    tq_test.go:95: maximum relative difference 2.980e-08
+    tq_test.go:95: maximum relative difference 2.235e-07
+    tq_test.go:95: maximum relative difference 9.090e-07
+    tq_test.go:95: maximum relative difference 7.242e-07
+    tq_test.go:95: maximum relative difference 2.354e-06
+=== RUN   TestMetalQMatMulTQCrossReference/TQ2_0
+    tq_test.go:95: maximum relative difference 7.451e-09
+    tq_test.go:95: maximum relative difference 2.208e-07
+    tq_test.go:95: maximum relative difference 8.941e-07
+    tq_test.go:95: maximum relative difference 4.894e-07
+    tq_test.go:95: maximum relative difference 9.500e-07
+--- PASS: TestMetalQMatMulTQCrossReference (0.00s)
+    --- PASS: TestMetalQMatMulTQCrossReference/TQ1_0 (0.00s)
+    --- PASS: TestMetalQMatMulTQCrossReference/TQ2_0 (0.00s)
+=== RUN   TestMetalQMatMulTQCooperativeMatchesScalar
+=== RUN   TestMetalQMatMulTQCooperativeMatchesScalar/TQ1_0
+    tq_test.go:124: maximum relative difference 0.000e+00
+    tq_test.go:124: maximum relative difference 3.576e-07
+    tq_test.go:124: maximum relative difference 7.153e-07
+    tq_test.go:124: maximum relative difference 1.884e-07
+    tq_test.go:124: maximum relative difference 1.801e-06
+=== RUN   TestMetalQMatMulTQCooperativeMatchesScalar/TQ2_0
+    tq_test.go:124: maximum relative difference 0.000e+00
+    tq_test.go:124: maximum relative difference 2.208e-07
+    tq_test.go:124: maximum relative difference 1.252e-06
+    tq_test.go:124: maximum relative difference 9.259e-07
+    tq_test.go:124: maximum relative difference 7.522e-07
+--- PASS: TestMetalQMatMulTQCooperativeMatchesScalar (0.01s)
+    --- PASS: TestMetalQMatMulTQCooperativeMatchesScalar/TQ1_0 (0.01s)
+    --- PASS: TestMetalQMatMulTQCooperativeMatchesScalar/TQ2_0 (0.00s)
+=== RUN   TestMetalQMatMulTQFloatingPointClass
+=== RUN   TestMetalQMatMulTQFloatingPointClass/TQ1_0
+=== RUN   TestMetalQMatMulTQFloatingPointClass/TQ2_0
+--- PASS: TestMetalQMatMulTQFloatingPointClass (0.00s)
+    --- PASS: TestMetalQMatMulTQFloatingPointClass/TQ1_0 (0.00s)
+    --- PASS: TestMetalQMatMulTQFloatingPointClass/TQ2_0 (0.00s)
+=== RUN   TestMetalQMatMulTQ2RawCodeThreeIsPlusTwo
+--- PASS: TestMetalQMatMulTQ2RawCodeThreeIsPlusTwo (0.00s)
+=== RUN   TestMetalQMatMulTQDispatchAndValidation
+=== RUN   TestMetalQMatMulTQDispatchAndValidation/TQ1_0
+    tq_test.go:208: maximum relative difference 7.284e-08
+=== RUN   TestMetalQMatMulTQDispatchAndValidation/TQ2_0
+    tq_test.go:208: maximum relative difference 2.201e-07
+--- PASS: TestMetalQMatMulTQDispatchAndValidation (0.00s)
+    --- PASS: TestMetalQMatMulTQDispatchAndValidation/TQ1_0 (0.00s)
+    --- PASS: TestMetalQMatMulTQDispatchAndValidation/TQ2_0 (0.00s)
+=== RUN   TestMetalQMatMulTQRecorderResident
+=== RUN   TestMetalQMatMulTQRecorderResident/TQ1_0
+    tq_test.go:270: maximum relative difference 5.364e-07
+=== RUN   TestMetalQMatMulTQRecorderResident/TQ2_0
+    tq_test.go:270: maximum relative difference 7.535e-07
+--- PASS: TestMetalQMatMulTQRecorderResident (0.00s)
+    --- PASS: TestMetalQMatMulTQRecorderResident/TQ1_0 (0.00s)
+    --- PASS: TestMetalQMatMulTQRecorderResident/TQ2_0 (0.00s)
+=== RUN   TestMetalGPUTraining
+    train_test.go:94: GPU training converged: gpu loss 0.0371, cpu loss 0.0371
+--- PASS: TestMetalGPUTraining (0.02s)
+=== RUN   TestMetalServesMatmul
+--- PASS: TestMetalServesMatmul (0.00s)
+=== RUN   TestBinaryRoutingRecordsOnce
+--- PASS: TestBinaryRoutingRecordsOnce (0.00s)
+=== RUN   TestFallbackUnderTapeRecordsOnce
+--- PASS: TestFallbackUnderTapeRecordsOnce (0.00s)
+=== RUN   TestMetalMeasuredUnaryRoutingRecordsOnce
+=== RUN   TestMetalMeasuredUnaryRoutingRecordsOnce/neg
+=== RUN   TestMetalMeasuredUnaryRoutingRecordsOnce/exp
+=== RUN   TestMetalMeasuredUnaryRoutingRecordsOnce/log
+=== RUN   TestMetalMeasuredUnaryRoutingRecordsOnce/tanh
+=== RUN   TestMetalMeasuredUnaryRoutingRecordsOnce/relu
+=== RUN   TestMetalMeasuredUnaryRoutingRecordsOnce/sigmoid
+=== RUN   TestMetalMeasuredUnaryRoutingRecordsOnce/sqrt
+=== RUN   TestMetalMeasuredUnaryRoutingRecordsOnce/abs
+--- PASS: TestMetalMeasuredUnaryRoutingRecordsOnce (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutingRecordsOnce/neg (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutingRecordsOnce/exp (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutingRecordsOnce/log (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutingRecordsOnce/tanh (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutingRecordsOnce/relu (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutingRecordsOnce/sigmoid (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutingRecordsOnce/sqrt (0.00s)
+    --- PASS: TestMetalMeasuredUnaryRoutingRecordsOnce/abs (0.00s)
+=== RUN   TestMetalRGLRUUnaryRouteWorkloadParity
+--- PASS: TestMetalRGLRUUnaryRouteWorkloadParity (0.01s)
+=== RUN   TestViTAdamWSessionMetalParitySyncAndLifetime
+--- PASS: TestViTAdamWSessionMetalParitySyncAndLifetime (0.17s)
+=== RUN   TestViTLossAndGradMetalParityAndImmutability
+--- PASS: TestViTLossAndGradMetalParityAndImmutability (0.02s)
+PASS
+ok  	github.com/jxsl13/goai/backend/metal	43.959s
+
+=== vet-default ===
+
+=== vet-simd ===

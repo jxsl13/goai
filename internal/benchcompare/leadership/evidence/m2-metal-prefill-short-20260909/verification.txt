@@ -1,0 +1,73 @@
+Independent focused verification. Initial sandbox SKIPs are not proof; real-Metal runs follow separately.
+
+=== verifier-focused-short-default.log ===
+=== RUN   TestPrefillOpCosts
+    prefill_ops_bench_test.go:67: no metal
+--- SKIP: TestPrefillOpCosts (0.00s)
+PASS
+ok  	github.com/jxsl13/goai/backend/metal	0.486s
+
+=== verifier-focused-short-simd.log ===
+=== RUN   TestPrefillOpCosts
+    prefill_ops_bench_test.go:67: no metal
+--- SKIP: TestPrefillOpCosts (0.00s)
+PASS
+ok  	github.com/jxsl13/goai/backend/metal	0.359s
+
+=== verifier-focused-full-default.log ===
+=== RUN   TestPrefillOpCosts
+    prefill_ops_bench_test.go:67: no metal
+--- SKIP: TestPrefillOpCosts (0.00s)
+PASS
+ok  	github.com/jxsl13/goai/backend/metal	0.277s
+
+=== verifier-focused-full-simd.log ===
+=== RUN   TestPrefillOpCosts
+    prefill_ops_bench_test.go:67: no metal
+--- SKIP: TestPrefillOpCosts (0.00s)
+PASS
+ok  	github.com/jxsl13/goai/backend/metal	0.281s
+
+=== verifier-realmetal-focused-short-default.log ===
+=== RUN   TestPrefillOpCosts
+    prefill_ops_bench_test.go:108: prefill op RMSNorm rows=64 d=2048 smoke complete
+    prefill_ops_bench_test.go:108: prefill op SwiGLU 64x5632 smoke complete
+    prefill_ops_bench_test.go:108: prefill op residual add 64x2048 smoke complete
+    prefill_ops_bench_test.go:108: prefill op attention sq=64 sk=64 smoke complete
+    prefill_ops_bench_test.go:108: prefill op attention sq=64 sk=128 smoke complete
+--- PASS: TestPrefillOpCosts (0.02s)
+PASS
+ok  	github.com/jxsl13/goai/backend/metal	0.429s
+
+=== verifier-realmetal-focused-short-simd.log ===
+=== RUN   TestPrefillOpCosts
+    prefill_ops_bench_test.go:108: prefill op RMSNorm rows=64 d=2048 smoke complete
+    prefill_ops_bench_test.go:108: prefill op SwiGLU 64x5632 smoke complete
+    prefill_ops_bench_test.go:108: prefill op residual add 64x2048 smoke complete
+    prefill_ops_bench_test.go:108: prefill op attention sq=64 sk=64 smoke complete
+    prefill_ops_bench_test.go:108: prefill op attention sq=64 sk=128 smoke complete
+--- PASS: TestPrefillOpCosts (0.01s)
+PASS
+ok  	github.com/jxsl13/goai/backend/metal	0.323s
+
+=== verifier-realmetal-focused-full-default.log ===
+=== RUN   TestPrefillOpCosts
+prefill op RMSNorm rows=64 d=2048      6.74 us
+prefill op SwiGLU 64x5632              8.94 us
+prefill op residual add 64x2048        3.81 us
+prefill op attention sq=64 sk=64      22.51 us
+prefill op attention sq=64 sk=128    348.93 us
+--- PASS: TestPrefillOpCosts (0.93s)
+PASS
+ok  	github.com/jxsl13/goai/backend/metal	1.233s
+
+=== verifier-realmetal-focused-full-simd.log ===
+=== RUN   TestPrefillOpCosts
+prefill op RMSNorm rows=64 d=2048      5.80 us
+prefill op SwiGLU 64x5632              8.04 us
+prefill op residual add 64x2048        3.92 us
+prefill op attention sq=64 sk=64      21.53 us
+prefill op attention sq=64 sk=128    346.49 us
+--- PASS: TestPrefillOpCosts (0.92s)
+PASS
+ok  	github.com/jxsl13/goai/backend/metal	1.223s
