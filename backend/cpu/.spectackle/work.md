@@ -51,6 +51,7 @@ state: draft
 created: 2026-09-09
 parent: P-01M23BZPZNF9VV3FF326AQX28E
 refs: R-01M23Q8QJDE3Y878N2CZBNPAWJ
+grilled: 2026-09-09 open=0
 targets: backend/cpu/control_alloc_diagnostic_test.go
 
 Diagnostic-only follow-up consuming R-01M23Q8QJDE3Y (retained allocation-research.txt at050ebf55). Rejected V1/V2 and ARM64-F64-GELU-CONTROLS-001 stay unchanged. No runtime promotion/rescoring, selective reruns, threshold changes, CPU scheduler tuning or new allocation optimization. Purpose: determine whether process-wide rounded B/op movement appears with identical binaries and whether matched equal-N old/V2 raw totals differ.
