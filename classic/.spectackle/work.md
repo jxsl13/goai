@@ -66,7 +66,7 @@ Verify on pinned Go1.27.1, default and SIMD, short and full focused test count1 
 
 ## T-01M23Y32PDEKBA7YXBS84D6RR9 Preserve five classic Fit smokes under short mode without wall-clock failures
 kind: task
-state: draft
+state: active
 created: 2026-09-09
 parent: P-01M23Y1K1TEXFRBNNGT4R58W4E
 targets: go:classic.TestClassicFitTimeGuard
