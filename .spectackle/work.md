@@ -3978,7 +3978,7 @@ Base b9c059464edb4a339073c75ea8037c5472bf9aea, after merged Go1.27.1 rebuild and
 
 ## P-01M23BZPZNF9VV3FF326AQX28E Measure explicitly gated ARM64 F64 exact-erf GELU intrinsics on Go 1.27.1
 kind: proposal
-state: draft
+state: active
 created: 2026-09-09
 refs: R-01M23B9YZ1E16ANNE778WX5G7T
 grilled: 2026-09-09 open=1
