@@ -1,7 +1,7 @@
 # Fixed-count control allocation diagnosis — September 9, 2026
 
-Status: implementation and independent source verification passed; matched-build
-verification and measurements pending. This is
+Status: diagnostic evidence independently verified PASS, including implementation,
+matched builds, and both complete measurement phases. This is
 not a performance qualification rerun and cannot promote rejected GELU V2.
 
 Spectackle task `T-01M23QYMYVE0M` consumes research `R-01M23Q8QJDE3Y`.
@@ -79,8 +79,56 @@ above 2^53, complete zero-allocation streams, and malformed-input rejection.
 See `implement-raw.txt`, `verifier-raw.txt`, `allocdiag-verifier-report.txt`, and
 `allocdiag-verifier-repair-report.txt` for evidence, including expected guard
 skips/failures rather than treating exit codes alone as successful execution.
-Matched-binary verification and both raw-data phases still need independent
-verification. No runtime or external-library performance claim.
+Matched-binary verification also passed. `build-pins.txt` and the matched-build
+report retain exact source, diagnostic, compiler, and binary hashes. The file
+`allocdiag-verifier-matched-build-tests.log` is a structured summary;
+`allocdiag-verifier-matched-build-tests-stdout.log` contains literal captured
+stdout, preserved without rerunning commands.
+
+## Independently verified complete observations
+
+Both serialized phases completed with exit 0: 84 successful invocations and 252
+records each, all fixed at N=1024. No invocation failed or was replaced. The
+predeclared analyzer validated all 504 records and 36 comparison cells. All
+samples, exact paired deltas, quotient/remainder arrays and descriptive p-values
+are retained in `old-old.txt`, `old-v2.txt`, `analysis.csv`, and
+`analysis-audit.txt`. No owned build, test, profile, or other benchmark overlapped
+either phase. Ordinary desktop background activity remained; host idleness was
+not continuously monitored.
+
+The same binary can exhibit the rounded-allocation symptom: at GOMAXPROCS=12,
+Sigmoid's B-minus-A median B/op difference was +1, -1, and +1 across the three
+old-old campaigns. Exact totals also varied; this is not merely information lost
+by the final integer division. It demonstrates possibility without a binary
+change, not the cause of the original V2 measurements.
+
+Candidate trends remain unresolved. Parallel Softplus's median paired total-byte
+deltas (over 1024 iterations, not per operation) were -2880, -5848, +1784 in
+old-old, versus +3264, +3424, +10864 in old-v2. Its old-v2 median paired allocation
+count deltas were +2, +9, +27. Separately, its old-v2 differences of median rounded
+B/op were +1, +6, +6; a difference of medians is not a median paired delta.
+Parallel Sigmoid also had positive old-v2 median paired byte deltas in all three
+campaigns (+1424, +64, +672). These descriptive trends cannot be dismissed by
+pointing to old-old variability or by treating nonsignificance as equality.
+
+This diagnostic supplies no allocation-site attribution and does not establish
+equivalence, a noise allowance, or a runtime optimization. Both original GELU
+rejections remain unchanged. Any causal explanation needs allocation-site
+evidence; any revised qualification protocol needs separate review and new
+prospective complete measurements. No runtime or external-library performance
+claim is made.
+
+Fresh independent data review passed a separate strict parser and raw-to-CSV
+recomputation of every field in all 36 cells; regenerated analyzer output was
+byte-identical to `analysis.csv`. The reviewer also reran all 1,214 synthetic
+assertions and rechecked source/protocol/binary pins. See
+`allocdiag-data-verifier-report.txt` and `allocdiag-data-verifier-commands.txt`.
+This is a diagnostic evidence PASS, expressly not a runtime qualification PASS.
+
+Implementation checkpoint `c3a77bdb331b2150ab8e41d1110fd7d5d6baca2c` passed
+all 16 CI jobs and every executed step, including soft SIMD lanes, in
+[run 34395490441](https://github.com/jxsl13/goai/actions/runs/34395490441).
+The exact-head audit is retained in `ci-implementation-checkpoint.jsonl`.
 
 Generalizable accounting/attribution finding:
 [perfscan #968](https://github.com/jxsl13/perfscan/issues/968). This reports a

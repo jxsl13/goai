@@ -1,0 +1,118 @@
+Independent diagnostic data verifier report: T-01M23QYMYVE0M
+Date: 2026-09-09
+Verdict: DIAGNOSTIC EVIDENCE PASS
+Runtime qualification verdict: NOT IN SCOPE; original V1 and V2 rejections remain unchanged
+
+Scope and method
+- Read .claude/commands/spectackle.md completely, printed `spectackle call
+  -instructions`, and fetched T-01M23QYMYVE0M through the Spectackle server.
+- Reviewed the preregistered README, run.sh, analyze.rb, analyze_test.rb,
+  build-pins.txt, the retained original analyzer FAIL and repair PASS reports,
+  matched-build PASS evidence, both raw streams, saved CSV/audit, the new
+  post-measurement pins, and only the relevant prior V2 README context.
+- Used a fresh strict in-memory Ruby parser independent of analyze.rb, reran the
+  synthetic Ruby suite, reran analyze.rb from the two raw streams, byte-compared
+  its output with the saved CSV, and independently cross-checked every CSV field
+  against raw records (including exact tied-rank enumeration).
+- Ran no benchmark, profile, build, Go test, or measured binary. Made no source,
+  evidence, lifecycle, or Git change. The only writes are this report and its
+  companion literal-output record, both created with apply_patch.
+
+Protocol/data integrity: PASS
+- old-old.txt: SHA-256
+  7825c104ad77023117a147370059e4c0192fcf7410539023c6962dba1a1b358d;
+  1,014 lines, 84 invocations, 252 JSON records, 84 standalone PASS markers.
+- old-v2.txt: SHA-256
+  53e1d2b95c5057803e2c6fa8f061903da8563b45b756078f1f0ef1916f76d0df;
+  1,014 lines, 84 invocations, 252 JSON records, 84 standalone PASS markers.
+- Combined: exactly 168 invocations and 504 records. Every record has N=1024,
+  matching procs, nonnegative integer metrics, positive total_ns, exact
+  quotient/remainder arithmetic, and the exact JSON field set.
+- Both streams have exact protocol, phase, absolute binary paths, frozen header
+  hashes, one-based campaign/pair metadata, preregistered GMP and arm order,
+  correct per-invocation binary hash, exact ordered SiLU/Sigmoid/Softplus cells,
+  and no FAIL, SKIP, panic, or fatal marker.
+- Expected grouping is exactly 36 phase/campaign/procs/control cells. Every arm
+  has pairs 1..7 exactly once. No observation was selected out of analysis.
+- The retained streams contain no invalid or replacement execution. The claim
+  that no earlier execution was discarded is necessarily supported by the raw
+  stream plus the post-measurement operator record; a finalized stream alone
+  cannot reconstruct actions that were never retained. I performed no rerun.
+
+Analyzer and saved output: PASS
+- `ruby analyze_test.rb`: 3 runs, 1,214 assertions, zero failures/errors/skips.
+  This includes >2^53 exact integers, zero-allocation acceptance, and malformed
+  protocol rejection.
+- Fresh analyze.rb execution validated 84/252 for each phase and all 36 cells.
+  Its generated CSV is byte-identical to analysis.csv: 16,850 bytes, SHA-256
+  7882142d56db0ab291ca9bbc9a0f2a4ac616ba1d6494f8edb54d932ba8b01f0b.
+- A separate raw-to-CSV implementation checked all 36 rows and 33 columns:
+  total medians, paired-delta medians/ranges/sign counts, every seven-element
+  paired-delta array, every per-op/remainder array for both arms and metrics,
+  and every exact tied-rank p-value. It passed.
+- The saved four-line analysis-audit.txt is the literal stderr from the validated
+  analyzer run and accurately states the diagnostic-only limits.
+
+Frozen artifacts: PASS
+- Original qualification binaries remain exactly:
+  old c95691bc1a7289094bc523250fde7a9cae614756635b78701e9c306962b246cb;
+  V1 045826effd7c6aab639a1b4c9e0e162e4eca03b6aaef56761291c248492301d7;
+  V2 b768ca10228a7487aad1cbef3a658c99cb21078b5059b815fa690b0d9bcc7614.
+- Matched diagnostic binaries remain exactly:
+  old fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec;
+  V2 a5317a3eecbce6c66e2f02768d39cdd6f1a2cc068072d8a62d090a93163fff63.
+- Detached worktrees remain at old dd1e779eb085bb621ed5dafff0a4351636b6e656
+  and V2 361955ac35eaada696045f2cf828817b650174ec, with only the shared
+  diagnostic file untracked. The two diagnostic files are byte-identical at
+  403c8f44a8200f0b9de6c16c58799bc850ac42de99667965aec295586f482aa8;
+  the unchanged benchmark files are byte-identical at
+  b53599699510a31f3a2d086f08f1b11b968b9ad1f25941e75c8a1f62fc49c9f3.
+- run.sh/analyze.rb/analyze_test.rb match build-pins.txt. Both matched binaries
+  independently report Go 1.27.1-X:simd, Darwin arm64/v8.0, CGO_ENABLED=0,
+  GOEXPERIMENT=simd, compiler gc, buildmode exe, and the CPU test package.
+
+Independent descriptive findings
+- Identical-binary movement is directly present, including exact totals rather
+  than only rounding loss. At GOMAXPROCS=12 the old-old median paired byte deltas
+  by campaign were SiLU -6,936/-2,160/+5,384; Sigmoid -368/-320/+480; and
+  Softplus -2,880/-5,848/+1,784 bytes over 1,024 iterations. Individual paired
+  ranges reached -20,440..+21,704 (SiLU), -11,032..+4,160 (Sigmoid), and
+  -12,704..+10,920 (Softplus). Thus process-wide totals can move with no binary
+  delta. This does not identify a cause or define a subtractable noise floor.
+- The README's rounded identical-binary example is correct: parallel Sigmoid's
+  difference of arm median bytes/op is +1, -1, +1 across campaigns. This is a
+  difference of medians, distinct from the median paired total-byte delta.
+- The strongest repeated old/V2 direction is parallel Softplus. Median paired
+  total-byte deltas are +3,264/+3,424/+10,864 versus old-old
+  -2,880/-5,848/+1,784. Old/V2 has 15 positive and 6 negative byte pairs across
+  campaigns; allocation-count medians are +2/+9/+27 with 15 positive, 1 zero,
+  and 5 negative pairs. Differences of rounded arm-median bytes/op are correctly
+  reported as +1/+6/+6. This is candidate-associated in this dataset, not causal
+  allocation-site attribution.
+- Parallel Sigmoid is a weaker repeated old/V2 direction: median paired byte
+  deltas +1,424/+64/+672, totaling 13 positive and 8 negative pairs. Allocation
+  medians are +11/0/+2. Old-old Sigmoid medians are -368/-320/+480, while exact
+  old-old movement is present in every parallel pair.
+- Parallel SiLU does not have a repeated candidate-specific direction: old/V2
+  median paired byte deltas are -2,656/-2,224/+8,000, the same negative/negative/
+  positive campaign sign pattern as old-old (-6,936/-2,160/+5,384).
+- Serial differences are mostly zero or one 48-byte allocation in either
+  direction (one SiLU value is -96); Softplus has zero median paired-byte delta
+  in every old/V2 serial campaign. No large repeated serial candidate trend is
+  present.
+- Exact tied-rank p-values are descriptive only. Two old/V2 parallel allocation
+  cells are below 0.05 (SiLU campaign 3: 0.0262237762; Softplus campaign 3:
+  0.0407925408), but neither establishes causality, equivalence, a qualification
+  rule, or permission to select/discard observations.
+
+Boundary and conclusion
+- Allocation totals are process-wide. These results do not attribute an
+  allocation site, prove equivalence, justify noise subtraction, rescore or
+  promote V2, or establish runtime/external leadership.
+- The provisional README Complete observations section matches the independently
+  parsed raw data and correctly preserves the distinction between paired totals
+  and rounded differences. Candidate-associated repeat patterns require an
+  allocation-site follow-up before causal interpretation.
+- Diagnostic evidence PASS. This is expressly not a runtime qualification PASS;
+  ARM64-F64-GELU-CONTROLS-001 and the original V1/V2 rejection decisions remain
+  unchanged.
