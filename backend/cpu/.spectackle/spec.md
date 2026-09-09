@@ -168,3 +168,6 @@ Rationale: This is an attribution experiment before a SIMD redesign; scalar erf 
 WHEN three campaigns measure 2048-element GOMAXPROCS1/12 and 262144-element GOMAXPROCS12 controls, the direct-call GELU promotion gate SHALL reject reproducible time regressions above 3 percent or allocation increases.
 
 Rationale: Retain all raw samples, discarded warmup boundaries, frozen binary hashes and build flags; small effects must satisfy PROC-INTERLEAVE-001. Preserve the AMD64 SIMD route and do not enable the ARM64 GELU SIMD gate.
+
+## ARM64-F64-GELU-NUMERIC-001 {applies: go:cpu.vgeluF64~2,go:cpu.geluBackwardF64KernelCPU}
+WHEN ARM64 SIMD evaluates eligible finite F64 GELU forward or backward, the dedicated GELU route SHALL match the exact-erf reference within 1e-12 times max(1,abs(reference)) and preserve bit-identical vector and scalar-tail results for eligible spans.
