@@ -31,3 +31,6 @@ WHEN one normalized gate weight spans hidden outputs, the typed OpMoECombine VJP
 
 ## EIGH-VJP-OUTPUT-TILE-EXACT-001
 WHEN inner times V-transpose spans 4 adjacent output columns, the Eigh VJP SHALL preserve Float64bits outputs in TestEighVJPIsBitIdentical and keep the scalar n modulo 4 tail.
+
+## UNARY-BCE-EXACT-001 {applies: go:autograd.unaryVJP,go:autograd.reluVJP,go:autograd.tanhVJP,go:autograd.sigmoidVJP}
+WHEN typed unary VJP slice proofs replace elementwise bounds branches, the optimized helpers SHALL preserve 0 Float32bits/Float64bits differences, ascending callback visits, historical short-input panics, empty behavior, view extents, and dtype fallbacks in TestUnaryVJPBoundsExact.
