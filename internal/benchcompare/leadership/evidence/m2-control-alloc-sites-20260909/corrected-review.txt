@@ -1,0 +1,73 @@
+R-01M23VWNB5FRP corrected protocol follow-up review
+Date: 2026-09-09
+
+Verdict: PASS for design.
+
+`internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/protocol.md`
+incorporates the required corrections from `plan-review.txt`. I found no remaining
+normalization, zero-record, serialization-tail, or persistent-worker design
+blocker. This PASS does not approve execution: instrumentation, artifact schema,
+fixed buffer capacity, analyzer behavior, and their synthetic tests remain
+prospective implementation prerequisites explicitly identified by the protocol.
+
+Source-backed facts correctly represented
+=========================================
+
+* Public `runtime.MemProfileRecord` has four counters and `Stack0`, but no
+  ObjectSize (`/private/tmp/goai-go1271-j1cLvq/go/src/runtime/mprof.go:878-884`).
+  The runtime creates an internal record with ObjectSize and copies public bytes
+  as object count times that size (mprof.go:988-1005). The protocol therefore
+  derives slot size only for positive AllocObjects and validates the exact byte
+  identities before using it.
+* With `inuseZero=true`, the pinned internal iterator includes every bucket,
+  including zero-active buckets (mprof.go:955-960, 983-995). The protocol retains
+  such public all-zero rows as size-unknown raw evidence, preserves multiplicity,
+  and excludes only their zero numeric contribution. It neither invents a size
+  nor loses a later positive post record.
+* The public stack is limited to 32 PCs (mprof.go:840-853, 878-903), while the
+  default profiler depth is 128 and truncates from the leaf
+  (`runtime/extern.go:167-171`). The protocol handles the resulting possible
+  visible-prefix collision by summing all four fields and retaining every
+  contributor rather than overwriting a map entry.
+* `runtime.GC` finishes sweeping and publishes the stable heap profile before
+  returning (`runtime/mgc.go:519-591`). `ReadMemStats` is current and
+  process-wide, whereas a heap profile is GC-published and can lag
+  (`runtime/mstats.go:350-365`; `runtime/mprof.go:905-925`). The protocol uses the
+  GC boundary without claiming atomic or equal MemStats/profile windows.
+* Profile serialization allocates its own record slice and builder state
+  (`runtime/pprof/pprof.go:628-660`). The protocol captures the primary raw post
+  snapshot first, treats the later pprof as cumulative corroboration only, and
+  separately records the serialization tail. Its explicit acknowledgement that
+  the final tail-report write is outside the tail read removes a recursive
+  completeness claim.
+* Persistent work runs from `poolWorker` (`backend/cpu/cpu.go:214-258`) and cannot
+  inherit the submitting helper's stack. The protocol's ordered caller/worker/
+  other partition is therefore accurate; it also labels worker results as only
+  temporally associated.
+
+Reviewed design choices
+=======================
+
+Within-process identity is slot size plus the exact public PC prefix, with
+collision-safe aggregation over the union of pre/post keys. Cross-binary identity
+is instead slot size plus the ordered fully qualified function-name stack. Raw
+PCs, emitted frames, files, lines, contributor keys, and both collision
+cardinalities remain retained. This is an intentionally coarser comparison and
+does not silently manufacture distinct sites from source-line or address shifts.
+The unresolved-active-frame invalidity rule is conservative and adequate.
+
+The noinline helper encloses only the exact 1,024 direct Execute calls. Setup,
+warmup, errors, counters, symbolization, and output remain outside it; `E-S` is
+properly described as an immediate process-wide total. Requiring no observed
+Mallocs/TotalAlloc movement across the pre raw snapshot is a conservative
+completeness rule: concurrent movement can invalidate a run, but cannot be
+silently attributed to the region.
+
+The frozen old/old and old/V2 matrix, preservation of invalid observations, no
+silent retry, full-site retention, synthetic collision/zero/overflow coverage,
+and interpretation limits are sufficiently specified for the design stage.
+Implementation review must still verify that slice lengths (not merely capacity)
+are passed correctly to `runtime.MemProfile`, checked arithmetic is actually used,
+all contributor rows survive serialization, the exact function names match the
+built binaries, and the output capacity/schema are frozen before any run. Those
+are future implementation gates, not remaining defects in this protocol.

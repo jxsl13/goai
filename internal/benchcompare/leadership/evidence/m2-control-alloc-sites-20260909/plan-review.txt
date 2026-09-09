@@ -1,0 +1,150 @@
+R-01M23VWNB5FRP allocation-site plan review
+Date: 2026-09-09
+
+Verdict
+=======
+
+REQUIRED CORRECTIONS; not PASS as written. The Softplus-only, N=1024,
+GOMAXPROCS={1,12}, old/old then old/V2 matched matrix is a reasonable bounded
+prospective experiment. It must not be implemented until the raw-record identity,
+cross-binary normalization, and worker-stack rules below replace the corresponding
+parts of the report. These corrections do not change any V1/V2 rejection,
+ARM64-F64-GELU-CONTROLS-001, or performance gate.
+
+Required corrections
+====================
+
+1. Public raw records do not contain ObjectSize. runtime.MemProfileRecord exposes
+only AllocBytes, FreeBytes, AllocObjects, FreeObjects, and Stack0
+(/private/tmp/goai-go1271-j1cLvq/go/src/runtime/mprof.go:878-884). The internal
+record has ObjectSize, but runtime.MemProfile copies it out only by multiplying it
+into AllocBytes and FreeBytes (mprof.go:988-1005). Therefore the retained public
+raw record cannot claim to contain an object-size field.
+
+For every public record with AllocObjects > 0, derive the allocation-slot size as
+AllocBytes/AllocObjects and require exact division plus
+FreeBytes == FreeObjects*size; otherwise invalidate the invocation. This is slot
+size, not requested payload size: malloc profiling deliberately records the whole
+allocation slot (runtime/malloc.go:1324-1335).
+
+With inuseZero=true, memProfileInternal counts and copies every bucket even when
+both active counters are zero (mprof.go:955-960, 983-995). The public copy then
+loses its internal size and yields an all-zero record. Adopt this explicit policy:
+
+* retain every all-zero row, its 32 PCs, and its multiplicity as
+  `zero-active/size-unknown`;
+* exclude it from size-keyed arithmetic because its numeric contribution is zero;
+* if AllocObjects == 0 but any byte/object field is nonzero, invalidate the run;
+* a later positive post record is keyed by its then-derivable size and is correctly
+  treated as having a zero numeric pre-value.
+
+Do not use an unexported runtime linkname merely to recover ObjectSize. The pinned
+public API is sufficient under the explicit zero/unknown policy above.
+
+2. Raw 32-PC keys and normalized keys must be collision-safe. The public Stack0
+is limited to 32 PCs (mprof.go:840-853, 878-903), while the profiler normally
+collects up to profstackdepth=128 and truncates from the leaf
+(runtime/extern.go:167-171). Distinct internal buckets can consequently have the
+same visible 32-PC prefix. A map assignment that keeps one row would silently
+lose counts.
+
+Within one process, use `(derived slot size, exact ordered nonzero Stack0 PCs)` as
+the numeric key and SUM all four fields for every matching public row. Retain the
+unaggregated rows and a collision cardinality. Subtract aggregated post-pre values
+with checked signed integer arithmetic; absent keys mean zero. Require each
+same-key cumulative field not to decrease. Unknown all-zero rows remain a
+separate raw multiset, not a numeric key.
+
+Across binaries, do not key on PC, absolute file path, source line, or function
+offset. Symbolize every retained PC with runtime.CallersFrames after the post raw
+snapshot and retain the complete raw and symbolized locations. Compare aggregates
+by `(derived slot size, ordered fully-qualified function-name stack)` only. Report
+the contributing raw keys and normalized collision cardinality. This deliberately
+coarser key tolerates source-line movement; file/line remains diagnostic evidence,
+not identity. Any active nonzero row with an unsymbolized frame required for its
+key invalidates cross-binary site comparison for that invocation. A reviewed
+source map is unnecessary for this bounded experiment.
+
+The exact old/V2 elementwise diff at the pinned hashes is currently 4 added and 4
+removed lines in the GELU block, so downstream Softplus line numbers happen not
+to move. That is an observation, not a safe identity contract; function-stack
+normalization avoids making the experiment depend on line-count neutrality.
+
+3. A noinline caller helper does not tag persistent worker allocations. Place
+`//go:noinline` immediately on the helper whose body is only the fixed 1024-call
+loop, and have that helper directly call backend.Execute with the cached CPU
+context, OpSoftplus, the prebuilt `bench.RandF64(tensor.Shape{1<<18}, 3)` input,
+attrs=nil, and discarded outputs. Setup, profile buffers, file creation, warmup,
+GC, snapshots, symbolization, logging, and serialization stay outside that helper.
+
+Caller-goroutine allocation stacks can contain this helper. Persistent pool work
+executes from poolWorker through `t.body` and has a worker-rooted stack
+(backend/cpu/cpu.go:214-258); it cannot contain the submitting helper. Report
+three disjoint groups: caller stacks containing the noinline helper, known
+backend/cpu pool-worker stacks, and all other process/runtime stacks. The worker
+group is temporally associated with the window only; neither it nor the helper
+group is a goroutine-scoped total. At GOMAXPROCS=1 parallelWork invokes the body
+inline (cpu.go:265-270), which is a useful structural contrast, not a causal test.
+
+4. Keep immediate and profile accounting separate. ReadMemStats is an up-to-date
+process-wide stop-the-world read (runtime/mstats.go:350-365); a heap profile is a
+GC-stable cumulative snapshot and may lag by two cycles (runtime/mprof.go:905-925).
+runtime.GC completes sweeping and explicitly publishes the stable profile before
+returning (runtime/mgc.go:519-591), so one explicit post-region GC is the required
+publication boundary.
+
+Do not require profile sums to equal E-S. Besides different temporal boundaries
+and concurrent process allocations, MemStats historically counts individual tiny
+suballocations in Mallocs while heap profiling records the underlying tiny slot
+(runtime/mstats.go:424-431; runtime/malloc.go:1271-1335). Retain the signed
+difference between immediate totals and summed profile alloc deltas as disclosure,
+never as attribution or invalidity.
+
+5. Profile writing must remain after the primary snapshot. pprof's protobuf path
+uses the internal record (including ObjectSize and the deeper profiler stack), but
+it allocates a record slice and builder state while writing
+(runtime/pprof/pprof.go:628-660). Open all output files before the pre boundary.
+After the post GC, capture the preallocated public raw post snapshot first. Only
+then symbolize, encode JSON, and write one cumulative post `allocs.pprof`; it is
+corroborative and must not be differenced against an absent/pre serialization.
+Retain MemStats around the raw snapshot and after all serialization so tail
+allocation is visible. Do not use `-test.memprofile` as a second profile writer.
+
+Minimal implementable prospective sequence
+==========================================
+
+For each isolated invocation, start the test binary with
+`GODEBUG=memprofilerate=1` and the selected GOMAXPROCS. Verify
+runtime.MemProfileRate == 1 before setup. This is the earliest practical setting;
+the API requires a constant lifetime rate and recommends setting it once as early
+as possible (runtime/mprof.go:856-870), while `-test.memprofilerate` changes it
+later in testing.M.before (testing/testing.go:2757-2761) and must remain absent.
+
+Then execute exactly:
+
+1. Validate the one Softplus selector and new/empty output directory; open output
+   files; allocate fixed-capacity pre/post record buffers; construct input and
+   cached CPU context; perform one Execute warmup. Fail rather than resize a raw
+   buffer.
+2. runtime.GC; ReadMemStats(preRawBefore); runtime.MemProfile(pre, true);
+   ReadMemStats(S). Record `S-preRawBefore` and require zero Mallocs/TotalAlloc
+   movement from the raw snapshot helper; otherwise the invocation is invalid.
+3. Call the noinline 1024-Execute region exactly once. Perform no formatting,
+   logging, allocation, or test assertion inside it. ReadMemStats(E) immediately
+   on return. E-S is the exact process-wide region total.
+4. runtime.GC; ReadMemStats(postGC); runtime.MemProfile(post, true);
+   ReadMemStats(postRaw). Aggregate and delta only the captured raw prefixes under
+   the policies above. The profile window and E-S boundary are adjacent, not
+   atomic or identical; retain all boundary counters.
+5. After the raw post snapshot, symbolize retained PCs, write JSON and the single
+   cumulative post allocs.pprof, then ReadMemStats(tail). Preserve all artifacts
+   and invalid runs.
+
+Run the preregistered 3 campaigns x 7 pairs x 2 process counts x 2 arms for
+old/old, then the same for old/V2, with the report's alternating order. In the
+old/old phase both arms must execute the exact same old binary bytes in fresh
+processes. Keep raw rows, normalized aggregates, immediate totals, profile sums,
+tail counters, commands, hashes, stdout/stderr, and order metadata. Interpret any
+repeatable normalized delta only as a candidate association in this perturbed,
+process-wide rate-1 harness; it cannot establish GELU causation, unprofiled
+behavior, equivalence, or a basis to relax any existing rejection or gate.
