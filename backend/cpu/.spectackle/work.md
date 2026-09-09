@@ -37,7 +37,7 @@ Add benchmark-only cells for score shapes 128x64x128 and 512x64x512 plus output 
 
 ## T-01M24137G7EHMASPJH0JA8ZZKS Implement guarded raw Softplus allocation-site capture with exact artifact schema
 kind: task
-state: draft
+state: active
 created: 2026-09-09
 parent: P-01M23BZPZNF9VV3FF326AQX28E
 refs: R-01M23VWNB5FRP85PW5NSQWY5QA
