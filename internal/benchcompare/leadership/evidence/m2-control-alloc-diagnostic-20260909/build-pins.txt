@@ -1,0 +1,74 @@
+Matched diagnostic build pins, frozen before opt-in measurements
+Date: 2026-09-09
+Harness/protocol commit: 166fc8eb (subsequent 75e30b61 only merges verified PR1250).
+The matched build worktrees intentionally do not include that merge or evidence changes.
+
+Compiler: /private/tmp/goai-go1271-j1cLvq/go/bin/go
+Version: go1.27.1 darwin/arm64
+Compiler executable SHA256: 132b69336a1f809932a8a20b0201dbbb980e86e3a323ae32e893639d83d71598
+SDK archive SHA256: ee215d57e0ec269c60cc9ceca68e6bda321ba9ee5afe24f4b0988703c2d87d12
+
+For each matched source worktree, add only the identical new diagnostic file and run:
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd GOOS=darwin GOARCH=arm64 GOARM64=v8.0 go test -c -o BINARY ./backend/cpu
+Both builds completed with exit 0 and no stdout/stderr, sequentially before measurement.
+
+Old source: dd1e779eb085bb621ed5dafff0a4351636b6e656
+Old worktree: /private/tmp/goai-control-alloc-z9bZ4P/old
+Old binary: /private/tmp/goai-control-alloc-z9bZ4P/old.test
+Old binary SHA256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+V2 source: 361955ac35eaada696045f2cf828817b650174ec
+V2 worktree: /private/tmp/goai-control-alloc-z9bZ4P/v2
+V2 binary: /private/tmp/goai-control-alloc-z9bZ4P/v2.test
+V2 binary SHA256: a5317a3eecbce6c66e2f02768d39cdd6f1a2cc068072d8a62d090a93163fff63
+
+Shared diagnostic backend/cpu/control_alloc_diagnostic_test.go SHA256:
+403c8f44a8200f0b9de6c16c58799bc850ac42de99667965aec295586f482aa8
+Shared existing backend/cpu/vgelu_f64_bench_test.go SHA256:
+b53599699510a31f3a2d086f08f1b11b968b9ad1f25941e75c8a1f62fc49c9f3
+run.sh SHA256: 359c67279c482fc428f17b71d68504d5f28691f4e317d28a11d36691957754c4
+analyze.rb SHA256: 1f04b88fa03eef39c0efec0681ae0692fead21c9ff413fb2f1542f381dc7804e
+analyze_test.rb SHA256: 8f0476de3bfe56f0a195b130bc528696127b81adabfc1cbaa0d147521e25236d
+
+go version -m confirms BOTH:
+go1.27.1-X:simd; path github.com/jxsl13/goai/backend/cpu.test;
+module github.com/jxsl13/goai (devel); -buildmode=exe; -compiler=gc;
+CGO_ENABLED=0; GOARCH=arm64; GOEXPERIMENT=simd; GOOS=darwin; GOARM64=v8.0.
+
+Original qualification binaries remain immutable, checked before the new campaigns:
+gelu-old.test c95691bc1a7289094bc523250fde7a9cae614756635b78701e9c306962b246cb
+gelu-new.test 045826effd7c6aab639a1b4c9e0e162e4eca03b6aaef56761291c248492301d7
+gelu-v2.test b768ca10228a7487aad1cbef3a658c99cb21078b5059b815fa690b0d9bcc7614
+
+Environment snapshot before campaigns (not continuous host-idleness proof).
+An initial sandbox sysctl request failed; read-only escalated snapshot succeeded.
+Normal desktop background services were not stopped; no owned heavy work will overlap measurements.
+2026-09-09T19:28:45Z
+Mac14,10
+12
+34359738368
+ProductName:		macOS
+ProductVersion:		26.5.1
+BuildVersion:		25F80
+Note: No thermal warning level has been recorded
+Note: No performance warning level has been recorded
+Note: No CPU power status has been recorded
+  PID  %CPU COMM
+21255   7.1 /Applications/ChatGPT.app/Contents/Resources/codex
+  542   1.0 /System/Library/DriverExtensions/com.apple.DriverKit-AppleBCMWLAN.dext/com.apple.DriverKit-AppleBCMWLAN
+21209   0.8 /Applications/ChatGPT.app/Contents/MacOS/ChatGPT
+  510   0.7 /usr/sbin/mDNSResponder
+74272   0.7 /Applications/iTerm.app/Contents/MacOS/iTerm2
+84520   0.6 /System/Library/Frameworks/Virtualization.framework/Versions/A/XPCServices/com.apple.Virtualization.VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine
+    1   0.4 /sbin/launchd
+21298   0.4 /Users/john/.codex/computer-use/Codex Computer Use.app/Contents/MacOS/SkyComputerUseService
+77759   0.3 /Applications/Docker.app/Contents/MacOS/Docker Desktop.app/Contents/MacOS/Docker Desktop
+  393   0.3 /usr/sbin/notifyd
+15276   0.3 /Applications/Amphetamine.app/Contents/MacOS/Amphetamine
+
+Spectackle check with the full pinned build environment: 136 inherited warnings,
+2 inherited context-only errors (performance/testing), no new reported drift.
+An earlier call without the full cache/toolchain environment also reported a
+typed-load warning; the full-environment repeat did not reproduce that warning.
+The PR1250 merge conflicted only in generated anchors.tsv; Spectackle rebuilt
+that file itself, diff-check passed, and the tool-resolved merge was committed.
+No manual .spectackle content edits were used.
