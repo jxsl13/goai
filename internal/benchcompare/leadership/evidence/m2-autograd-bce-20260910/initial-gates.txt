@@ -1,0 +1,42 @@
+Initial spec-only checkpoint; candidate runtime not imported.
+Baseline: c6afe9e4ba8b2a46c254953c921cf97ddf4f72c6
+Runtime file: autograd/vjp_elementwise.go
+Runtime SHA256: 07adbf223e44d862d5f9e3e38a743eff54def329280bb8b76aa0ffe3f9b62945
+
+Pinned environment for Go commands:
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH
+GOCACHE=/private/tmp/gocache-goai
+GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache
+GOTOOLCHAIN=local
+CGO_ENABLED=0 unless overridden below
+
+set -o pipefail; git ls-files -z '*.go' | xargs -0 /private/tmp/goai-go1271-j1cLvq/go/bin/gofmt -l
+Exit 0; no output.
+
+go vet ./...
+Exit 0; no output.
+
+go test ./autograd ./internal/mdlint ./internal/apicheck -short -count=1
+Exit 0:
+ok  github.com/jxsl13/goai/autograd 2.212s
+ok  github.com/jxsl13/goai/internal/mdlint 0.642s
+ok  github.com/jxsl13/goai/internal/apicheck 1.629s
+
+CGO_ENABLED=1 go test ./autograd -short -count=1
+Exit 0:
+ok  github.com/jxsl13/goai/autograd 3.134s
+
+spectackle call check '{"path":"autograd","budget":14000,"fix":false}'
+Exit 0, but not a clean global check: 136 inherited W001/W002 warnings;
+CTX E performance context-records-only-live mode=- rules=24 open=0;
+CTX E testing context-records-only-live mode=- rules=11 open=0.
+No new warning on the added rules, drift, or type/anchor error.
+The inherited autograd/.spectackle/spec.md:20 W002 remained unchanged.
+UNARY-BCE-EXACT-001 was shortened for clarity without changing its contract;
+the check was repeated with the same warning and error set.
+
+git diff --check c6afe9e4ba8b2a46c254953c921cf97ddf4f72c6 HEAD
+Exit 0; no output.
+
+These are unchanged-runtime publication checks, not candidate verification,
+benchmark evidence, proof of new exact-oracle coverage, or performance qualification.
