@@ -8,6 +8,14 @@ failed jobs are not counted as passing; final CI must succeed before merge.
 Raw job logs were retrieved through GitHub's per-job logs endpoint while the
 rest of the workflow was still running. ANSI escape codes are stripped below.
 
+Attempt 2 retried only failed jobs and completed with the same setup failures.
+The root read the failed logs via gh run view --attempt 2 --log-failed.
+At 17:44:21Z (Vulkan) and 17:44:31Z (CUDA), the expected SHA256 remained
+233e56de019b57db89238fa7bcc3647718dbbea3a40c2dc1c633a8c8952aa9e9
+and the received SHA256 remained
+bc1428ab27c6d76ee9bb76de07f1ded0ddb4aaabd958fc72855634ef5894a4b3.
+Both exited100 before compilation. No immediate repeated retry was requested.
+
 Job 102573871083:
 2026-09-09T17:32:43.4560940Z E: Failed to fetch https://dl.google.com/linux/chrome-stable/deb/dists/stable/main/binary-amd64/Packages.gz  Hash Sum mismatch
 2026-09-09T17:32:43.4561883Z    Hashes of expected file:

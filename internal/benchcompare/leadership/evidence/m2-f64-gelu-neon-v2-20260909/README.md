@@ -80,3 +80,16 @@ review and successful final CI jobs **and steps** are required before merge.
 Generalizable opportunity: [perfscan #966](https://github.com/jxsl13/perfscan/issues/966).
 The [completed V1 follow-up](https://github.com/jxsl13/perfscan/issues/966#issuecomment-5605855894)
 establishes the regression, not causal attribution or a measured V2 improvement.
+
+The disassembly also motivated [perfscan #967](https://github.com/jxsl13/perfscan/issues/967)
+about repeated coefficient-address materialization. No coefficient-layout
+candidate was implemented or measured; V2 results must not be attributed to it.
+
+## CI setup observation
+
+Run `34383399053` at `bd8faf5f` failed CUDA/Vulkan Ubuntu setup before compilation
+because Google's Chrome package index failed its expected SHA-256 check on the
+runner. The same failure recurred on the failed-job retry (attempt 2). The
+[initial raw excerpts](ci-setup-failure.txt) are retained; no integrity check was
+disabled and neither attempt counts as passing. Local qualification proceeds
+independently; final CI success remains mandatory before merge.
