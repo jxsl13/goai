@@ -1,7 +1,7 @@
 # M2 F64 GELU uniform-small follow-up — September 9, 2026
 
-Status: minimal candidate implemented; independent qualification pending. No V2
-measurement yet.
+Status: independent correctness and code-generation verification passed.
+Performance qualification is still pending; no V2 promotion decision yet.
 The rejected [V1 experiment](../m2-f64-gelu-neon-20260909/README.md) and its frozen
 binary remain immutable. This follow-up must pass the same gates; it does not
 waive the small-input regression or claim external-library leadership.
@@ -49,8 +49,14 @@ The production change is five new shortcut lines plus reuse of the same mask.
 The parent checked the frozen binary metadata and all source/binary hashes.
 The [emitted helper](erf-codegen.txt) extracts both mask lanes and branches before
 exp/P/Q; the helper contains no calls or stack stores. This inspection establishes
-the intended code path, not its performance. Fresh independent full correctness
-and generated-code verification must still complete.
+the intended code path, not its performance. The fresh independent
+[verification report](verification-report.txt) and [raw checks](verification.txt)
+passed full default/SIMD CPU tests, focused process-count matrix, builds, vets,
+AMD64 SIMD cross-compilation, focused race tests, formatting and diff checks.
+Builds emitted disclosed module-stat-cache permission warnings but exited zero.
+An initially incorrect helper-size count in the independent report was caught
+and corrected against exact symbol boundaries: 880 to 896 bytes including
+padding, a 16-byte increase. This is not a performance claim.
 
 ## Unchanged performance gates
 

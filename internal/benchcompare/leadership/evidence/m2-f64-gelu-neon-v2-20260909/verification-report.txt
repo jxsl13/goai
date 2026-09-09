@@ -1,0 +1,124 @@
+Independent V2 correctness/codegen verifier report
+Date: 2026-09-09
+Worktree: /private/tmp/goai-m2-f64-gelu-neon-26BhJN/repo
+HEAD inspected: bd8faf5f69eb
+Base: b9c059464edb4a339073c75ea8037c5472bf9aea
+V2 marginal range: 0f8abfec..361955ac35eaada696045f2cf828817b650174ec
+
+Outcome: PASS for correctness/codegen qualification. This is not a performance
+promotion verdict; the required three-by-seven campaigns have not yet run.
+
+Pinned environment used for all Go verification:
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:/usr/bin:/bin:/usr/sbin:/sbin
+GOCACHE=/private/tmp/gocache-goai GOTOOLCHAIN=local
+/private/tmp/goai-go1271-j1cLvq/go/bin/go (Go 1.27.1)
+
+Commands and exit status:
+1. CGO_ENABLED=0 go test ./backend/cpu -count=1 (default): 0
+2. CGO_ENABLED=0 GOEXPERIMENT=simd go test ./backend/cpu -count=1: 0
+3. For default and simd, GOMAXPROCS=1 and 12:
+   go test ./backend/cpu -run 'GELU|Gelu|Activation' -count=1: all four 0
+4. CGO_ENABLED=0 go build ./... (default and simd): both 0. Both emitted a
+   harmless sandbox warning that the Go command could not write its module stat
+   cache under /Users/john/go/pkg/mod; compilation itself completed successfully.
+5. CGO_ENABLED=0 go vet ./backend/cpu (default and simd): both 0
+6. CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 GOEXPERIMENT=simd
+   go test -c ./backend/cpu -o .../v2-verifier-amd64-simd-2.test: 0
+7. CGO_ENABLED=1 go test -race ./backend/cpu
+   -run 'GELU|Gelu|Activation' -count=1 (default and simd): both 0
+8. gofmt -d on changed source/test: 0, empty output
+9. git diff --check base..HEAD: 0; git diff --check: 0
+
+Hashes independently observed:
+- runtime source: 72c79a0bf18257f19c38206ae6f206f8aa1227803d8e881fc65d068192075c35
+- formatted test: cc87da8e6407080c7d931a9917b364adbdbff82698a631f30b16cb6e30abf7ca
+- shared harness: b53599699510a31f3a2d086f08f1b11b968b9ad1f25941e75c8a1f62fc49c9f3
+- frozen old binary: c95691bc1a7289094bc523250fde7a9cae614756635b78701e9c306962b246cb
+- frozen V1 binary: 045826effd7c6aab639a1b4c9e0e162e4eca03b6aaef56761291c248492301d7
+- V2 binary: b768ca10228a7487aad1cbef3a658c99cb21078b5059b815fa690b0d9bcc7614
+- verifier AMD64 artifact: 901d8b5ed9f9f7bbb46c493f79b97cf49d81fd02e9db070aa72aaed7be17877b
+
+Diff/semantic audit:
+- V2 runtime delta is exactly the strict abs(y)<1 mask, two constant-index lane
+  extracts, an && both-lane early return, and reuse of that mask in final IfElse.
+- Mixed small/middle and small/big pairs continue through the complete V1 path.
+  Exact and adjacent +/-1 and +/-6 pairs are covered in both lane orders.
+- Both-small reversed-sign, signed-zero and signed-subnormal pairs are covered.
+- Existing suites continued to exercise public/direct forward/backward body/tail,
+  fallback whole-call semantics, aliases/views/metadata, immutability, gates,
+  default/AMD64/F32 behavior, scalar tails, numerics, and zero-allocation leaf.
+- Backward retains distinct expressions exp(-(x*invSqrt2)^2) inside erf and
+  exp((-0.5*x)*x) for PDF; no shared/reassociated exponential argument appeared.
+- On ARM64 SIMD, dedicated vgeluF64Fast=true while global vexpF64Fast=false.
+  AMD64 SIMD retains its pre-existing vgeluF64Fast=vexpF64Fast=true alias;
+  non-SIMD/default builds remain false. Thus the new dedicated decoupling is
+  ARM64-specific, but the capability itself is not literally ARM64-only.
+
+Independent emitted-code audit of frozen V2 binary:
+- Correction audit: my initial report incorrectly treated V1 address
+  0x1001bdd00 as the next-symbol boundary and reported 848/896 bytes (+48).
+  Independent `nm` and exact symbol-delimited `otool` inspection establishes
+  that 0x1001bdd00 is an active V1 `orr` instruction; the actual next V1 symbol
+  is 0x1001bdd20. The corrected extents and delta follow.
+- Symbol-table padding-inclusive extent: erfF64x2GELU begins at 0x1001bd9b0 in
+  both binaries. The next symbol begins at 0x1001bdd20 in frozen V1 and at
+  0x1001bdd30 in V2, so extents are respectively 0x370 (880 bytes) and 0x380
+  (896 bytes): V2 adds 16 bytes, not 48 bytes.
+- Otool body-line count is 220 in V1 versus 224 in V2 (+4 instruction slots).
+  V1's 220 includes one trailing `udf` alignment/padding slot after the active
+  return; V2 uses all 224 slots and has no trailing `udf`. If that padding is
+  excluded, V1 has 219 emitted active/non-padding instruction slots versus 224
+  in V2 (+5). This active count still includes compiler-emitted `nop` slots
+  (two in V1, one in V2). The padding-inclusive symbol extent is the stable
+  code-size definition used above.
+- Small polynomial uses real two-lane fmla.2d operations.
+- fcmgt.2d at 0x1001bda64 computes 1>abs(y); mov.d extracts lane 0 and lane 1;
+  cbz at 0x1001bda70 and 0x1001bda78 sends either-false to 0x1001bda84.
+- Both true returns erfSmall at 0x1001bda7c..0x1001bda80.
+- The exp/range-reduction and P/Q continuation starts only at 0x1001bda84,
+  proving the early branch precedes all unused exp/P/Q work.
+- Mixed lanes therefore enter the full continuation; the original vector mask is
+  retained for bif selection at 0x1001bdd20.
+- The helper has no stack frame, spills, BL calls, scalar math.Erf/math.Exp calls,
+  or morestack path. New overhead is two lane extracts, two conditional branches,
+  mask/constant setup and the return path; polynomial arithmetic remains SIMD.
+
+Mutation/restoration audit:
+- Read the complete raw offset-corruption failure (87 lines), any-small-OR failure
+  (99 lines), and restored focused PASS (78 lines), not only the summary.
+- Both mutations compiled and failed assertions: the offset mutation corrupts
+  both-small results including signed zero/subnormal; the OR mutation corrupts
+  mixed pairs and boundary-adjacent cases. Restored tests pass.
+- Final source/test/harness and frozen control hashes match the recorded restored
+  pins. test-first-v1.txt explicitly discloses that its earlier V1 run predates
+  later reversed-zero/subnormal additions; those later cases occur in both raw
+  mutation logs and the restored PASS.
+
+Spectackle validation note:
+No validation verdict or lifecycle write was made. Per assignment, root owns the
+evidence-completeness agreement, source-pack validation, performance campaigns,
+promotion decision, commits and lifecycle. If a serving-root validation source
+pack is unavailable, this report's manual base and marginal diff audit is the
+substitute and should be disclosed.
+
+Raw verifier artifacts retained in the parent artifact directory:
+- v2-verifier-full-cpu-default.log
+- v2-verifier-full-cpu-simd.log
+- v2-verifier-focused-default-gmp1.log
+- v2-verifier-focused-default-gmp12.log
+- v2-verifier-focused-simd-gmp1.log
+- v2-verifier-focused-simd-gmp12.log
+- v2-verifier-build-default.log
+- v2-verifier-build-simd.log
+- v2-verifier-vet-default.log
+- v2-verifier-vet-simd.log
+- v2-verifier-crosscompile-amd64.log
+- v2-verifier-amd64-simd-2.test
+- v2-verifier-race-default.log
+- v2-verifier-race-simd.log
+- v2-verifier-format-hashes-status.log
+- v2-verifier-codegen-erf-otool.log
+- v2-verifier-codegen-symbols.log
+- v2-verifier-codegen-boundaries.log
+- v2-verifier-codegen-v1-erf-otool.log
+- v2-verifier-codegen-v1-symbols.log
