@@ -1,7 +1,10 @@
 Mutation attempts for the M2 F64 GELU intrinsic experiment.
-All temporary mutations were restored before the candidate was frozen.
+Every temporary mutation was restored; the final NaN audit left the frozen
+candidate binary unchanged (SHA256 045826effd7c6aab639a1b4c9e0e162e4eca03b6aaef56761291c248492301d7).
 The first NaN-output attempt below is INVALID: it failed to compile and proves
-nothing about assertion sensitivity. It must not be counted as a caught mutation.
+nothing about assertion sensitivity. The later valid attempt compiled, failed
+the intended assertion, and was restored to source SHA256
+f165769d6de0bd72615b9921b0489206247994786d988d8868c57a6fa3b70410.
 
 === mutation-onulp-default-activation.log ===
 --- FAIL: TestActivationBackwardF64CPUMatchesRef (0.02s)
@@ -65,3 +68,13 @@ FAIL
 FAIL
 FAIL	github.com/jxsl13/goai/backend/cpu	0.467s
 FAIL
+
+=== mutation-simd-nan-output-valid.log ===
+--- FAIL: TestVGELUF64NeonEligibleAccuracyAndBodyTail (0.00s)
+    vgelu_f64_neon_test.go:176: got NaN (7ff8000000000001), want 0 (0000000000000000)
+FAIL
+FAIL	github.com/jxsl13/goai/backend/cpu	0.252s
+FAIL
+
+=== mutation-simd-nan-output-restored.log ===
+ok  	github.com/jxsl13/goai/backend/cpu	0.375s

@@ -1,6 +1,6 @@
 # M2 F64 GELU intrinsic experiment — September 9, 2026
 
-Status: control and candidate frozen; independent verification in progress. No candidate speedup or production
+Status: control and candidate frozen; correctness verified, measurement pending. No candidate speedup or production
 promotion is claimed by this record.
 
 ## Scope and pins
@@ -69,12 +69,22 @@ whole-wrapper fallback oracle, not proof that a future vector path runs.
 The default exact oracles reject a one-ULP mutation in both build modes;
 the public routing tests reject disabling the dedicated SIMD gate in both
 directions at 3, 4, 200003, and 262144 elements. Raw attempts, including an
-invalid non-compiling NaN mutation that does not count as evidence, are retained
+invalid non-compiling NaN mutation that does not count as evidence and its later
+compilable assertion-failing replacement, are retained
 in [mutations.txt](mutations.txt). Candidate acceptance also
 requires independent numerical, special-value, input-immutability, aliasing,
 body/tail, allocation, routing, race, cross-build, and generated-code checks.
 Final commits, hashes, test outcomes, raw measurements, and the acceptance or
 rejection decision will be added when those checks have completed.
+
+The fresh verifier passed full CPU tests, focused default/SIMD tests at process
+counts 1 and 12, full-tree builds, CPU vet, AMD64 SIMD cross-compilation,
+focused race tests, formatting, and diff checks. See
+[verification.txt](verification.txt). The restored NaN audit passed its focused
+source test, left production source and the frozen binary unchanged, and was
+independently checked by the parent and verifier. Eligible numerical testing
+observed maximum absolute error `4.440892098500626e-16` and maximum normalized
+error `3.318506137718579e-16`; sampled errors are not a universal error proof.
 
 Candidate runtime commit: `e766a961505adf071cae8642b8722082ebcaf48b`.
 The test-only verifier-gap repair is `dc954bc9343fb56c1cb0d659ce98e5af43dddf5c`;
