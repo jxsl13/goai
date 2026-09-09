@@ -37,7 +37,7 @@ Add benchmark-only cells for score shapes 128x64x128 and 512x64x512 plus output 
 
 ## R-01M23Q8QJDE3Y878N2CZBNPAWJ Diagnose repeated parallel control allocation-byte movement without rescoring rejected GELU V2
 kind: research
-state: draft
+state: active
 created: 2026-09-09
 parent: P-01M23BZPZNF9VV3FF326AQX28E
 refs: R-01M23B9YZ1E16ANNE778WX5G7T
