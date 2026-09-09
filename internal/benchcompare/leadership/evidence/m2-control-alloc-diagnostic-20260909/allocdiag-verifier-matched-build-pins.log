@@ -1,0 +1,44 @@
+TREE old
+HEAD dd1e779eb085bb621ed5dafff0a4351636b6e656
+STATUS ?? backend/cpu/control_alloc_diagnostic_test.go
+TRACKED_DIFF clean (git diff --exit-code returned 0)
+DIAGNOSTIC_SHA256 403c8f44a8200f0b9de6c16c58799bc850ac42de99667965aec295586f482aa8
+TREE v2
+HEAD 361955ac35eaada696045f2cf828817b650174ec
+STATUS ?? backend/cpu/control_alloc_diagnostic_test.go
+TRACKED_DIFF clean (git diff --exit-code returned 0)
+DIAGNOSTIC_SHA256 403c8f44a8200f0b9de6c16c58799bc850ac42de99667965aec295586f482aa8
+COMMITTED_REFERENCE 166fc8ebdf551d3515aa877f7f9b51c19eafee4e
+COMMITTED_REFERENCE_DIAGNOSTIC_SHA256 403c8f44a8200f0b9de6c16c58799bc850ac42de99667965aec295586f482aa8
+CMP old-v2 diagnostic: identical (exit 0)
+CMP old-reference diagnostic: identical (exit 0)
+
+BINARY old.test
+SHA256 fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+FILE Mach-O 64-bit executable arm64
+SIZE 8806562 bytes
+GO_VERSION go1.27.1-X:simd
+path github.com/jxsl13/goai/backend/cpu.test
+mod github.com/jxsl13/goai (devel)
+build -buildmode=exe
+build -compiler=gc
+build CGO_ENABLED=0
+build GOARCH=arm64
+build GOEXPERIMENT=simd
+build GOOS=darwin
+build GOARM64=v8.0
+
+BINARY v2.test
+SHA256 a5317a3eecbce6c66e2f02768d39cdd6f1a2cc068072d8a62d090a93163fff63
+FILE Mach-O 64-bit executable arm64
+SIZE 8896226 bytes
+GO_VERSION go1.27.1-X:simd
+path github.com/jxsl13/goai/backend/cpu.test
+mod github.com/jxsl13/goai (devel)
+build -buildmode=exe
+build -compiler=gc
+build CGO_ENABLED=0
+build GOARCH=arm64
+build GOEXPERIMENT=simd
+build GOOS=darwin
+build GOARM64=v8.0

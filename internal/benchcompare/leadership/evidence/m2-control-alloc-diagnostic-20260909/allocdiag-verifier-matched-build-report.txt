@@ -1,0 +1,25 @@
+Independent matched-build verification report
+Date: 2026-09-09
+Verdict: PASS
+
+Detached source pins
+- old HEAD exactly dd1e779eb085bb621ed5dafff0a4351636b6e656.
+- v2 HEAD exactly 361955ac35eaada696045f2cf828817b650174ec.
+- Each tree has a clean tracked diff and exactly one status entry: untracked backend/cpu/control_alloc_diagnostic_test.go.
+- Both untracked files hash to 403c8f44a8200f0b9de6c16c58799bc850ac42de99667965aec295586f482aa8 and compare byte-identical.
+- The file is also byte-identical to backend/cpu/control_alloc_diagnostic_test.go at committed GELU reference 166fc8ebdf551d3515aa877f7f9b51c19eafee4e.
+
+New matched binaries
+- old.test SHA-256 exactly fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec.
+- v2.test SHA-256 exactly a5317a3eecbce6c66e2f02768d39cdd6f1a2cc068072d8a62d090a93163fff63.
+- Both are executable Mach-O arm64 test binaries. Embedded build metadata is identical where required: go1.27.1-X:simd, GOEXPERIMENT=simd, GOOS=darwin, GOARCH=arm64, GOARM64=v8.0, CGO_ENABLED=0, compiler=gc, buildmode=exe, package github.com/jxsl13/goai/backend/cpu.test.
+
+Bounded execution
+- With GOAI_ALLOC_DIAGNOSTIC=0, both binaries pass every focused allocation diagnostic helper test, including exact arithmetic, invalid-result/override rejection, disabled no-call proof, and nested fatal propagation.
+- With GOAI_ALLOC_DIAGNOSTIC=0, TestCPUControlAllocationDiagnostics is an expected SKIP in each binary and each binary process exits PASS. This skip is not represented as a diagnostic test pass.
+
+Constraints honored
+- No binary was built or modified. No opt-in allocation diagnostic or benchmark was run. No source, original frozen old/V1/V2 binary, Git state, or lifecycle state was mutated.
+- Exclusive bounded verification window is closed.
+
+Raw records: allocdiag-verifier-matched-build-pins.log and allocdiag-verifier-matched-build-tests.log.
