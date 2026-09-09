@@ -797,3 +797,8 @@ Rationale: One declared compiler generation prevents local, documentation, and C
 WHEN the minimum Go toolchain changes, the GoAI SHALL cross-build the full Linux AMD64 tree with GOEXPERIMENT=simd and execute 1 internal/simd CI test suite before archive.
 
 Rationale: Darwin ARM64 cannot compile AMD64-only experimental archsimd calls, whose API is outside the Go 1 compatibility promise.
+
+## PROC-MUTATION-COMMIT-SERIAL-001
+WHEN a source mutation test starts, the orchestrator SHALL perform 0 commits, pushes, or Spectackle auto-committing operations until exact restoration is confirmed.
+
+Rationale: PR #1249 captured an in-target temporary mutation during research archival; lifecycle and mutation ownership must be serialized.
