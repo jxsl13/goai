@@ -468,5 +468,10 @@ ARM64-F64-GELU-FALLBACK-001	go:cpu.vgeluF64~3	backend/cpu/vgelu_f64_arm64.go	204
 ARM64-F64-GELU-FALLBACK-001	go:cpu.vgeluGradF64~3	backend/cpu/vgelu_f64_arm64.go	222-240	67f085dc9e582e7e	6ac5d34d6f640780
 ARM64-F64-GELU-UNIFORM-SMALL-001	go:cpu.erfF64x2GELU	backend/cpu/vgelu_f64_arm64.go	104-145	b61a8a5b2169714b	b30b90e5128103af
 METAL-PREFILL-SHORT-001	go:metal.TestPrefillOpCosts	backend/metal/prefill_ops_bench_test.go	65-134	5c817a02c84d1f7c	17224aa7e77b167a
+<<<<<<< HEAD
 METAL-PREFILL-SHORT-001	go:metal.TestPrefillOpCosts	backend/metal/prefill_ops_bench_test.go	65-134	5c817a02c84d1f7c	17224aa7e77b167a
 METAL-MHA-DECODE-SHORT-001-001	go:metal.TestMHADecodeCost	backend/metal/mha_decode_bench_test.go	36-98	cbfdf09e96300879	33388eb4c1c079ec
+=======
+METAL-MHA-DECODE-SHORT-001-001	go:metal.TestMHADecodeCost	backend/metal/mha_decode_bench_test.go	36-98	cbfdf09e96300879	33388eb4c1c079ec
+CLASSIC-FIT-SHORT-001	go:classic.TestClassicFitTimeGuard	classic/fit_time_guard_test.go	65-138	ec20a1d4a3ec4b72	f65cbf4c71757e89
+>>>>>>> c6afe9e4ba8b2a46c254953c921cf97ddf4f72c6
