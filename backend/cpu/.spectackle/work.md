@@ -55,7 +55,7 @@ Consumes research R-01M236QP4YEFD. Baseline source137b3355 (runtime identical to
 
 ## T-01M237QTE7E8ETPPC9MGEQVXGF Test and measure exact scalar GELU backward callback specialization
 kind: task
-state: draft
+state: approved
 created: 2026-09-09
 parent: P-01M237J19FFE5SYSTMV3442H6H
 refs: R-01M236QP4YEFDABMQ07MC43EHH
