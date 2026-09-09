@@ -1,7 +1,8 @@
 # Prospective Softplus allocation-site protocol
 
 Status: corrected design, independent follow-up PASS in `corrected-review.txt`.
-No instrumentation or profile run exists yet. This document supersedes conflicting protocol language
+At design review, no instrumentation or profile run existed; see `README.md`
+for current implementation status. This document supersedes conflicting protocol language
 in the immutable initial `research.txt`, incorporating every required correction
 in `plan-review.txt`. Research: `R-01M23VWNB5FRP`.
 

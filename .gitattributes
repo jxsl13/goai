@@ -17,3 +17,7 @@ testdata/** -text
 *.npz -text
 *.bin -text
 *.pt -text
+
+# These immutable transcripts contain literal underlined headings (including =======).
+# Preserve their bytes and use distinct markers for genuine merge conflicts in them.
+internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/*.txt -text conflict-marker-size=128
