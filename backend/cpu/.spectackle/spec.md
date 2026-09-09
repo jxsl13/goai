@@ -180,3 +180,6 @@ WHEN GELU receives nonfinite values or unsafe extreme gradient magnitudes, the A
 
 ## ARM64-F64-GELU-PERF-001 {applies: go:cpu.geluKernelCPU,go:cpu.geluBackwardF64KernelCPU}
 WHEN three paired count-seven M2 Pro Go1.27.1 campaigns measure 262144-element forward and backward GELU, the promotion gate SHALL require each serial public-operation median to improve at least 1.25x and each parallel median at least 1.05x with p below 0.05 in every campaign, while rejecting reproducible control regressions above 3 percent or allocation increases.
+
+## ARM64-F64-GELU-EXP-ORDER-001 {applies: go:cpu.geluBackwardF64KernelCPU}
+WHEN the ARM64 SIMD backward kernel evaluates the erfc and PDF factors, the exponential composition SHALL evaluate the independently rounded negative squared scaled input and negative half squared input separately instead of assuming their bit patterns are equal.
