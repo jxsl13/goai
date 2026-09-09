@@ -97,6 +97,17 @@ In particular,
 inspect the actual SIMD job and step conclusions: `continue-on-error` means
 the overall workflow conclusion alone is insufficient.
 
+Spectackle 0.10.0 EARS lint reports zero errors and 136 inherited prose
+warnings. Independent review repaired six rules' path-only `applies` lists
+through the server, preserving all rule text and rationales; all 13 unresolved
+anchors are cleared and the paginated check reports zero drift. Two inherited
+`CTX E` diagnostics remain: `performance` and `testing` store 35 global
+contracts without source anchors. Both bundles match the base commit.
+Declaring them logical is correctly refused by this CLI because the rules are
+unbound; arbitrary source anchors would misrepresent their scope. These are
+explicit existing spec-context debt, so the whole check is not reported as
+clean. The supported server has no rule/context relocation operation.
+
 This update supersedes stale PR #1246, which targeted an older feature branch
 and duplicated already merged changes. Its `ReadRawFile` returned tensor
 views after unmapping their backing bytes, and its benchmark never consumed
