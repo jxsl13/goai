@@ -802,3 +802,8 @@ Rationale: Darwin ARM64 cannot compile AMD64-only experimental archsimd calls, w
 WHEN a source mutation test starts, the orchestrator SHALL perform 0 commits, pushes, or Spectackle auto-committing operations until exact restoration is confirmed.
 
 Rationale: PR #1249 captured an in-target temporary mutation during research archival; lifecycle and mutation ownership must be serialized.
+
+## PROC-PUSH-COMMITTED-DIFF-001
+WHEN a tested feature branch is ready to push, the orchestrator SHALL verify the exact committed runtime diff and source SHA immediately before push, with 0 active source mutations.
+
+Rationale: A prior clean working-tree inspection does not prove that a later auto-commit excluded a temporary mutation.
