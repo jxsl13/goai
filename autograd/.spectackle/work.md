@@ -86,7 +86,7 @@ PROTOCOL: root creates isolated tree at approved spec HEAD and gives location. R
 
 ## R-01M249HFAVFQR8HNHQQVYZPEP6 Diagnose pre-existing M2 SIMD focal and WKV parity failures
 kind: research
-state: draft
+state: active
 created: 2026-09-09
 parent: P-01M246EFHMFR3VAR37V7FBSSS8
 refs: T-01M246GYK2F9NSYEGNJVXW5YRA
