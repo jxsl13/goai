@@ -62,7 +62,7 @@ Workflow: standing user approval covers measured optimization experiments. Root 
 
 ## T-01M246GYK2F9NSYEGNJVXW5YRA Implement and independently verify exact unary VJP bounds proofs
 kind: task
-state: draft
+state: active
 created: 2026-09-09
 parent: P-01M246EFHMFR3VAR37V7FBSSS8
 grilled: 2026-09-09 open=0
