@@ -1,0 +1,62 @@
+command: env PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go test ./autograd ./backend/cpu ./nn -short -skip '^TestUnaryVJPBounds' -count=1
+exit: 1
+--- FAIL: TestCheckpointGradientsIdentical (0.00s)
+panic: T-01M246GYK2F9N reached F64 ReLU condition in original suites [recovered, repanicked]
+
+goroutine 788 [running]:
+testing.tRunner.func1.2({0x102fb70a8, 0x102f78480})
+	/private/tmp/goai-go1271-j1cLvq/go/src/testing/testing.go:2123 +0x1a0
+testing.tRunner.func1()
+	/private/tmp/goai-go1271-j1cLvq/go/src/testing/testing.go:2126 +0x2c8
+panic({0x102fb70a8?, 0x102f78480?})
+	/private/tmp/goai-go1271-j1cLvq/go/src/runtime/panic.go:859 +0x120
+github.com/jxsl13/goai/autograd.reluVJP.func1(...)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/vjp_elementwise.go:123
+github.com/jxsl13/goai/autograd.reluVJP(0x102fa27c0?, {0x11cc22582628, 0x1, 0x1}, {0x11cc22582630, 0x1, 0x1}, {0x0, 0x0}, 0x11cc22579110)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/vjp_elementwise.go:123 +0x1b4
+github.com/jxsl13/goai/autograd.(*Tape).runBackward(0x11cc22562e80)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/autograd.go:181 +0x16c
+github.com/jxsl13/goai/autograd.(*Tape).BackwardGrad(0x11cc22562e80, 0x11cc22572910, 0x11cc22572960)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/autograd.go:136 +0x298
+github.com/jxsl13/goai/autograd.(*Tape).Backward(0x11cc22562e80, 0x11cc22572910)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/autograd.go:90 +0x48
+github.com/jxsl13/goai/autograd_test.runMLP(0x11cc2263d8c8, 0x11cc225789a0, 0x11cc22578a80, 0x11cc22578b60, 0x0)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/checkpoint_test.go:60 +0x1d4
+github.com/jxsl13/goai/autograd_test.TestCheckpointGradientsIdentical(0x11cc2263d8c8)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/checkpoint_test.go:74 +0x4c
+testing.tRunner(0x11cc2263d8c8, 0x102ff71e8)
+	/private/tmp/goai-go1271-j1cLvq/go/src/testing/testing.go:2193 +0xc4
+created by testing.(*T).Run in goroutine 1
+	/private/tmp/goai-go1271-j1cLvq/go/src/testing/testing.go:2258 +0x3b8
+FAIL	github.com/jxsl13/goai/autograd	0.887s
+ok  	github.com/jxsl13/goai/backend/cpu	14.275s
+--- FAIL: TestSelectiveAttentionGradcheck (0.00s)
+panic: T-01M246GYK2F9N reached F64 ReLU condition in original suites [recovered, repanicked]
+
+goroutine 5186 [running]:
+testing.tRunner.func1.2({0x1013a0a28, 0x10134b5b0})
+	/private/tmp/goai-go1271-j1cLvq/go/src/testing/testing.go:2123 +0x1a0
+testing.tRunner.func1()
+	/private/tmp/goai-go1271-j1cLvq/go/src/testing/testing.go:2126 +0x2c8
+panic({0x1013a0a28?, 0x10134b5b0?})
+	/private/tmp/goai-go1271-j1cLvq/go/src/runtime/panic.go:859 +0x120
+github.com/jxsl13/goai/autograd.reluVJP.func1(...)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/vjp_elementwise.go:123
+github.com/jxsl13/goai/autograd.reluVJP(0x101383880?, {0x4075d3796bd8, 0x1, 0x1}, {0x4075d3796be0, 0x1, 0x1}, {0x0, 0x0}, 0x4075d3a38460)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/vjp_elementwise.go:123 +0x1b4
+github.com/jxsl13/goai/autograd.(*Tape).runBackward(0x4075d3794f80)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/autograd.go:181 +0x16c
+github.com/jxsl13/goai/autograd.(*Tape).BackwardGrad(0x4075d3794f80, 0x4075d3967a40, 0x4075d3967ae0)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/autograd.go:136 +0x298
+github.com/jxsl13/goai/autograd.(*Tape).Backward(0x4075d3794f80, 0x4075d3967a40)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/autograd.go:90 +0x48
+github.com/jxsl13/goai/nn.selGradcheck(0x4075d3b1fb08, 0x4075d38b4100, 0x4075d397ee00)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/nn/selective_attention_test.go:389 +0xd0
+github.com/jxsl13/goai/nn.TestSelectiveAttentionGradcheck(0x4075d3b1fb08)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/nn/selective_attention_test.go:458 +0xcc
+testing.tRunner(0x4075d3b1fb08, 0x101404770)
+	/private/tmp/goai-go1271-j1cLvq/go/src/testing/testing.go:2193 +0xc4
+created by testing.(*T).Run in goroutine 1
+	/private/tmp/goai-go1271-j1cLvq/go/src/testing/testing.go:2258 +0x3b8
+FAIL	github.com/jxsl13/goai/nn	1.713s
+FAIL

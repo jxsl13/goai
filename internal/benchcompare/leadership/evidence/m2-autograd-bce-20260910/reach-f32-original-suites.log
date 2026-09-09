@@ -1,0 +1,59 @@
+command: env PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go test ./autograd ./backend/cpu ./nn -short -skip '^TestUnaryVJPBounds' -count=1
+exit: 1
+--- FAIL: TestSmoothL1CoreVJPExactCompositeParity (0.01s)
+    --- FAIL: TestSmoothL1CoreVJPExactCompositeParity/f32-special (0.00s)
+panic: T-01M246GYK2F9N reached F32 ReLU condition in original suites [recovered, repanicked]
+
+goroutine 501 [running]:
+testing.tRunner.func1.2({0x1050ab0a8, 0x10506c480})
+	/private/tmp/goai-go1271-j1cLvq/go/src/testing/testing.go:2123 +0x1a0
+testing.tRunner.func1()
+	/private/tmp/goai-go1271-j1cLvq/go/src/testing/testing.go:2126 +0x2c8
+panic({0x1050ab0a8?, 0x10506c480?})
+	/private/tmp/goai-go1271-j1cLvq/go/src/runtime/panic.go:859 +0x120
+github.com/jxsl13/goai/autograd.reluVJP.func1(...)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/vjp_elementwise.go:134
+github.com/jxsl13/goai/autograd.reluVJP(0x1050967c0?, {0x69221b082050, 0x1, 0x1}, {0x69221b082058, 0x1, 0x1}, {0x0, 0x0}, 0x69221b1278f0)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/vjp_elementwise.go:134 +0x1b4
+github.com/jxsl13/goai/autograd.(*Tape).runBackward(0x69221b114180)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/autograd.go:181 +0x16c
+github.com/jxsl13/goai/autograd.(*Tape).BackwardGrad(0x69221b114180, 0x69221b127490, 0x69221b126620)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/autograd.go:136 +0x298
+github.com/jxsl13/goai/autograd_test.checkSmoothL1CoreVJPParity(0x69221b4ca008, {0x1050ea758, 0x105117b38}, 0x69221b126460, 0x69221b126540, 0x69221b126620)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/vjp_smoothl1_test.go:81 +0x178
+github.com/jxsl13/goai/autograd_test.TestSmoothL1CoreVJPExactCompositeParity.func1(0x69221b4ca008?)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/vjp_smoothl1_test.go:116 +0x28
+testing.tRunner(0x69221b4ca008, 0x69221b3ac2c0)
+	/private/tmp/goai-go1271-j1cLvq/go/src/testing/testing.go:2193 +0xc4
+created by testing.(*T).Run in goroutine 645
+	/private/tmp/goai-go1271-j1cLvq/go/src/testing/testing.go:2258 +0x3b8
+FAIL	github.com/jxsl13/goai/autograd	1.792s
+ok  	github.com/jxsl13/goai/backend/cpu	14.794s
+--- FAIL: TestEndToEndClassificationF32 (0.00s)
+panic: T-01M246GYK2F9N reached F32 ReLU condition in original suites [recovered, repanicked]
+
+goroutine 16194 [running]:
+testing.tRunner.func1.2({0x1050a4a28, 0x10504f5b0})
+	/private/tmp/goai-go1271-j1cLvq/go/src/testing/testing.go:2123 +0x1a0
+testing.tRunner.func1()
+	/private/tmp/goai-go1271-j1cLvq/go/src/testing/testing.go:2126 +0x2c8
+panic({0x1050a4a28?, 0x10504f5b0?})
+	/private/tmp/goai-go1271-j1cLvq/go/src/runtime/panic.go:859 +0x120
+github.com/jxsl13/goai/autograd.reluVJP.func1(...)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/vjp_elementwise.go:134
+github.com/jxsl13/goai/autograd.reluVJP(0x105087880?, {0x45fce87967d0, 0x1, 0x1}, {0x45fce87967d8, 0x1, 0x1}, {0x0, 0x0}, 0x45fce8990150)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/vjp_elementwise.go:134 +0x1b4
+github.com/jxsl13/goai/autograd.(*Tape).runBackward(0x45fce8795180)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/autograd.go:181 +0x16c
+github.com/jxsl13/goai/autograd.(*Tape).BackwardGrad(0x45fce8795180, 0x45fce8a35900, 0x45fce8a35950)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/autograd.go:136 +0x298
+github.com/jxsl13/goai/autograd.(*Tape).Backward(0x45fce8795180, 0x45fce8a35900)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/autograd.go:90 +0x48
+github.com/jxsl13/goai/nn_test.TestEndToEndClassificationF32(0x45fce876afc8)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/nn/e2e_test.go:158 +0x560
+testing.tRunner(0x45fce876afc8, 0x105109b88)
+	/private/tmp/goai-go1271-j1cLvq/go/src/testing/testing.go:2193 +0xc4
+created by testing.(*T).Run in goroutine 1
+	/private/tmp/goai-go1271-j1cLvq/go/src/testing/testing.go:2258 +0x3b8
+FAIL	github.com/jxsl13/goai/nn	2.959s
+FAIL

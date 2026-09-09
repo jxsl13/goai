@@ -106,3 +106,76 @@ steps, including soft SIMD lanes. Only then delete the verified merged remote
 feature branch. Report generalizable findings back to the existing perfscan
 issue, preserving the distinction between detected opportunity and measured
 end-to-end benefit.
+
+## Runner and evidence format
+
+`run.rb` freezes a 200 ms sample duration for both arms, before measurement.
+Supply separate old/new binary directories containing
+`default-autograd.test`, `simd-autograd.test`, `default-nn.test`, and
+`simd-nn.test`. These must be built from the same test source with the pinned
+Go 1.27.1 settings above. A pilot only needs the two default autograd binaries.
+The output directory must not exist; an existing directory is never reused.
+
+```sh
+ruby run_test.rb
+ruby run.rb /absolute/old-binaries /absolute/new-binaries /absolute/new-pilot pilot
+ruby run.rb /absolute/old-binaries /absolute/new-binaries /absolute/new-campaign qualify
+```
+
+The pilot runs one seven-pair, GOMAXPROCS 1 default-build campaign over eight
+ReLU direct/taped cells. It cannot qualify the candidate. Full mode runs all
+48 autograd cells plus three training controls in each required build and
+GOMAXPROCS setting over three campaigns: 336 invocations, with 8568 retained
+rows and the same number of excluded first-sample rows.
+
+Each invocation retains stdout, stderr, exact arguments, runtime environment,
+timestamps, exit/signal status, and output hashes. The manifest pins binary and
+runner hashes, planned order, sample duration, controlled runtime settings, and
+completion/failure state. Every child uses only the recorded `CHILD_ENV` plus
+its recorded GOMAXPROCS; all other inherited variables are unset. This avoids
+both unrecorded runtime settings and accidental disclosure of user secrets.
+The fixed environment sets GOGC=100, GOMEMLIMIT=off, GODEBUG empty, and
+GOTRACEBACK=single, with C locale and `/usr/bin:/bin` PATH.
+Binaries are rehashed before and after each invocation and at completion.
+Post-run mutation or removal retains raw process evidence but fails the run.
+`retained.txt` contains only validated second samples, with arm/build/scope/
+campaign/pair/GOMAXPROCS labels. Missing, extra, or duplicate cells, mismatched
+host/package headers, nonfinite metrics, and unsuccessful processes fail the
+run without discarding earlier or partial raw evidence. Allocation metrics
+are validated as decimal integers without a float round-trip.
+
+The runner does not decide qualification or assert source comparability.
+Inspect source/build manifests and compiler evidence separately, then compare
+retained rows with the pinned benchstat and apply every frozen target/control
+and noise requirement. Its tests use synthetic subprocesses, not performance
+measurements. A completed pilot or runner test is not a speedup.
+
+## Test-first baseline checkpoint
+
+The runtime is still the original source hash above. The added
+`autograd/vjp_bounds_internal_test.go` is pinned to SHA-256
+`bd26d0195b02e23aa1406f01f7df25fff5aa65ea81fea0c3bae9f31d3359648c`.
+The new oracle passes in default and SIMD builds. Default autograd short tests,
+mdlint, and apicheck pass; the CGO-enabled default autograd short suite passes.
+The full SIMD autograd short suite fails the pre-existing F64 sigmoid-focal
+bit-parity and WKV exact-parity tests. A separate pristine worktree at baseline
+`c6afe9e4ba8b2a46c254953c921cf97ddf4f72c6`, without the new oracle file,
+reproduces both failures with the same values. They are unresolved baseline
+failures, not a passing correctness gate or an excuse to skip SIMD validation.
+
+`source-ready-report.txt` preserves the test author's mutation history,
+including explicitly abbreviated early output. The separate `reach-*`,
+`finite-one-ulp-oracle.log`, and `original-source-oracle-final.log` files retain
+the corrected raw probes. Compile failures are not counted as caught mutants.
+The finite-normal tanh fixture detects a one-ULP perturbation; ReLU zero-branch
+mutations are rejected for both dtypes. Valid fixtures require successful
+outputs, so matching failures cannot masquerade as valid numerical parity.
+
+The runner's first independent review failed on final-invocation binary
+mutation, contradictory extra headers, and incomplete inherited environment
+capture. The initial verdict and supplemental output are preserved as
+`runner-review-initial-fail.txt` and `runner-review-initial-supplement.txt`.
+Regression fixes are under independent re-review; no live timings have run.
+
+Benchmark `MB/s` is based on nominal output bytes from `SetBytes`, not measured
+memory bandwidth. Qualification uses ns/op, B/op, and allocs/op.

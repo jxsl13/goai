@@ -1,0 +1,25 @@
+Run options: --seed 1
+
+# Running:
+
+F.FF...
+
+Finished in 3.139703s, 2.2295 runs/s, 8.5995 assertions/s.
+
+  1) Failure:
+SupplementalRunnerAuditTest#test_actual_inherited_environment_is_recorded [supplemental_runner_test.rb:167]:
+inherited subprocess environment is not fully recorded.
+Expected: "present"
+  Actual: nil
+
+  2) Failure:
+SupplementalRunnerAuditTest#test_binary_change_during_its_final_invocation_is_rejected [supplemental_runner_test.rb:121]:
+accepted a binary mutation during the final invocation.
+UnaryBCECampaign::Invalid expected but nothing was raised.
+
+  3) Failure:
+SupplementalRunnerAuditTest#test_contradictory_extra_headers_are_rejected [supplemental_runner_test.rb:73]:
+accepted contradictory headers: ["goos: linux", "goarch: amd64", "cpu: Other CPU", "pkg: example.invalid/other"].
+Expected ["goos: linux", "goarch: amd64", "cpu: Other CPU", "pkg: example.invalid/other"] to be empty.
+
+7 runs, 27 assertions, 3 failures, 0 errors, 0 skips
