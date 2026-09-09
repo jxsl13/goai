@@ -45,7 +45,7 @@ MACHINE-PRODUCED LIST, reproducible with internal/perfscan/tools/exactness_sweep
 
 ## P-01M246EFHMFR3VAR37V7FBSSS8 Qualify exact M2 autograd elementwise bounds-check elimination
 kind: proposal
-state: draft
+state: active
 created: 2026-09-09
 grilled: 2026-09-09 open=0
 targets: go:autograd.unaryVJP, go:autograd.reluVJP, go:autograd.tanhVJP, go:autograd.sigmoidVJP
