@@ -45,7 +45,7 @@ Existing CI run34390073218 at76d889fb failed only cgo+metal/macOS TestPrefillOpC
 
 ## T-01M23R33X1EC7BA8V687WEM8QH Honor short mode in prefill timing test without dropping operation smoke checks
 kind: task
-state: draft
+state: active
 created: 2026-09-09
 parent: P-01M23R1VJNEJJA8QB17ET720FM
 grilled: 2026-09-09 open=1
