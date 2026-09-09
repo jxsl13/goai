@@ -3998,6 +3998,7 @@ state: draft
 created: 2026-09-09
 parent: P-01M23BZPZNF9VV3FF326AQX28E
 refs: R-01M23VWNB5FRP85PW5NSQWY5QA
+grilled: 2026-09-09 open=1
 targets: internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb, internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
 
 GOAL: implement a strict, lossless per-invocation offline allocation-site analyzer and independently expected synthetic tests. This consumes R-01M23VWNB5FRP within active P-01M23BZPZNF9V. It does not implement a matrix runner, decode profiles, change kernels, run live captures, or qualify V2. All original gates/rejections remain binding.
