@@ -46,9 +46,23 @@ module AllocationSites
       raise Invalid, '$: JSON input must be a string'
     end
 
-    JSON.parse(text, object_class: UniqueObject, create_additions: false, allow_nan: false)
+    parsed = JSON.parse(text, object_class: UniqueObject, create_additions: false, allow_nan: false)
+    reject_nonfinite!(parsed, '$')
+    parsed
   rescue JSON::ParserError => e
     raise Invalid, "$: invalid JSON: #{e.message}"
+  end
+
+  def reject_nonfinite!(value, path)
+    case value
+    when Float
+      invalid(path, 'nonfinite JSON number') unless value.finite?
+    when Hash
+      value.each { |key, child| reject_nonfinite!(child, "#{path}[#{key.inspect}]") }
+    when Array
+      value.each_with_index { |child, index| reject_nonfinite!(child, "#{path}[#{index}]") }
+    end
+    value
   end
 
   def analyze(capture, tail)

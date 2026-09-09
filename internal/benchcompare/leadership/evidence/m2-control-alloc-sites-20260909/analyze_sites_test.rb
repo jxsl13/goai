@@ -218,6 +218,27 @@ class AllocationSitesTest < Minitest::Test
     assert_raises(AllocationSites::Invalid) { AllocationSites.parse(nil) }
   end
 
+  def test_parse_rejects_overflowed_exponents_recursively_but_retains_finite_floats
+    assert_equal 100.0, AllocationSites.parse('1e2')
+    assert_equal({'finite' => [-0.25, {'exponent' => 6.25e12}]},
+                 AllocationSites.parse('{"finite":[-0.25,{"exponent":6.25e12}]}'))
+
+    {
+      '1e999' => /\$: nonfinite JSON number/,
+      '-1e999' => /\$: nonfinite JSON number/,
+      '{"outer":[0,1e999]}' => /\$\["outer"\]\[1\]: nonfinite JSON number/,
+      '[{"finite":1.5},{"mixed":[null,-1e999,true]}]' => /\$\[1\]\["mixed"\]\[1\]: nonfinite JSON number/
+    }.each do |text, path_pattern|
+      error = assert_raises(AllocationSites::Invalid, text) { AllocationSites.parse(text) }
+      assert_match path_pattern, error.message
+    end
+
+    capture, tail = fixture
+    parsed_capture = AllocationSites.parse(JSON.generate(capture).sub('"n":1024', '"n":1.024e3'))
+    assert_equal 1024.0, parsed_capture['n']
+    assert_invalid(parsed_capture, tail, /capture\.n/)
+  end
+
   def test_exact_keys_missing_unknown_and_wrong_container_types
     capture, tail = fixture
     capture['extra'] = 1
