@@ -292,3 +292,4 @@
 {"t":"2026-09-09T17:29:19Z","eid":"e13cb0d218bb002e","ag":"ag-9bb3","ev":"drift","dir":"backend/cpu","rule":"ARM64-F64-GELU-CONTROLS-001","node":"go:cpu.geluKernelCPU","cls":"healed","oh":"f80607576f589033","nh":"a23218089152d993"}
 {"t":"2026-09-09T17:29:19Z","eid":"16742aacbb5ba0d7","ag":"ag-9bb3","ev":"drift","dir":"backend/cpu","rule":"ARM64-F64-GELU-CONTROLS-001","node":"go:cpu.geluBackwardF64KernelCPU","cls":"healed","oh":"964a449247003053","nh":"ec7df1746b9a1813"}
 {"t":"2026-09-09T17:29:19Z","eid":"ede64a02d8f28ac1","ag":"ag-9bb3","ev":"drift","dir":"backend/cpu","rule":"ARM64-F64-GELU-UNIFORM-SMALL-001","node":"go:cpu.erfF64x2GELU","cls":"healed","oh":"175bd4afe550bdb8","nh":"b61a8a5b2169714b"}
+{"t":"2026-09-09T18:33:34Z","eid":"d139fd746c26de15","ag":"ag-1874","ev":"validate","id":"T-01M23JPZT8FDM9F9P69HMMYGFH","dir":"backend/cpu","op":"render","hash":"4ad6024cdcaa61a740401228107f5b9a67a1d14e6780463a21f0b23d240c3fcb"}
