@@ -1,0 +1,160 @@
+Raw captured verification outputs. Empty logs denote no stdout/stderr; exit status and interpretation are in the accompanying verifier reports.
+
+## allocdiag-verifier-full-default.log
+ok  	github.com/jxsl13/goai/backend/cpu	14.093s
+
+## allocdiag-verifier-full-simd.log
+ok  	github.com/jxsl13/goai/backend/cpu	14.027s
+
+## allocdiag-verifier-unit-default.log
+=== RUN   TestAllocationDiagnosticConfig
+=== RUN   TestAllocationDiagnosticConfig/disabled
+=== RUN   TestAllocationDiagnosticConfig/valid-serial
+=== RUN   TestAllocationDiagnosticConfig/valid-parallel
+=== RUN   TestAllocationDiagnosticConfig/wrong-count
+=== RUN   TestAllocationDiagnosticConfig/wrong-procs
+--- PASS: TestAllocationDiagnosticConfig (0.00s)
+    --- PASS: TestAllocationDiagnosticConfig/disabled (0.00s)
+    --- PASS: TestAllocationDiagnosticConfig/valid-serial (0.00s)
+    --- PASS: TestAllocationDiagnosticConfig/valid-parallel (0.00s)
+    --- PASS: TestAllocationDiagnosticConfig/wrong-count (0.00s)
+    --- PASS: TestAllocationDiagnosticConfig/wrong-procs (0.00s)
+=== RUN   TestAllocationDiagnosticResultExactArithmetic
+--- PASS: TestAllocationDiagnosticResultExactArithmetic (0.00s)
+=== RUN   TestAllocationDiagnosticResultRejectsInvalidResults
+=== RUN   TestAllocationDiagnosticResultRejectsInvalidResults/invalid-N
+=== RUN   TestAllocationDiagnosticResultRejectsInvalidResults/invalid-time
+=== RUN   TestAllocationDiagnosticResultRejectsInvalidResults/bytes-override
+=== RUN   TestAllocationDiagnosticResultRejectsInvalidResults/allocs-override
+--- PASS: TestAllocationDiagnosticResultRejectsInvalidResults (0.00s)
+    --- PASS: TestAllocationDiagnosticResultRejectsInvalidResults/invalid-N (0.00s)
+    --- PASS: TestAllocationDiagnosticResultRejectsInvalidResults/invalid-time (0.00s)
+    --- PASS: TestAllocationDiagnosticResultRejectsInvalidResults/bytes-override (0.00s)
+    --- PASS: TestAllocationDiagnosticResultRejectsInvalidResults/allocs-override (0.00s)
+=== RUN   TestAllocationDiagnosticDisabledRunsNoBenchmarks
+--- PASS: TestAllocationDiagnosticDisabledRunsNoBenchmarks (0.00s)
+PASS
+ok  	github.com/jxsl13/goai/backend/cpu	0.321s
+
+## allocdiag-verifier-unit-simd.log
+=== RUN   TestAllocationDiagnosticConfig
+=== RUN   TestAllocationDiagnosticConfig/disabled
+=== RUN   TestAllocationDiagnosticConfig/valid-serial
+=== RUN   TestAllocationDiagnosticConfig/valid-parallel
+=== RUN   TestAllocationDiagnosticConfig/wrong-count
+=== RUN   TestAllocationDiagnosticConfig/wrong-procs
+--- PASS: TestAllocationDiagnosticConfig (0.00s)
+    --- PASS: TestAllocationDiagnosticConfig/disabled (0.00s)
+    --- PASS: TestAllocationDiagnosticConfig/valid-serial (0.00s)
+    --- PASS: TestAllocationDiagnosticConfig/valid-parallel (0.00s)
+    --- PASS: TestAllocationDiagnosticConfig/wrong-count (0.00s)
+    --- PASS: TestAllocationDiagnosticConfig/wrong-procs (0.00s)
+=== RUN   TestAllocationDiagnosticResultExactArithmetic
+--- PASS: TestAllocationDiagnosticResultExactArithmetic (0.00s)
+=== RUN   TestAllocationDiagnosticResultRejectsInvalidResults
+=== RUN   TestAllocationDiagnosticResultRejectsInvalidResults/invalid-N
+=== RUN   TestAllocationDiagnosticResultRejectsInvalidResults/invalid-time
+=== RUN   TestAllocationDiagnosticResultRejectsInvalidResults/bytes-override
+=== RUN   TestAllocationDiagnosticResultRejectsInvalidResults/allocs-override
+--- PASS: TestAllocationDiagnosticResultRejectsInvalidResults (0.00s)
+    --- PASS: TestAllocationDiagnosticResultRejectsInvalidResults/invalid-N (0.00s)
+    --- PASS: TestAllocationDiagnosticResultRejectsInvalidResults/invalid-time (0.00s)
+    --- PASS: TestAllocationDiagnosticResultRejectsInvalidResults/bytes-override (0.00s)
+    --- PASS: TestAllocationDiagnosticResultRejectsInvalidResults/allocs-override (0.00s)
+=== RUN   TestAllocationDiagnosticDisabledRunsNoBenchmarks
+--- PASS: TestAllocationDiagnosticDisabledRunsNoBenchmarks (0.00s)
+PASS
+ok  	github.com/jxsl13/goai/backend/cpu	0.231s
+
+## allocdiag-verifier-guard-default.log
+=== RUN   TestCPUControlAllocationDiagnostics
+    control_alloc_diagnostic_test.go:139: set GOAI_ALLOC_DIAGNOSTIC=1 with -test.benchtime=1024x and GOMAXPROCS=1 or 12 to run allocation diagnostics
+--- SKIP: TestCPUControlAllocationDiagnostics (0.00s)
+PASS
+ok  	github.com/jxsl13/goai/backend/cpu	0.217s
+
+## allocdiag-verifier-guard-simd.log
+=== RUN   TestCPUControlAllocationDiagnostics
+    control_alloc_diagnostic_test.go:139: set GOAI_ALLOC_DIAGNOSTIC=1 with -test.benchtime=1024x and GOMAXPROCS=1 or 12 to run allocation diagnostics
+--- SKIP: TestCPUControlAllocationDiagnostics (0.00s)
+PASS
+ok  	github.com/jxsl13/goai/backend/cpu	0.215s
+
+## allocdiag-verifier-guard-wrong-count.log
+=== RUN   TestCPUControlAllocationDiagnostics
+    control_alloc_diagnostic_test.go:136: GOAI_ALLOC_DIAGNOSTIC=1 requires -test.benchtime=1024x (got "1s")
+--- FAIL: TestCPUControlAllocationDiagnostics (0.00s)
+FAIL
+FAIL	github.com/jxsl13/goai/backend/cpu	0.238s
+FAIL
+expected-failure-exit: 1
+
+## allocdiag-verifier-guard-wrong-gmp.log
+=== RUN   TestCPUControlAllocationDiagnostics
+    control_alloc_diagnostic_test.go:136: GOAI_ALLOC_DIAGNOSTIC=1 requires GOMAXPROCS 1 or 12 (got 2)
+--- FAIL: TestCPUControlAllocationDiagnostics (0.00s)
+FAIL
+FAIL	github.com/jxsl13/goai/backend/cpu	0.253s
+FAIL
+expected-failure-exit: 1
+
+## allocdiag-verifier-failure-default.log
+=== RUN   TestBenchmarkWithFailurePropagatesNestedFatal
+--- PASS: TestBenchmarkWithFailurePropagatesNestedFatal (0.00s)
+PASS
+ok  	github.com/jxsl13/goai/backend/cpu	0.278s
+
+## allocdiag-verifier-failure-simd.log
+=== RUN   TestBenchmarkWithFailurePropagatesNestedFatal
+--- PASS: TestBenchmarkWithFailurePropagatesNestedFatal (0.00s)
+PASS
+ok  	github.com/jxsl13/goai/backend/cpu	0.242s
+
+## allocdiag-verifier-failure-race.log
+ok  	github.com/jxsl13/goai/backend/cpu	1.502s
+
+## allocdiag-verifier-vet-default.log
+
+## allocdiag-verifier-vet-simd.log
+
+## allocdiag-verifier-ruby.log
+Run options: --seed 16901
+
+# Running:
+
+..
+
+Finished in 1.112911s, 1.7971 runs/s, 239.9114 assertions/s.
+
+2 runs, 267 assertions, 0 failures, 0 errors, 0 skips
+
+## allocdiag-verifier-bash-syntax.log
+
+## allocdiag-verifier-ruby-syntax.log
+Syntax OK
+Syntax OK
+
+## allocdiag-verifier-gofmt.log
+
+## allocdiag-verifier-diffcheck-evidence.log
+
+## allocdiag-verifier-diffcheck-new-go.log
+
+## allocdiag-verifier-diffcheck-tracked.log
+
+## allocdiag-verifier-repair-ruby.log
+Run options: --seed 20739
+
+# Running:
+
+...
+
+Finished in 1.360329s, 2.2053 runs/s, 892.4312 assertions/s.
+
+3 runs, 1214 assertions, 0 failures, 0 errors, 0 skips
+
+## allocdiag-verifier-repair-syntax.log
+Syntax OK
+Syntax OK
+
+## allocdiag-verifier-repair-diffcheck.log

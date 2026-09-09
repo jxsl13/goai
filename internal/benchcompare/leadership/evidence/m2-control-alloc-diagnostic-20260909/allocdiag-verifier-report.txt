@@ -1,0 +1,47 @@
+Independent verifier report: T-01M23QYMYVE0M
+Date: 2026-09-09
+Verdict: FAIL (one required analyzer correction; Go diagnostic implementation PASS)
+
+Scope and constraints
+- Read .claude/commands/spectackle.md fully, ran `spectackle call -instructions`, and fetched the active task with `spectackle call get {"id":"T-01M23QYMYVE0M","depth":2}` (`gettask` is not a registered server tool in this CLI).
+- Inspected actual uncommitted files. Did not edit source/evidence, mutate lifecycle, commit, push, run the opt-in real allocation diagnostic, or build/overwrite any frozen binary.
+- All ordinary Go verification used pinned Go 1.27.1 with PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH, GOCACHE=/private/tmp/gocache-goai, GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache, GOTOOLCHAIN=local, CGO_ENABLED=0. The optional focused race proof alone used CGO_ENABLED=1.
+
+Go diagnostic source: PASS
+- Guard is evaluated before runAllocationDiagnosticControls/testing.Benchmark. Disabled path is a real skip and unit injection proves no benchmark/emitter call.
+- Requires exact `1024x` and GOMAXPROCS 1 or 12 before measurement.
+- Uses the unchanged existing callbacks directly, sequentially and in exact order: SiLU backward, Sigmoid, Softplus. No existing benchmark/runtime file is modified; working tree contains only the new Go file and root-owned evidence directory.
+- benchmarkWithFailure defers b.Failed inspection and stores it in atomic.Bool, so nested b.Fatal/runtime.Goexit is propagated. Unit and race proofs pass.
+- Record fields are exact and complete. MemBytes/MemAllocs remain uint64; quotient/remainder arithmetic is integer and tested above 2^53 with nonzero remainders. N and positive T are validated. B/op and allocs/op Extra overrides are rejected.
+- JSON is formatted/emitted only after testing.Benchmark returns. Comment and README accurately disclose the excluded one-iteration calibration and process-wide nature.
+- Ordinary CI/full tests skip the diagnostic. Expected guard skips are not counted as unit-test passes below.
+
+Runner/protocol inspection: PASS
+- run.sh validates phase, absolute executable paths and frozen SHA-256 values before campaigns.
+- One-based campaign 1..3 and pair 1..7 parity is correct. Odd campaigns use GMP 1,12; even use 12,1. Arm order is A,B exactly when pair+campaign is even, otherwise B,A.
+- old-old maps both arms to the old binary/hash; old-v2 maps only B to V2. Loop cardinality is 84 invocations and 252 records per phase, 504 records overall.
+- README retains the unchanged rejected V2 verdict and explicitly forbids causal attribution, posterior subtraction, equivalence, rescoring, promotion and leadership claims.
+
+Analyzer: REQUIRED CORRECTION
+- analyze.rb rejects zero `total_bytes` or `total_allocs` through `%w[total_ns total_bytes total_allocs].all? { |k| row[k] > 0 }`.
+- This is stricter than the task contract and inconsistent with the Go formatter/helper: exact uint64 allocation totals may validly be zero; only total_ns must be positive. INTEGER_FIELDS already rejects negative values.
+- Required fix: validate `row['total_ns'] > 0` separately while permitting zero total_bytes/total_allocs, and add synthetic acceptance coverage with zero byte/allocation totals (while retaining quotient/remainder validation). No other analyzer/runner correction found.
+- Otherwise parser enforces duplicate JSON keys, exact fields/types, lossless integers, N/procs, arithmetic, invocation order/count, hashes, PASS, three ordered records, complete 7-pair cells, and emits all raw paired deltas plus quotient/remainder arrays. Synthetic suite passed 267 assertions before this independent gap was identified.
+
+Verification results
+- Full backend/cpu default: PASS (14.093s). allocdiag-verifier-full-default.log
+- Full backend/cpu GOEXPERIMENT=simd: PASS (14.027s). allocdiag-verifier-full-simd.log
+- Focused allocation helper units default: PASS. allocdiag-verifier-unit-default.log
+- Focused allocation helper units SIMD: PASS. allocdiag-verifier-unit-simd.log
+- Default guarded diagnostic default: EXPECTED SKIP, package PASS. allocdiag-verifier-guard-default.log
+- Default guarded diagnostic SIMD: EXPECTED SKIP, package PASS. allocdiag-verifier-guard-simd.log
+- Opt-in wrong benchtime: EXPECTED FAIL before benchmark invocation. allocdiag-verifier-guard-wrong-count.log
+- Opt-in wrong GOMAXPROCS: EXPECTED FAIL before benchmark invocation. allocdiag-verifier-guard-wrong-gmp.log
+- Nested b.Fatal proof default/SIMD: PASS. allocdiag-verifier-failure-default.log, allocdiag-verifier-failure-simd.log
+- Focused nested-failure race proof (CGO_ENABLED=1): PASS. allocdiag-verifier-failure-race.log
+- go vet backend/cpu default/SIMD: PASS. allocdiag-verifier-vet-default.log, allocdiag-verifier-vet-simd.log
+- Ruby synthetic analyzer suite: PASS, 2 runs / 267 assertions / 0 failures / 0 errors / 0 skips. allocdiag-verifier-ruby.log
+- bash/ruby syntax: PASS. allocdiag-verifier-bash-syntax.log, allocdiag-verifier-ruby-syntax.log
+- gofmt -d and whitespace/diff checks: PASS (no output). allocdiag-verifier-gofmt.log and allocdiag-verifier-diffcheck-*.log
+
+Heavy window is closed from this verifier's side. No further tests or benchmarks will be started.

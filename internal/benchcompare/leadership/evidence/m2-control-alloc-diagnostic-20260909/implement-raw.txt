@@ -1,0 +1,85 @@
+Raw captured verification outputs. Empty logs denote no stdout/stderr; exit status and interpretation are in the accompanying verifier reports.
+
+## allocdiag-implement-focused-default.log
+=== RUN   TestCPUControlAllocationDiagnostics
+    control_alloc_diagnostic_test.go:139: set GOAI_ALLOC_DIAGNOSTIC=1 with -test.benchtime=1024x and GOMAXPROCS=1 or 12 to run allocation diagnostics
+--- SKIP: TestCPUControlAllocationDiagnostics (0.00s)
+=== RUN   TestAllocationDiagnosticConfig
+=== RUN   TestAllocationDiagnosticConfig/disabled
+=== RUN   TestAllocationDiagnosticConfig/valid-serial
+=== RUN   TestAllocationDiagnosticConfig/valid-parallel
+=== RUN   TestAllocationDiagnosticConfig/wrong-count
+=== RUN   TestAllocationDiagnosticConfig/wrong-procs
+--- PASS: TestAllocationDiagnosticConfig (0.00s)
+    --- PASS: TestAllocationDiagnosticConfig/disabled (0.00s)
+    --- PASS: TestAllocationDiagnosticConfig/valid-serial (0.00s)
+    --- PASS: TestAllocationDiagnosticConfig/valid-parallel (0.00s)
+    --- PASS: TestAllocationDiagnosticConfig/wrong-count (0.00s)
+    --- PASS: TestAllocationDiagnosticConfig/wrong-procs (0.00s)
+=== RUN   TestAllocationDiagnosticResultExactArithmetic
+--- PASS: TestAllocationDiagnosticResultExactArithmetic (0.00s)
+=== RUN   TestAllocationDiagnosticResultRejectsInvalidResults
+=== RUN   TestAllocationDiagnosticResultRejectsInvalidResults/invalid-N
+=== RUN   TestAllocationDiagnosticResultRejectsInvalidResults/invalid-time
+=== RUN   TestAllocationDiagnosticResultRejectsInvalidResults/bytes-override
+=== RUN   TestAllocationDiagnosticResultRejectsInvalidResults/allocs-override
+--- PASS: TestAllocationDiagnosticResultRejectsInvalidResults (0.00s)
+    --- PASS: TestAllocationDiagnosticResultRejectsInvalidResults/invalid-N (0.00s)
+    --- PASS: TestAllocationDiagnosticResultRejectsInvalidResults/invalid-time (0.00s)
+    --- PASS: TestAllocationDiagnosticResultRejectsInvalidResults/bytes-override (0.00s)
+    --- PASS: TestAllocationDiagnosticResultRejectsInvalidResults/allocs-override (0.00s)
+=== RUN   TestAllocationDiagnosticDisabledRunsNoBenchmarks
+--- PASS: TestAllocationDiagnosticDisabledRunsNoBenchmarks (0.00s)
+=== RUN   TestBenchmarkWithFailurePropagatesNestedFatal
+--- PASS: TestBenchmarkWithFailurePropagatesNestedFatal (0.00s)
+PASS
+ok  	github.com/jxsl13/goai/backend/cpu	0.462s
+
+## allocdiag-implement-focused-simd.log
+=== RUN   TestCPUControlAllocationDiagnostics
+    control_alloc_diagnostic_test.go:139: set GOAI_ALLOC_DIAGNOSTIC=1 with -test.benchtime=1024x and GOMAXPROCS=1 or 12 to run allocation diagnostics
+--- SKIP: TestCPUControlAllocationDiagnostics (0.00s)
+=== RUN   TestAllocationDiagnosticConfig
+=== RUN   TestAllocationDiagnosticConfig/disabled
+=== RUN   TestAllocationDiagnosticConfig/valid-serial
+=== RUN   TestAllocationDiagnosticConfig/valid-parallel
+=== RUN   TestAllocationDiagnosticConfig/wrong-count
+=== RUN   TestAllocationDiagnosticConfig/wrong-procs
+--- PASS: TestAllocationDiagnosticConfig (0.00s)
+    --- PASS: TestAllocationDiagnosticConfig/disabled (0.00s)
+    --- PASS: TestAllocationDiagnosticConfig/valid-serial (0.00s)
+    --- PASS: TestAllocationDiagnosticConfig/valid-parallel (0.00s)
+    --- PASS: TestAllocationDiagnosticConfig/wrong-count (0.00s)
+    --- PASS: TestAllocationDiagnosticConfig/wrong-procs (0.00s)
+=== RUN   TestAllocationDiagnosticResultExactArithmetic
+--- PASS: TestAllocationDiagnosticResultExactArithmetic (0.00s)
+=== RUN   TestAllocationDiagnosticResultRejectsInvalidResults
+=== RUN   TestAllocationDiagnosticResultRejectsInvalidResults/invalid-N
+=== RUN   TestAllocationDiagnosticResultRejectsInvalidResults/invalid-time
+=== RUN   TestAllocationDiagnosticResultRejectsInvalidResults/bytes-override
+=== RUN   TestAllocationDiagnosticResultRejectsInvalidResults/allocs-override
+--- PASS: TestAllocationDiagnosticResultRejectsInvalidResults (0.00s)
+    --- PASS: TestAllocationDiagnosticResultRejectsInvalidResults/invalid-N (0.00s)
+    --- PASS: TestAllocationDiagnosticResultRejectsInvalidResults/invalid-time (0.00s)
+    --- PASS: TestAllocationDiagnosticResultRejectsInvalidResults/bytes-override (0.00s)
+    --- PASS: TestAllocationDiagnosticResultRejectsInvalidResults/allocs-override (0.00s)
+=== RUN   TestAllocationDiagnosticDisabledRunsNoBenchmarks
+--- PASS: TestAllocationDiagnosticDisabledRunsNoBenchmarks (0.00s)
+=== RUN   TestBenchmarkWithFailurePropagatesNestedFatal
+--- PASS: TestBenchmarkWithFailurePropagatesNestedFatal (0.00s)
+PASS
+ok  	github.com/jxsl13/goai/backend/cpu	0.357s
+
+## allocdiag-implement-full-default.log
+ok  	github.com/jxsl13/goai/backend/cpu	13.778s
+
+## allocdiag-implement-full-simd.log
+ok  	github.com/jxsl13/goai/backend/cpu	14.147s
+
+## allocdiag-implement-vet-default.log
+
+## allocdiag-implement-vet-simd.log
+
+## allocdiag-implement-gofmt-d.log
+
+## allocdiag-implement-diffcheck.log

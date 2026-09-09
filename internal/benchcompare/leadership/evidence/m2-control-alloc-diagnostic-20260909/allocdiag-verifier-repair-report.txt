@@ -1,0 +1,22 @@
+Supplementary independent verifier report: analyzer zero-total repair
+Date: 2026-09-09
+Verdict: PASS
+
+Scope
+- Rechecked only the narrow root-owned changes in analyze.rb and analyze_test.rb.
+- Preserved allocdiag-verifier-report.txt unchanged.
+- Did not edit implementation/evidence source, mutate lifecycle or Git, rerun the Go matrix, run the real allocation diagnostic, or build any binary.
+
+Source review
+- analyze.rb retains the all-integer/nonnegative check for every integer field.
+- The repaired semantic check now requires exact N, matching procs, and only `total_ns > 0`; zero total_bytes and total_allocs are accepted and still subjected to exact divmod quotient/remainder validation.
+- Corruption tests now explicitly reject zero elapsed time, negative total bytes, and negative total allocations.
+- The new complete-stream test rewrites all 504 synthetic records across both phases to zero byte/allocation totals and zero quotient/remainders. It requires successful validation, all 36 comparison cells, zero medians/ranges/deltas/positive/negative counts, seven zero pairs, seven raw zero deltas, and seven zero quotient/remainder values for both arms and both metrics.
+- This directly closes the sole mismatch recorded in the original verifier report without weakening elapsed-time, integer, arithmetic, completeness, or reporting checks.
+
+Independent execution
+- `ruby analyze_test.rb`: PASS, 3 runs, 1214 assertions, 0 failures, 0 errors, 0 skips. Raw log: allocdiag-verifier-repair-ruby.log.
+- Ruby syntax for analyzer and tests: PASS. Raw log: allocdiag-verifier-repair-syntax.log.
+- Whitespace/diff checks for both untracked files: PASS, no output. Raw log: allocdiag-verifier-repair-diffcheck.log.
+
+Final narrow verdict: PASS. No further correction required for the reported analyzer mismatch.
