@@ -169,7 +169,7 @@ WHEN three campaigns measure 2048-element GOMAXPROCS1/12 and 262144-element GOMA
 
 Rationale: Retain all raw samples, discarded warmup boundaries, frozen binary hashes and build flags; small effects must satisfy PROC-INTERLEAVE-001. Preserve the AMD64 SIMD route and do not enable the ARM64 GELU SIMD gate.
 
-## ARM64-F64-GELU-NUMERIC-001 {applies: go:cpu.vgeluF64~2,go:cpu.geluBackwardF64KernelCPU}
+## ARM64-F64-GELU-NUMERIC-001 {applies: go:cpu.vgeluF64~3,go:cpu.vgeluGradF64~3}
 WHEN ARM64 SIMD evaluates eligible finite F64 GELU forward or backward, the dedicated GELU route SHALL match the exact-erf reference within 1e-12 times max(1,abs(reference)) and preserve bit-identical vector and scalar-tail results for eligible spans.
 
 ## ARM64-F64-GELU-SCOPE-001 {applies: go:cpu.geluKernelCPU,go:cpu.geluBackwardF64KernelCPU,go:cpu.vexpF64Fast~2}
