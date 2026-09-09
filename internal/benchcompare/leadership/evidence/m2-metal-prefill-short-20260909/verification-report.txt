@@ -1,0 +1,33 @@
+Independent verifier report — T-01M23R33X1EC7 / P-01M23R1VJNEJJ
+Date: 2026-09-09
+Repository: /private/tmp/goai-prefill-ci-O70L2w/repo
+
+RESULT: PASS for the declared focused verification matrix and source/diff review.
+
+Scope and diff review
+- Read .claude/commands/spectackle.md and fetched both task and parent proposal with the read-only Spectackle CLI.
+- Inspected the actual working-tree diff independently. Exactly one file is modified: backend/metal/prefill_ops_bench_test.go (10 insertions, 1 deletion). There are no production or workflow diffs. git diff --check is clean.
+- The short path sets repeats=1, calls meas(1), logs the named smoke completion, and returns before meas(16), meas(128), slope calculation, or ceiling comparison. Consequently each named case records exactly one operation and performs no timing-budget assertion.
+- The recorder lifecycle remains NewRecorder -> record operation -> Commit -> Wait -> LastGPUSeconds -> Free. NewRecorder errors still call t.Fatal and operation errors still call t.Fatalf from inside meas, including the short path.
+- The non-short path retains repeats=15, meas(16), meas(128), the (hi-lo)/(128-16) slope, and the literal ceilings 60, 90, 40, 600, and 1200 for the same five operation shapes.
+
+Pinned verification environment
+- Go binary: /private/tmp/goai-go1271-j1cLvq/go/bin/go (Go 1.27.1 darwin/arm64)
+- PATH begins with that SDK; GOCACHE=/private/tmp/gocache-goai; GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache; GOTOOLCHAIN=local; CGO_ENABLED=1.
+- Each command used: go test ./backend/metal -run '^TestPrefillOpCosts$' -count=1 -v, with -short for short cases and GOEXPERIMENT=simd for SIMD cases.
+
+Initial sandbox attempts — NOT verification proof
+- The first four commands exited 0, but all four logs contain `no metal` and `--- SKIP: TestPrefillOpCosts`; they did not exercise the test. A preliminary interpretation of exit 0 as a real-Metal pass was corrected immediately upon inspecting the logs, before validation, commit, or promotion. These logs are retained separately as verifier-focused-{short,full}-{default,simd}.log.
+
+Escalated real-Metal results
+- verifier-realmetal-focused-short-default.log: PASS, no SKIP, exactly five named `smoke complete` lines.
+- verifier-realmetal-focused-short-simd.log: PASS, no SKIP, exactly five named `smoke complete` lines.
+- verifier-realmetal-focused-full-default.log: PASS, no SKIP, exactly five timing lines: 6.74, 8.94, 3.81, 22.51, 348.93 us.
+- verifier-realmetal-focused-full-simd.log: PASS, no SKIP, exactly five timing lines: 5.80, 8.04, 3.92, 21.53, 346.49 us.
+- Named cases in both short logs: RMSNorm rows=64 d=2048; SwiGLU 64x5632; residual add 64x2048; attention sq=64 sk=64; attention sq=64 sk=128.
+
+Limits
+- I did not independently rerun the full short Metal package and do not claim that gate as independent evidence.
+- I did not independently rerun package vet; focused compilation plus source/diff review and the four requested real-Metal executions are the verifier evidence.
+- These checks validate this existing short-mode policy repair. They do not waive, replace, or qualify the rejected GELU V2 performance gate, and make no kernel-performance claim from test duration.
+- No source, lifecycle, commit, push, or other repository mutation was performed by the verifier. The exclusive heavy verification window was explicitly closed after inspecting all four real-Metal logs.

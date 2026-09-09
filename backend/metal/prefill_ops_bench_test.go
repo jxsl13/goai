@@ -80,7 +80,11 @@ func TestPrefillOpCosts(t *testing.T) {
 	slope := func(name string, ceiling float64, rec func(r *Recorder) error) {
 		meas := func(n int) float64 {
 			best := 1e18
-			for range 15 {
+			repeats := 15
+			if testing.Short() {
+				repeats = 1
+			}
+			for range repeats {
 				r, err := NewRecorder()
 				if err != nil {
 					t.Fatal(err)
@@ -98,6 +102,11 @@ func TestPrefillOpCosts(t *testing.T) {
 				r.Free()
 			}
 			return best
+		}
+		if testing.Short() {
+			meas(1)
+			t.Logf("prefill op %s smoke complete", name)
+			return
 		}
 		lo, hi := meas(16), meas(128)
 		us := (hi - lo) / (128 - 16) * 1e6
