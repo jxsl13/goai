@@ -472,3 +472,5 @@ METAL-PREFILL-SHORT-001	go:metal.TestPrefillOpCosts	backend/metal/prefill_ops_be
 METAL-MHA-DECODE-SHORT-001-001	go:metal.TestMHADecodeCost	backend/metal/mha_decode_bench_test.go	36-98	cbfdf09e96300879	33388eb4c1c079ec
 METAL-MHA-DECODE-SHORT-001-001	go:metal.TestMHADecodeCost	backend/metal/mha_decode_bench_test.go	36-98	cbfdf09e96300879	33388eb4c1c079ec
 CLASSIC-FIT-SHORT-001	go:classic.TestClassicFitTimeGuard	classic/fit_time_guard_test.go	65-138	ec20a1d4a3ec4b72	f65cbf4c71757e89
+CPU-ALLOC-SITE-CAPTURE-001	backend/cpu/control_alloc_sites_test.go	-	0-0	-	acaaefefc3fea83d
+CPU-ALLOC-SITE-RAW-001	backend/cpu/control_alloc_sites_test.go	-	0-0	-	c8bc672ca731ecd7
