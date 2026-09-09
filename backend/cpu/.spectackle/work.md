@@ -45,7 +45,7 @@ Current source137b3355 retains vexpF64Fast=false on ARM64; GELU forward/backward
 
 ## P-01M237J19FFE5SYSTMV3442H6H Measure direct-call scalar F64 GELU backward before a wider SIMD redesign
 kind: proposal
-state: draft
+state: active
 created: 2026-09-09
 refs: R-01M236QP4YEFDABMQ07MC43EHH
 grilled: 2026-09-09 open=0
