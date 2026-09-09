@@ -475,6 +475,7 @@ CLASSIC-FIT-SHORT-001	go:classic.TestClassicFitTimeGuard	classic/fit_time_guard_
 CPU-ALLOC-SITE-CAPTURE-001	go:cpu_test.TestCPUControlAllocationSites	backend/cpu/control_alloc_sites_test.go	368-507	02431ce7c105d187	acaaefefc3fea83d
 CPU-ALLOC-SITE-RAW-001	go:cpu_test.formatAllocationSiteSnapshot	backend/cpu/control_alloc_sites_test.go	301-315	383763858686afff	c8bc672ca731ecd7
 CPU-ALLOC-SITE-RAW-001	go:cpu_test.TestCPUControlAllocationSites	backend/cpu/control_alloc_sites_test.go	368-507	02431ce7c105d187	c8bc672ca731ecd7
-ALLOC-SITE-ANALYSIS-001	rb:analyze_sites.analyze	internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb	54-121	b66a3f4744933a30	d277a0d4f2c3bef1
-ALLOC-SITE-MONOTONE-001	rb:analyze_sites.build_raw_keys	internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb	253-280	aba73a35f7e80722	4b83a8455b154237
+ALLOC-SITE-ANALYSIS-001	rb:analyze_sites.analyze	internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb	68-135	b66a3f4744933a30	d277a0d4f2c3bef1
+ALLOC-SITE-MONOTONE-001	rb:analyze_sites.build_raw_keys	internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb	267-294	aba73a35f7e80722	4b83a8455b154237
 CPU-ALLOC-SITE-LIFETIME-001	go:cpu_test.TestCPUControlAllocationSites	backend/cpu/control_alloc_sites_test.go	368-507	02431ce7c105d187	39ccdd616f6aa19e
+ALLOC-SITE-FINITE-PARSE-001	rb:analyze_sites.parse	internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb	44-54	515833dddc77873d	3d610daacb8e8e2a
