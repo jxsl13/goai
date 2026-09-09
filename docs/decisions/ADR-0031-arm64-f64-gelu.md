@@ -1,11 +1,11 @@
 # ADR-0031 — measure a separately gated ARM64 F64 GELU intrinsic path
 
-- Status: accepted experiment; V1 rejected for a small-input control regression
+- Status: accepted experiment; V1 and V2 rejected by their control gates
 - Date: 2026-09-09
 - Research: `R-01M23B9YZ1E16`
 - Proposal: `P-01M23BZPZNF9V`
 - V1 task (rejected): `T-01M23C5EWPE8P`
-- V2 task (qualification): `T-01M23JPZT8FDM`
+- V2 task (performance review rejected): `T-01M23JPZT8FDM`
 - Base: `b9c059464edb4a339073c75ea8037c5472bf9aea`
 
 ## Context
@@ -134,6 +134,15 @@ Any such candidate needs a new source/binary pin and independent verification.
 The minimal V2 shortcut and explicit pair tests are implemented in `361955ac`;
 its [separate qualification record](../../internal/benchcompare/leadership/evidence/m2-f64-gelu-neon-v2-20260909/README.md)
 does not replace or relax V1's rejected result.
+V2 passes all 24 large public target cells (2.058–3.924x) and all 48 small-input
+cells, eliminating V1's active-forward regression. Independent performance
+review nevertheless rejects V2: parallel Softplus B/op medians rise by 2, 3,
+and 2 bytes in the three campaigns; SiLU backward rises in two. All allocs/op
+medians remain unchanged and individual byte differences are nonsignificant,
+but the unchanged repeated-allocation veto is not waived. The complete V2 raw
+streams and independent verdict are retained. Allocation accounting is a
+separate diagnostic hypothesis, not an established cause or permission to
+rescore the original campaigns. No production promotion follows from V2.
 The generalizable opportunity is tracked in
 [perfscan #966](https://github.com/jxsl13/perfscan/issues/966).
 

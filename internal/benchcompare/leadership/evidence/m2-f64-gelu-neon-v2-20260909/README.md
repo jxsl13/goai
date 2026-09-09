@@ -1,7 +1,8 @@
 # M2 F64 GELU uniform-small follow-up — September 9, 2026
 
-Status: independent correctness and code-generation verification passed.
-Performance qualification is still pending; no V2 promotion decision yet.
+Status: **REJECTED by independent performance review**. Correctness and
+code-generation verification passed, but repeated fixed-control allocation-byte
+increases veto promotion under the unchanged contract. No runtime promotion.
 The rejected [V1 experiment](../m2-f64-gelu-neon-20260909/README.md) and its frozen
 binary remain immutable. This follow-up must pass the same gates; it does not
 waive the small-input regression or claim external-library leadership.
@@ -85,6 +86,63 @@ The disassembly also motivated [perfscan #967](https://github.com/jxsl13/perfsca
 about repeated coefficient-address materialization. No coefficient-layout
 candidate was implemented or measured; V2 results must not be attributed to it.
 
+## Complete V2 result
+
+The [raw GELU stream](paired.txt) contains 84 successful invocations and 1,344
+records; the subsequent [fixed controls](controls.txt) contain 84 successful
+invocations and 252 records. All three campaigns, seven pairs, both process
+counts, both arms, and every expected cell/PASS marker were independently
+validated. Original control, rejected V1, V2, harness, runtime, and test hashes
+were rechecked unchanged after both streams completed. No owned build, test,
+profile, or other benchmark overlapped the measurements. See the point-in-time
+[environment disclosure](environment.txt), not a claim of continuous host idleness.
+
+All 24 large public target cells pass. Ranges below are the minimum and maximum
+of the three campaign median speedups, **not confidence intervals**:
+
+| Large public operation | GOMAXPROCS=1 | GOMAXPROCS=12 |
+| --- | ---: | ---: |
+| Forward, active | 3.913–3.924x | 2.408–2.460x |
+| Forward, mixed | 2.702–2.707x | 2.226–2.249x |
+| Backward, active | 2.297–2.299x | 2.058–2.097x |
+| Backward, mixed | 2.548–2.553x | 2.217–2.224x |
+
+Every large public cell is faster in 7/7 pairs, with nominal exact rank-test
+`p=2/3432=0.000582750583`. All 48 small-input cells are also faster in every
+pair with that p-value. Small active-forward Execute, V1's veto, now improves
+1.497–1.672x across campaigns and process counts. No fixed-control timing median
+regresses by more than 3%; the largest is Softplus parallel campaign 3 at +0.839%
+(`p=0.1649`). This internal A/B result does not establish external leadership.
+
+The allocation outcome is **not a pass**. All allocs/op medians are unchanged;
+all GELU leaves remain zero-allocation, and GELU B/op medians never increase.
+However, these six parallel fixed-control B/op medians increase:
+
+| Campaign | Control | Old B/op | V2 B/op | Exact p |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Sigmoid | 524612 | 524613 | 0.562937 |
+| 1 | Softplus | 2097482 | 2097484 | 0.081585 |
+| 2 | SiLU backward | 4194697 | 4194701 | 0.920163 |
+| 2 | Softplus | 2097481 | 2097484 | 0.154429 |
+| 3 | SiLU backward | 4194701 | 4194702 | 0.380536 |
+| 3 | Softplus | 2097482 | 2097484 | 0.119464 |
+
+These individual differences are nonsignificant and tiny, but Softplus repeats
+in all three campaigns and SiLU in two. The independent verifier applies the
+unrelaxed repeated-allocation veto and rejects V2. The analyzer's zero
+significant-allocation flags are descriptive and **do not override that verdict**.
+The cause of the byte movement is not established; adaptive iteration counts
+and process-wide accounting are hypotheses for a separate diagnostic, not
+grounds for deleting samples, selectively rerunning qualification, or waiving
+this failed gate. V1 and V2 binaries and all measurements remain immutable.
+
+Retained outputs: [analysis](analysis.csv), [protocol audit](analysis-audit.txt),
+[benchstat](benchstat.txt), and the fresh [independent report](verifier-performance.txt).
+The independent reviewer recomputed raw medians and exact tied-rank permutations
+without relying on the analysis CSV. Its report records the limitations of
+adaptive benchmark counts, unpaired rank testing despite paired execution,
+excluded warmups, and point-in-time environmental observations.
+
 ## CI setup observation
 
 Run `34383399053` at `bd8faf5f` failed CUDA/Vulkan Ubuntu setup before compilation
@@ -93,3 +151,10 @@ runner. The same failure recurred on the failed-job retry (attempt 2). The
 [initial raw excerpts](ci-setup-failure.txt) are retained; no integrity check was
 disabled and neither attempt counts as passing. Local qualification proceeds
 independently; final CI success remains mandatory before merge.
+
+The later documentation/evidence checkpoint `72410b07` passed all 16 jobs in
+[run 34388356452](https://github.com/jxsl13/goai/actions/runs/34388356452), with
+zero failed individual steps, including the three soft SIMD lanes. CUDA and
+Vulkan setup recovered without a workflow or integrity-check change. The full
+[job/step record](ci-candidate.json) is retained. This passing checkpoint neither
+overrides the performance veto nor substitutes for CI on a future final head.
