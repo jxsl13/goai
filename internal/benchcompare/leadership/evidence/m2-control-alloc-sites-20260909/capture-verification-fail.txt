@@ -1,0 +1,256 @@
+Fresh independent verification: T-01M24137G7EHM
+Verifier worktree: /private/tmp/goai-alloc-sites-verify-mzbVTj/repo
+Pinned commit: f6ea1353e994e69929e809c9254e661d07bad1cb
+Scope: verification only; no enabled GOAI_ALLOC_SITE_DIAGNOSTIC, runtime.MemProfile/pprof call, live profile, benchmark, or matrix.
+
+READ/REVIEW PRECONDITIONS
+PASS: read .claude/commands/spectackle.md in full (81 lines).
+PASS: called `spectackle call -root /private/tmp/goai-alloc-sites-verify-mzbVTj/repo -instructions` and read the complete server manifest.
+PASS: fetched T-01M24137G7EHM, parent P-01M23BZPZNF9V, and research R-01M23VWNB5FRP with the headless `get` tool.
+PASS: read protocol.md (164 lines), schema.md (149 lines), and corrected-review.txt (73 lines) in full.
+PASS: read /Users/john/Desktop/Development/spectackle/docs/agent-workflow.md in full (451 lines).
+PASS: reviewed the exact committed diff f6ea1353^..f6ea1353 and pinned Go declaration contracts for runtime.MemProfile, runtime.MemProfileRecord, runtime.CallersFrames, runtime.FuncForPC, runtime/pprof.Profile.WriteTo, flag.Visit, backend.Get, backend.NewContext, (*backend.Context).WithBackend, backend.Execute, and bench.RandF64.
+
+STATIC COMMANDS
+$ git status --short
+[no output]
+[exit 0]
+
+$ git rev-parse HEAD
+f6ea1353e994e69929e809c9254e661d07bad1cb
+[exit 0]
+
+$ git diff --stat f6ea1353^..f6ea1353
+ backend/cpu/control_alloc_sites_test.go | 761 ++++++++++++++++++++++++++++++++
+ 1 file changed, 761 insertions(+)
+[exit 0]
+
+$ git diff --check f6ea1353^..f6ea1353
+[no output]
+[exit 0]
+
+$ shasum -a 256 backend/cpu/control_alloc_sites_test.go
+f49035c0e35171bf06d396c609cd0931d2e4d1cdcc1aa88c311505910603e2dc  backend/cpu/control_alloc_sites_test.go
+[exit 0]
+
+VERIFY COMMANDS
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go version
+go version go1.27.1 darwin/arm64
+[exit 0]
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 gofmt -w backend/cpu/control_alloc_sites_test.go
+[no output]
+[exit 0]
+
+$ git diff --check
+[no output]
+[exit 0]
+
+$ git status --short
+[no output]
+[exit 0]
+
+$ shasum -a 256 backend/cpu/control_alloc_sites_test.go
+f49035c0e35171bf06d396c609cd0931d2e4d1cdcc1aa88c311505910603e2dc  backend/cpu/control_alloc_sites_test.go
+[exit 0]
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go test ./backend/cpu -run '^TestAllocationSite' -count=1 -v
+=== RUN   TestAllocationSiteDisabledSelectionDoesNoWork
+--- PASS: TestAllocationSiteDisabledSelectionDoesNoWork (0.00s)
+=== RUN   TestAllocationSiteConfigValidation
+=== RUN   TestAllocationSiteConfigValidation/selector
+=== RUN   TestAllocationSiteConfigValidation/relative_output
+=== RUN   TestAllocationSiteConfigValidation/godebug
+=== RUN   TestAllocationSiteConfigValidation/gogc
+=== RUN   TestAllocationSiteConfigValidation/gomemlimit
+=== RUN   TestAllocationSiteConfigValidation/procs
+=== RUN   TestAllocationSiteConfigValidation/rate
+=== RUN   TestAllocationSiteConfigValidation/run
+=== RUN   TestAllocationSiteConfigValidation/count
+=== RUN   TestAllocationSiteConfigValidation/short
+=== RUN   TestAllocationSiteConfigValidation/memprofile
+=== RUN   TestAllocationSiteConfigValidation/memprofilerate_flag
+--- PASS: TestAllocationSiteConfigValidation (0.01s)
+    --- PASS: TestAllocationSiteConfigValidation/selector (0.00s)
+    --- PASS: TestAllocationSiteConfigValidation/relative_output (0.00s)
+    --- PASS: TestAllocationSiteConfigValidation/godebug (0.00s)
+    --- PASS: TestAllocationSiteConfigValidation/gogc (0.00s)
+    --- PASS: TestAllocationSiteConfigValidation/gomemlimit (0.00s)
+    --- PASS: TestAllocationSiteConfigValidation/procs (0.00s)
+    --- PASS: TestAllocationSiteConfigValidation/rate (0.00s)
+    --- PASS: TestAllocationSiteConfigValidation/run (0.00s)
+    --- PASS: TestAllocationSiteConfigValidation/count (0.00s)
+    --- PASS: TestAllocationSiteConfigValidation/short (0.00s)
+    --- PASS: TestAllocationSiteConfigValidation/memprofile (0.00s)
+    --- PASS: TestAllocationSiteConfigValidation/memprofilerate_flag (0.00s)
+=== RUN   TestAllocationSiteCounterJSONRoundTrip
+--- PASS: TestAllocationSiteCounterJSONRoundTrip (0.00s)
+=== RUN   TestAllocationSiteFrameConversionRetainsLiteralLine
+--- PASS: TestAllocationSiteFrameConversionRetainsLiteralLine (0.00s)
+=== RUN   TestAllocationSiteRawRowsRetainSignedCountersPCsAndFrames
+--- PASS: TestAllocationSiteRawRowsRetainSignedCountersPCsAndFrames (0.00s)
+=== RUN   TestAllocationSiteEmptyStackUsesEmptyArrays
+--- PASS: TestAllocationSiteEmptyStackUsesEmptyArrays (0.00s)
+=== RUN   TestAllocationSiteSnapshotPrefixAndInsufficientBuffer
+--- PASS: TestAllocationSiteSnapshotPrefixAndInsufficientBuffer (0.00s)
+=== RUN   TestAllocationSiteOutputPathReuseRejectedWithoutOverwrite
+--- PASS: TestAllocationSiteOutputPathReuseRejectedWithoutOverwrite (0.00s)
+=== RUN   TestAllocationSiteWriteAndCloseFailuresPropagate
+--- PASS: TestAllocationSiteWriteAndCloseFailuresPropagate (0.00s)
+=== RUN   TestAllocationSiteRegionReturnsActualCountOnExecuteError
+--- PASS: TestAllocationSiteRegionReturnsActualCountOnExecuteError (0.00s)
+=== RUN   TestAllocationSiteRegionCompletes1024Calls
+--- PASS: TestAllocationSiteRegionCompletes1024Calls (0.00s)
+PASS
+ok  	github.com/jxsl13/goai/backend/cpu	0.504s
+[exit 0]
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd go test ./backend/cpu -run '^TestAllocationSite' -count=1 -v
+=== RUN   TestAllocationSiteDisabledSelectionDoesNoWork
+--- PASS: TestAllocationSiteDisabledSelectionDoesNoWork (0.00s)
+=== RUN   TestAllocationSiteConfigValidation
+=== RUN   TestAllocationSiteConfigValidation/selector
+=== RUN   TestAllocationSiteConfigValidation/relative_output
+=== RUN   TestAllocationSiteConfigValidation/godebug
+=== RUN   TestAllocationSiteConfigValidation/gogc
+=== RUN   TestAllocationSiteConfigValidation/gomemlimit
+=== RUN   TestAllocationSiteConfigValidation/procs
+=== RUN   TestAllocationSiteConfigValidation/rate
+=== RUN   TestAllocationSiteConfigValidation/run
+=== RUN   TestAllocationSiteConfigValidation/count
+=== RUN   TestAllocationSiteConfigValidation/short
+=== RUN   TestAllocationSiteConfigValidation/memprofile
+=== RUN   TestAllocationSiteConfigValidation/memprofilerate_flag
+--- PASS: TestAllocationSiteConfigValidation (0.01s)
+    --- PASS: TestAllocationSiteConfigValidation/selector (0.00s)
+    --- PASS: TestAllocationSiteConfigValidation/relative_output (0.00s)
+    --- PASS: TestAllocationSiteConfigValidation/godebug (0.00s)
+    --- PASS: TestAllocationSiteConfigValidation/gogc (0.00s)
+    --- PASS: TestAllocationSiteConfigValidation/gomemlimit (0.00s)
+    --- PASS: TestAllocationSiteConfigValidation/procs (0.00s)
+    --- PASS: TestAllocationSiteConfigValidation/rate (0.00s)
+    --- PASS: TestAllocationSiteConfigValidation/run (0.00s)
+    --- PASS: TestAllocationSiteConfigValidation/count (0.00s)
+    --- PASS: TestAllocationSiteConfigValidation/short (0.00s)
+    --- PASS: TestAllocationSiteConfigValidation/memprofile (0.00s)
+    --- PASS: TestAllocationSiteConfigValidation/memprofilerate_flag (0.00s)
+=== RUN   TestAllocationSiteCounterJSONRoundTrip
+--- PASS: TestAllocationSiteCounterJSONRoundTrip (0.00s)
+=== RUN   TestAllocationSiteFrameConversionRetainsLiteralLine
+--- PASS: TestAllocationSiteFrameConversionRetainsLiteralLine (0.00s)
+=== RUN   TestAllocationSiteRawRowsRetainSignedCountersPCsAndFrames
+--- PASS: TestAllocationSiteRawRowsRetainSignedCountersPCsAndFrames (0.00s)
+=== RUN   TestAllocationSiteEmptyStackUsesEmptyArrays
+--- PASS: TestAllocationSiteEmptyStackUsesEmptyArrays (0.00s)
+=== RUN   TestAllocationSiteSnapshotPrefixAndInsufficientBuffer
+--- PASS: TestAllocationSiteSnapshotPrefixAndInsufficientBuffer (0.00s)
+=== RUN   TestAllocationSiteOutputPathReuseRejectedWithoutOverwrite
+--- PASS: TestAllocationSiteOutputPathReuseRejectedWithoutOverwrite (0.00s)
+=== RUN   TestAllocationSiteWriteAndCloseFailuresPropagate
+--- PASS: TestAllocationSiteWriteAndCloseFailuresPropagate (0.00s)
+=== RUN   TestAllocationSiteRegionReturnsActualCountOnExecuteError
+--- PASS: TestAllocationSiteRegionReturnsActualCountOnExecuteError (0.00s)
+=== RUN   TestAllocationSiteRegionCompletes1024Calls
+--- PASS: TestAllocationSiteRegionCompletes1024Calls (0.00s)
+PASS
+ok  	github.com/jxsl13/goai/backend/cpu	0.356s
+[exit 0]
+
+$ test ! -e /private/tmp/goai-alloc-sites-verify-mzbVTj/disabled-default-artifacts
+[no output]
+[exit 0]
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOAI_ALLOC_SITE_DIAGNOSTIC= GOAI_ALLOC_SITE_OUT=/private/tmp/goai-alloc-sites-verify-mzbVTj/disabled-default-artifacts go test ./backend/cpu -run '^TestCPUControlAllocationSites$' -count=1 -v
+=== RUN   TestCPUControlAllocationSites
+    control_alloc_sites_test.go:371: GOAI_ALLOC_SITE_DIAGNOSTIC is empty
+--- SKIP: TestCPUControlAllocationSites (0.00s)
+PASS
+ok  	github.com/jxsl13/goai/backend/cpu	0.444s
+[exit 0]
+
+$ test ! -e /private/tmp/goai-alloc-sites-verify-mzbVTj/disabled-default-artifacts
+[no output]
+[exit 0]
+PASS: default disabled entry actually skipped and created no output path.
+
+$ test ! -e /private/tmp/goai-alloc-sites-verify-mzbVTj/disabled-simd-artifacts
+[no output]
+[exit 0]
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd GOAI_ALLOC_SITE_DIAGNOSTIC= GOAI_ALLOC_SITE_OUT=/private/tmp/goai-alloc-sites-verify-mzbVTj/disabled-simd-artifacts go test ./backend/cpu -run '^TestCPUControlAllocationSites$' -count=1 -v
+=== RUN   TestCPUControlAllocationSites
+    control_alloc_sites_test.go:371: GOAI_ALLOC_SITE_DIAGNOSTIC is empty
+--- SKIP: TestCPUControlAllocationSites (0.00s)
+PASS
+ok  	github.com/jxsl13/goai/backend/cpu	1.419s
+[exit 0]
+
+$ test ! -e /private/tmp/goai-alloc-sites-verify-mzbVTj/disabled-simd-artifacts
+[no output]
+[exit 0]
+PASS: SIMD disabled entry actually skipped and created no output path.
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go test ./backend/cpu -short -count=1
+ok  	github.com/jxsl13/goai/backend/cpu	14.228s
+[exit 0]
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd go test ./backend/cpu -short -count=1
+ok  	github.com/jxsl13/goai/backend/cpu	14.327s
+[exit 0]
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go vet ./backend/cpu
+[no output]
+[exit 0]
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd go vet ./backend/cpu
+[no output]
+[exit 0]
+
+$ PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=1 go test -race ./backend/cpu -run '^TestAllocationSite' -short -count=1
+ok  	github.com/jxsl13/goai/backend/cpu	1.516s
+[exit 0]
+
+COMMAND-GATE BOUNDARY: PASS
+All required VERIFY commands above exited 0. Both disabled-entry tests emitted actual SKIP and neither output path existed before or after. No command enabled GOAI_ALLOC_SITE_DIAGNOSTIC. No live profile, runtime.MemProfile/pprof capture, benchmark, matrix, or performance execution occurred.
+
+SOURCE/CONTRACT REVIEW BOUNDARY: FAIL
+[P1] Raw snapshot buffers are not explicitly kept alive through serialization. `preRecords` and `postRecords` are last referenced when `formatAllocationSiteSnapshot` is called at backend/cpu/control_alloc_sites_test.go:471-472. There is no `runtime.KeepAlive(preRecords)` or `runtime.KeepAlive(postRecords)` after capture JSON, cumulative pprof, tail JSON, and file closes. The T/schema contract expressly requires keeping both fixed buffers alive through serialization; Go compiler liveness permits them to become unreachable after their last use. Required narrow correction: add both KeepAlive calls after the final tail write/artifact closes (and before reporting errors/return is acceptable if after serialization), without changing capture order or other behavior.
+
+PASS: opt-in selector and exact output/debug/GC/procs/rate/run/count/short validation are present; flag.Visit detects explicit test.memprofile and test.memprofilerate supplies.
+PASS: disabled entry skips before setup/output.
+PASS: output directory must be new and absolute; all three artifacts use O_EXCL; partial/setup failures preserve created files and surface close failures.
+PASS: capture and tail JSON short-write/write errors, cumulative pprof WriteTo errors, and all file close errors are accumulated and reported.
+PASS: region helper is noinline and contains only exactly 1,024 direct Execute attempts, increments only after success, returns the actual successful-call count, and formats no errors internally.
+PASS: pre/post buffers are created with len=cap=65,536 before warmup; all MemStats destinations are allocated before warmup.
+PASS: boundary sequence is straight-line and exact: warmup; GC; preRawBefore; MemProfile(pre,true); start; region; end; GC; postGC; MemProfile(post,true); postRaw. Region error inspection/formatting occurs only afterward.
+PASS: signed raw counters, original ordinals, all 32 lowercase unpadded hex PCs including trailing zeroes, frame order/repetitions/inline expansion, and non-null empty arrays are retained.
+PASS: snapshot success copies only the returned prefix; failure/overflow retains n/ok with an empty row array and never retries/resizes.
+PASS: capture errors retain observed pre-snapshot movement, snapshot validity, actual completed count, region error, and profile-rate change before test failure.
+PASS: capture JSON precedes cumulative allocs pprof; tail MemStats follows pprof serialization; tail JSON and closes are outside the tail boundary.
+
+OVERALL INDEPENDENT VERDICT: FAIL
+Reason: the passing executable gates do not satisfy the explicit buffer-liveness contract. No performance, allocation-site attribution, or execution claim is made.
+
+FINAL STATE
+$ git status --short
+[no output]
+[exit 0]
+
+$ git rev-parse HEAD
+f6ea1353e994e69929e809c9254e661d07bad1cb
+[exit 0]
+
+$ shasum -a 256 backend/cpu/control_alloc_sites_test.go
+f49035c0e35171bf06d396c609cd0931d2e4d1cdcc1aa88c311505910603e2dc  backend/cpu/control_alloc_sites_test.go
+[exit 0]
+
+$ test ! -e /private/tmp/goai-alloc-sites-verify-mzbVTj/disabled-default-artifacts
+[no output]
+[exit 0]
+
+$ test ! -e /private/tmp/goai-alloc-sites-verify-mzbVTj/disabled-simd-artifacts
+[no output]
+[exit 0]
+
+No temporary verification test was added. The committed source is unchanged and the verifier worktree is clean.
+HEAVY GO TEST/BUILD WINDOW: CLOSED

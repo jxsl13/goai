@@ -1,0 +1,361 @@
+T-01M241R5P3EH8 implementer report
+===================================
+
+Handoff status
+--------------
+
+Implemented the exact per-invocation allocation-site analyzer contract in the
+dedicated worktree. This is an implementation handoff for root's independent
+review and fresh verification. It is not a matrix result, live-capture result,
+pprof result, runtime/source-binary change, performance result, or qualification
+PASS.
+
+Worktree: /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo
+Source HEAD: 69deae0524acaf0ef3a94379467b183626eba309
+
+Only these repository files were created:
+
+* internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb
+* internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+
+No existing repository file was edited. This external report is the only other
+written file.
+
+Contract audit and implementation
+---------------------------------
+
+Read the complete required Spectackle command instructions, server instructions,
+agent workflow, task T-01M241R5P3EH8, parent P-01M23BZPZNF9V, research
+R-01M23VWNB5FRP, protocol.md, schema.md, analysis-schema.md, corrected-review.txt,
+and the named prior duplicate-key block. No contract contradiction was found.
+
+The implementation provides AllocationSites.parse, AllocationSites.analyze,
+AllocationSites::Invalid, and a guarded three-absolute-path CLI. It recursively
+rejects duplicate JSON object keys through JSON object_class, validates every
+declared capture/tail object and scalar, retains zero-active references with
+multiplicity, performs collision-safe checked aggregation at raw and normalized
+layers, rejects raw-key decreases before normalization, preserves all sites and
+contributors, groups with caller precedence, calculates all five MemStats
+windows and disclosed discrepancies, and emits deterministic exact derived JSON.
+The CLI analyzes both inputs before exclusive mode-0600 output creation and never
+deletes, overwrites, or retries a partial output.
+
+One audit correction was made before final verification: frame line is validated
+as a nonnegative integer without an invented signed-64 upper bound. It is
+diagnostic evidence and the frozen schema gives it no upper bound.
+
+Synthetic coverage includes both collision layers; missing pre sides; unchanged
+sites; duplicate zero-active rows; a zero-active pre stack becoming a positive
+post row; whole-capture raw-PC/frame-PC/file/line shifts with identical normalized
+results; repeated and inline function names; caller precedence, worker-only, and
+other groups; exact integers above 2^53; valid near-uint64 MemStats; uint64 and
+uint32 rejection limits; raw, normalized, group, global, product, and signed
+window arithmetic guards; masked raw-key decreases; malformed slots/stacks;
+every capture scalar/environment guard; strict object keys and primitive types;
+recursive duplicates/nonfinite/trailing JSON; deterministic roundtrip and input
+immutability; exact contributor partitions; all group/global sums; and synthetic
+CLI success/exclusivity/invalid-input/all-argument absolute-path behavior.
+
+Some arithmetic overflow states are structurally unreachable after earlier exact
+validation: a monotone per-raw-key delta cannot overflow signed 64-bit when both
+cumulative operands are nonnegative signed-64 values; a summed nonnegative delta
+cannot exceed its already-checked post sum; and immediate-minus-profile cannot
+leave signed range when the immediate window is signed-64 and the profile delta
+is nonnegative signed-64. The checks remain explicit. Tests exercise reachable
+upper/lower window subtraction, raw/normalized/group/global addition, and product
+overflow paths; the checked lower-bound helper is also tested directly. No test
+is mislabeled as a discrepancy-overflow integration path.
+
+Source hashes read
+------------------
+
+Command:
+shasum -a256 .claude/commands/spectackle.md /Users/john/Desktop/Development/spectackle/docs/agent-workflow.md internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/protocol.md internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/schema.md internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analysis-schema.md internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/corrected-review.txt internal/benchcompare/leadership/evidence/m2-control-alloc-diagnostic-20260909/analyze.rb
+Exit code: 0
+Output:
+dd1b3b9b108b93d14676fe8318cc822fe3b95c13f292c601acce7d34e2f34b27  .claude/commands/spectackle.md
+da1593be8a3f83035c89276a41eb5f547791d5e7c9bfef9d1445ee787dbbc424  /Users/john/Desktop/Development/spectackle/docs/agent-workflow.md
+495e21c309dd430f40b8a0d9385890ac7dfa3d444805d1ea495bc0cec8b1d89c  internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/protocol.md
+6f6f4d88edd1804e0b0b81433587a2d79bd4230d76c971cf6c10b0c6cc845d0f  internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/schema.md
+8bfe7fb13b67ba1c98a776cadebc6bb950cb765f7020372c0f36499af2fa41f2  internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analysis-schema.md
+a264a9d55adec25d24f2e0f5eaad3d75e82641bd5a2e06241e7bcca0918d2318  internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/corrected-review.txt
+1f04b88fa03eef39c0efec0681ae0692fead21c9ff413fb2f1542f381dc7804e  internal/benchcompare/leadership/evidence/m2-control-alloc-diagnostic-20260909/analyze.rb
+
+Test failure and fix history
+----------------------------
+
+First test run after initial implementation:
+
+Command:
+ruby internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+Exit code: 1
+Output:
+Run options: --seed 52725
+
+# Running:
+
+.EFF...FF..E..
+
+Finished in 0.066380s, 210.9069 runs/s, 2455.5589 assertions/s.
+
+  1) Error:
+AllocationSitesTest#test_every_capture_scalar_and_environment_guard:
+AllocationSites::Invalid: $derived.raw_keys[0].delta.alloc_bytes: decreasing cumulative profile counter
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:483:in `invalid'
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:400:in `block in profile_sub'
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:398:in `each'
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:398:in `each_with_object'
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:398:in `profile_sub'
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:262:in `block in build_raw_keys'
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:256:in `each'
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:256:in `each_with_index'
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:256:in `each'
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:256:in `map'
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:256:in `build_raw_keys'
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:89:in `analyze'
+    internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb:234:in `test_every_capture_scalar_and_environment_guard'
+
+  2) Failure:
+AllocationSitesTest#test_boundary_decreases_pre_snapshot_movement_and_signed_window_overflow [internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb:346]:
+Expected /must not move/ to match "$derived.raw_keys[0].delta.alloc_bytes: decreasing cumulative profile counter".
+
+  3) Failure:
+AllocationSitesTest#test_checked_profile_sum_product_and_discrepancy_overflows [internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb:386]:
+Expected /overflow/ to match "$derived.raw_keys[0].delta.alloc_bytes: decreasing cumulative profile counter".
+
+  4) Failure:
+AllocationSitesTest#test_symbolization_mismatch_for_same_raw_key_rejected_but_location_shift_allowed [internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb:332]:
+Expected /function stack differs/ to match "$derived.raw_keys[0].delta.alloc_bytes: decreasing cumulative profile counter".
+
+  5) Failure:
+AllocationSitesTest#test_cli_success_exclusive_output_invalid_input_and_absolute_paths [internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb:399]:
+analyze_sites: $derived.raw_keys[0].delta.alloc_bytes: decreasing cumulative profile counter
+
+
+  6) Error:
+AllocationSitesTest#test_exact_derived_aggregation_and_independent_values:
+AllocationSites::Invalid: $derived.raw_keys[0].delta.alloc_bytes: decreasing cumulative profile counter
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:483:in `invalid'
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:400:in `block in profile_sub'
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:398:in `each'
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:398:in `each_with_object'
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:398:in `profile_sub'
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:262:in `block in build_raw_keys'
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:256:in `each'
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:256:in `each_with_index'
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:256:in `each'
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:256:in `map'
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:256:in `build_raw_keys'
+    /private/tmp/goai-alloc-sites-analyze-1sS6ot/repo/internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb:89:in `analyze'
+    internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb:134:in `test_exact_derived_aggregation_and_independent_values'
+
+14 runs, 163 assertions, 4 failures, 2 errors, 0 skips
+
+Fix: the independent fixture had modeled a PC shift by removing a positive pre
+raw key. The analyzer correctly rejected the resulting per-raw-key decrease. The
+fixture was corrected to retain the old cumulative raw key and add a second raw
+key with shifted PC/location evidence that normalizes to the same function stack.
+
+Second test run:
+
+Command:
+ruby internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+Exit code: 1
+Output:
+Run options: --seed 403
+
+# Running:
+
+............F.
+
+Finished in 0.228153s, 61.3623 runs/s, 828.3915 assertions/s.
+
+  1) Failure:
+AllocationSitesTest#test_exact_derived_aggregation_and_independent_values [internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb:145]:
+Expected: 6
+  Actual: 5
+
+14 runs, 189 assertions, 1 failures, 0 errors, 0 skips
+
+Fix: corrected the independently expected normalized-site count from six to
+five. The two distinct raw PC keys intentionally merge into one normalized site.
+
+Third test run:
+
+Command:
+ruby internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+Exit code: 0
+Output:
+Run options: --seed 6071
+
+# Running:
+
+..............
+
+Finished in 0.228466s, 61.2783 runs/s, 949.8131 assertions/s.
+
+14 runs, 217 assertions, 0 failures, 0 errors, 0 skips
+
+After independent review requested the additional bounded synthetic cases listed
+above, the strengthened suite was run:
+
+Command:
+ruby internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+Exit code: 1
+Output:
+Run options: --seed 134
+
+# Running:
+
+...............F...
+
+Finished in 0.250544s, 75.8350 runs/s, 1017.7853 assertions/s.
+
+  1) Failure:
+AllocationSitesTest#test_zero_active_multiplicity_and_zero_pre_stack_becoming_positive_post [internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb:442]:
+--- expected
++++ actual
+@@ -1 +1 @@
+-[{"snapshot"=>"pre", "ordinal"=>8}, {"snapshot"=>"pre", "ordinal"=>9}]
++[{"snapshot"=>"pre", "ordinal"=>8}, {"snapshot"=>"pre", "ordinal"=>9}, {"snapshot"=>"post", "ordinal"=>8}]
+
+
+19 runs, 255 assertions, 1 failures, 0 errors, 0 skips
+
+Fix: the assertion selected zero rows only by ordinal and unintentionally included
+an unrelated post row with ordinal 8. It was corrected to select the pre snapshot
+and ordinals 8 and 9. Analyzer output was correct.
+
+Next strengthened-suite run:
+
+Command:
+ruby internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+Exit code: 0
+Output:
+Run options: --seed 58021
+
+# Running:
+
+...................
+
+Finished in 0.235086s, 80.8215 runs/s, 1105.9782 assertions/s.
+
+19 runs, 260 assertions, 0 failures, 0 errors, 0 skips
+
+Final declared verification
+---------------------------
+
+Command:
+ruby --version
+Exit code: 0
+Output:
+ruby 2.6.10p210 (2022-04-12 revision 67958) [universal.arm64e-darwin25]
+
+Command:
+ruby -c internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb
+Exit code: 0
+Output:
+Syntax OK
+
+Command:
+ruby -c internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+Exit code: 0
+Output:
+Syntax OK
+
+Command:
+ruby internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+Exit code: 0
+Output:
+Run options: --seed 52390
+
+# Running:
+
+...................
+
+Finished in 0.362987s, 52.3435 runs/s, 749.3381 assertions/s.
+
+19 runs, 272 assertions, 0 failures, 0 errors, 0 skips
+
+Command:
+git diff --check
+Exit code: 0
+Output:
+<empty>
+
+Command:
+shasum -a256 internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+Exit code: 0
+Output:
+2ce3d5d84f067601c559f46be2e3eb76d0d1a797824f83318d46155da92c1302  internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb
+5261c243cd7bda1051d3ea38e471785a6309d904f62471196e02bc3ce62c0a70  internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+
+Final worktree status command:
+git status --short
+Exit code: 0
+Output:
+?? internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb
+?? internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+
+Coordination
+------------
+
+An initial default-TTL lease was claimed before implementation. A final lease
+audit later returned no live leases, so the scope was reacquired explicitly. The
+first explicit TTL spelling was rejected without state change:
+
+Command:
+spectackle call lease '{"op":"claim","item":"T-01M241R5P3EH8","paths":["internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb","internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb"],"ttl":"1h"}'
+Exit code: 1
+Output:
+validating "arguments": validating root: validating /properties/ttl: type: 1h has type "string", want "integer"
+shape: lease {op*:claim|release|ls, item, paths, ttl}
+
+The corrected claim succeeded:
+
+Command:
+spectackle call lease '{"op":"claim","item":"T-01M241R5P3EH8","paths":["internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb","internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb"],"ttl":3600}'
+Exit code: 0
+Output:
+c . journal 1135 events since last compact
+ok claimed internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+
+The source scope was released successfully:
+
+Command:
+spectackle call lease '{"op":"release","item":"T-01M241R5P3EH8","paths":["internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb","internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb"]}'
+Exit code: 0
+Output:
+c . journal 1135 events since last compact
+ok released
+
+Post-release frozen-source confirmation:
+
+Command:
+shasum -a256 internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+Exit code: 0
+Output:
+2ce3d5d84f067601c559f46be2e3eb76d0d1a797824f83318d46155da92c1302  internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb
+5261c243cd7bda1051d3ea38e471785a6309d904f62471196e02bc3ce62c0a70  internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+
+Command:
+git status --short
+Exit code: 0
+Output:
+?? internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb
+?? internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites_test.rb
+
+Explicitly not run or changed
+-----------------------------
+
+NOT RUN: any Go build, Go test, Go vet, runtime binary, enabled capture,
+MemProfile/pprof capture or decode, benchmark, profile, matrix runner, paired
+statistics, compiler diagnostic, or live evidence command.
+
+NOT CHANGED: runtime source, tests outside the two new Ruby files, prior analyzer,
+existing evidence, .spectackle bytes, protocol/schema files, source binaries,
+task lifecycle state, Git index, commits, branches, remotes, or pull requests.
+
+The synthetic suite establishes only that the declared offline per-invocation
+logic passes these fixtures. Root's independent review and fresh verification
+remain required before any broader conclusion.
