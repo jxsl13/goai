@@ -187,5 +187,5 @@ WHEN the ARM64 SIMD backward kernel evaluates the erfc and PDF factors, the expo
 ## ARM64-F64-GELU-CONTROLS-001 {applies: go:cpu.geluKernelCPU,go:cpu.geluBackwardF64KernelCPU}
 WHEN the GELU candidate is benchmarked at 2048 elements or against non-target controls, the promotion gate SHALL reject reproducible time regressions above 3 percent or allocation increases across 3 paired campaigns.
 
-## ARM64-F64-GELU-DOMAIN-001 {applies: go:cpu.vgeluF64~2,go:cpu.geluBackwardF64KernelCPU}
+## ARM64-F64-GELU-DOMAIN-001 {applies: go:cpu.vgeluF64~3,go:cpu.vgeluGradF64~3}
 WHEN an ARM64 F64 GELU wrapper selects vector arithmetic, the preflight SHALL require every x to be finite with abs(x)<=32 and every backward g to be zero or finite with 1e-150<=abs(g)<=8.
