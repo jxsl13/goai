@@ -475,3 +475,5 @@ CLASSIC-FIT-SHORT-001	go:classic.TestClassicFitTimeGuard	classic/fit_time_guard_
 CPU-ALLOC-SITE-CAPTURE-001	go:cpu_test.TestCPUControlAllocationSites	backend/cpu/control_alloc_sites_test.go	368-504	7fc05831f01362a8	acaaefefc3fea83d
 CPU-ALLOC-SITE-RAW-001	go:cpu_test.formatAllocationSiteSnapshot	backend/cpu/control_alloc_sites_test.go	301-315	383763858686afff	c8bc672ca731ecd7
 CPU-ALLOC-SITE-RAW-001	go:cpu_test.TestCPUControlAllocationSites	backend/cpu/control_alloc_sites_test.go	368-504	7fc05831f01362a8	c8bc672ca731ecd7
+ALLOC-SITE-ANALYSIS-001	rb:analyze_sites.analyze	internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb	54-121	b66a3f4744933a30	d277a0d4f2c3bef1
+ALLOC-SITE-MONOTONE-001	rb:analyze_sites.build_raw_keys	internal/benchcompare/leadership/evidence/m2-control-alloc-sites-20260909/analyze_sites.rb	253-280	aba73a35f7e80722	4b83a8455b154237
