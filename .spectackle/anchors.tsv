@@ -444,11 +444,11 @@ EAGLE-SMOOTHL1-FUSION-001	go:ref.smoothL1BackwardKernel	backend/ref/smoothl1.go	
 EAGLE-SMOOTHL1-FUSION-001	go:autograd.init~33	autograd/vjp_smoothl1.go	8-12	b51584617266b2ac	a385ea1d0ae6dcd4
 MEASURED-METAL-UNARY-FALLBACK-002	go:metal.measuredHostUnaryMaxElements	backend/metal/unary_route_arm64_default.go	10-25	765140002428bbe2	13e6aacc52e6c700
 MEASURED-METAL-UNARY-FALLBACK-002	go:metal.measuredHostUnaryMaxElements~2	backend/metal/unary_route_arm64simd.go	10-23	f243a685c5aee953	13e6aacc52e6c700
-SCALAR-F64-GELU-DIRECT-SEMANTICS-001	go:cpu.geluBackwardF64KernelCPU	backend/cpu/activation_bwd_f64.go	43-55	a4fe75f8f96f60be	8cf03eefc74e6956
+SCALAR-F64-GELU-DIRECT-SEMANTICS-001	go:cpu.geluBackwardF64KernelCPU	backend/cpu/activation_bwd_f64.go	43-55	260f873c068735c6	8cf03eefc74e6956
 SCALAR-F64-GELU-DIRECT-SEMANTICS-001	go:cpu.geluGradF64	backend/cpu/activation_bwd_f64.go	22-26	b3615675109a444e	8cf03eefc74e6956
 SCALAR-F64-GELU-DIRECT-SEMANTICS-001	go:cpu_test.TestActivationBackwardF64CPUMatchesRef	backend/cpu/activation_bwd_f64_test.go	17-52	d8de5f828096d67d	8cf03eefc74e6956
-SCALAR-F64-GELU-DIRECT-PERF-001	go:cpu.geluBackwardF64KernelCPU	backend/cpu/activation_bwd_f64.go	43-55	a4fe75f8f96f60be	a5f9eaf2416ef63e
-SCALAR-F64-GELU-DIRECT-CONTROLS-001	go:cpu.geluBackwardF64KernelCPU	backend/cpu/activation_bwd_f64.go	43-55	a4fe75f8f96f60be	342fd18b1a5aef43
-SCALAR-F64-GELU-DIRECT-SEMANTICS-001	go:cpu.geluBackwardF64ScalarKernelCPU	backend/cpu/activation_bwd_f64.go	28-41	fec36169b3e87e7e	8cf03eefc74e6956
+SCALAR-F64-GELU-DIRECT-PERF-001	go:cpu.geluBackwardF64KernelCPU	backend/cpu/activation_bwd_f64.go	43-55	260f873c068735c6	a5f9eaf2416ef63e
+SCALAR-F64-GELU-DIRECT-CONTROLS-001	go:cpu.geluBackwardF64KernelCPU	backend/cpu/activation_bwd_f64.go	43-55	260f873c068735c6	342fd18b1a5aef43
 SCALAR-F64-GELU-DIRECT-PERF-001	go:cpu_test.BenchmarkGELUBackwardF64DirectDispatch	backend/cpu/gelu_bwd_direct_test.go	205-223	7049117ebf3b03c1	a5f9eaf2416ef63e
 SCALAR-F64-GELU-DIRECT-CONTROLS-001	go:cpu_test.BenchmarkGELUBackwardF64DirectDispatch	backend/cpu/gelu_bwd_direct_test.go	205-223	7049117ebf3b03c1	342fd18b1a5aef43
+SCALAR-F64-GELU-DIRECT-SEMANTICS-001	go:cpu.activationBackwardF64	backend/cpu/activation_bwd_f64.go	28-41	183b03ea7aa2017a	8cf03eefc74e6956

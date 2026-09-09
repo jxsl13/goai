@@ -1,5 +1,9 @@
 # M2 scalar F64 GELU backward direct-call experiment
 
+**Rejected: the runtime specialization did not meet the predeclared gate.**
+The production runtime is restored byte-for-byte; only tests, benchmark
+harness, specifications, and evidence are retained.
+
 This experiment is separate from the merged Go 1.27.1 compatibility rebuild.
 It tests whether specializing the scalar GELU backward driver removes enough
 per-element callback overhead to justify a production change. The exact
@@ -88,3 +92,60 @@ control. Focused correctness passed in default and SIMD builds at GOMAXPROCS
 1 and 12, including small/ragged/parallel shapes, special values, views,
 input/output ownership, mixed-gradient fallback, validation errors, and recorder
 counts. No numerical tolerance was widened.
+
+## Candidate and result
+
+Candidate source commit:
+`56dc0b030e9c5587db1ea9a5d2a7a08d868105b0`.
+The candidate binary, rebuilt from that commit, has SHA256
+`2d71e0440d732089172f73e2d6b1b0ea887c58fbd21b52a153c4925491eca7ac`.
+It is byte-identical to the independently tested preliminary candidate.
+Its runtime file SHA256 is
+`7ba7eb1a336ef24d5aff5ab83e80c4062230f735f3bf2d737cb5226ebd3b45ed`.
+The shared harness SHA256 and all compiler settings match the frozen control.
+
+`paired.txt` retains all 168 records, exactly seven per
+campaign/arm/GOMAXPROCS/size cell. No builds, tests, or profiles ran concurrently.
+`benchstat.txt` contains all timing, byte, and allocation comparisons, generated
+with `benchstat -table campaign -col arm -ignore pair paired.txt` from
+`golang.org/x/perf@v0.0.0-20260709024250-82a0b07e230d`.
+
+The declared 262144-element, GOMAXPROCS 1 target failed in every campaign:
+
+| Campaign | Old median ns/op | Candidate median ns/op | Old/new ratio | Time p |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 4037885 | 3992276 | 1.0114x | 0.383 |
+| 2 | 4032477 | 4012796 | 1.0049x | 0.710 |
+| 3 | 4267130 | 4102917 | 1.0400x | 0.620 |
+
+None reached 1.05x or p below 0.05. Within-arm target ranges divided by the
+median were 15.32%/14.01%, 44.94%/9.08%, and 15.09%/43.67% (old/new),
+also exceeding the near-5% noise expectation for a small claimed gain.
+The parallel controls were especially noisy. Only the second campaign's small
+GOMAXPROCS 12 control had a significant time difference (-2.76%, p=0.007);
+that isolated cell does not satisfy the target gate.
+Allocation counts remained unchanged. The single-worker cells saved 16 B/op,
+which does not override the predeclared complete-operation latency requirement.
+
+This rejects promotion under the measured conditions; it does not establish
+that direct calls are universally neutral, slower, or equivalent. No samples
+were dropped or campaigns replaced. No incumbent win is claimed.
+The useful generalization for perfscan is to flag surviving indirect calls as
+measurement obligations, not automatically beneficial rewrites, especially
+when scalar transcendental work dominates.
+
+An independent verifier recomputed all 168 records, all 84 successful benchmark
+invocations, every cell median, paired direction, and two-sided Mann-Whitney
+probability by enumerating the 3432 rank assignments. The complete sequence
+matches `run.sh`. Target faster-pair counts were 5/7, 4/7, and 4/7.
+One large-parallel pair allocated 27 more bytes in the candidate, despite lower
+median bytes, so this record does not claim every allocation measurement improved.
+The independent result also rejects promotion; it does not prove a slowdown
+or a compiler defect.
+
+Independent correctness verification passed the focused default/SIMD by
+GOMAXPROCS 1/12 matrix, full CPU default/SIMD suites, full pure-Go build,
+focused SIMD race tests, and Linux AMD64 SIMD test compilation.
+Disassembly confirmed indirect `CALL (R1)` became a direct `geluGradF64` call;
+the scalar function was not inlined, and its existing fused multiply-add
+instruction was unchanged. Correctness alone did not justify promotion.

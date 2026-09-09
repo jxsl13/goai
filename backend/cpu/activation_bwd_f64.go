@@ -25,19 +25,19 @@ func geluGradF64(x, g float64) float64 {
 	return g * (phi + x*pdf)
 }
 
-func geluBackwardF64ScalarKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+func activationBackwardF64(ctx *backend.Context, op backend.Op, in []*tensor.Tensor, attrs backend.Attrs, grad func(x, g float64) float64) ([]*tensor.Tensor, error) {
 	if len(in) == 2 && in[0].Dtype() == tensor.F64 && in[1].Dtype() == tensor.F64 && in[1].Shape().Equal(in[0].Shape()) {
 		xc, gc := in[0].Contiguous(), in[1].Contiguous()
 		dx := tensor.NewOn(ctx.Device(), tensor.F64, in[0].Shape())
 		xs, gs, ds := xc.Storage().F64(), gc.Storage().F64(), dx.Storage().F64()
 		parallel(len(ds), func(lo, hi int) {
 			for i := lo; i < hi; i++ {
-				ds[i] = geluGradF64(xs[i], gs[i])
+				ds[i] = grad(xs[i], gs[i])
 			}
 		})
 		return []*tensor.Tensor{dx}, nil
 	}
-	return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpGELUBackward, in, attrs)
+	return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), op, in, attrs)
 }
 
 func geluBackwardF64KernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
@@ -51,7 +51,7 @@ func geluBackwardF64KernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs b
 		parallel(len(ds), func(lo, hi int) { vgeluGradF64(ds[lo:hi], xs[lo:hi], gs[lo:hi]) })
 		return []*tensor.Tensor{dx}, nil
 	}
-	return geluBackwardF64ScalarKernelCPU(ctx, in, attrs)
+	return activationBackwardF64(ctx, backend.OpGELUBackward, in, attrs, geluGradF64)
 }
 
 // siluBackwardF64KernelCPU computes dx = g·σ(x)(1+x(1−σ(x))) with the sigmoid VECTORIZED via

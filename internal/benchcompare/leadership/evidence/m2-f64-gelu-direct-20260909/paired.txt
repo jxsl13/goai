@@ -1,0 +1,928 @@
+protocol: three alternating count-seven campaigns; one-second samples
+warmup: one second per arm and cell before each campaign; excluded
+old-sha256: d3c1e9c78ad70f170fcd39988856cc671dfd2fd63132f375bf1f1513f4213636
+new-sha256: 2d71e0440d732089172f73e2d6b1b0ea887c58fbd21b52a153c4925491eca7ac
+campaign: 1
+pair: 1
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   41023	     29263 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     298	   4037885 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 1
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   40740	     29096 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     302	   3992276 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 1
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   40084	     29136 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1520	    995591 ns/op	 2097531 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 1
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   39679	     29797 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1215	    907710 ns/op	 2097528 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 2
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   41426	     29194 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     298	   3999994 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 2
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   41073	     29344 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     294	   4067057 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 2
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   40004	     29452 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1665	    766035 ns/op	 2097521 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 2
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   40612	     28842 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1231	    890272 ns/op	 2097539 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 3
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   41150	     29180 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     298	   3987603 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 3
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   41287	     28940 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     303	   3963159 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 3
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   41170	     29476 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1236	    988687 ns/op	 2097548 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 3
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   40376	     29487 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1648	    749310 ns/op	 2097521 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 4
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   41643	     28904 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     302	   4511795 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 4
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   39144	     87182 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     276	   4144269 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 4
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   37192	     38701 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	     288	   3516907 ns/op	 2097554 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 4
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   38624	     33027 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	     921	   1101733 ns/op	 2097527 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 5
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   39067	     29694 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     295	   3978621 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 5
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   41434	     28774 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     296	   4009707 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 5
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   39994	     29499 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1534	    766390 ns/op	 2097537 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 5
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   40618	     28940 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1603	    753774 ns/op	 2097522 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 6
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   39966	     29248 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     301	   3952612 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 6
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   40916	     29140 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     300	   3984240 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 6
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   41443	     29164 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1568	    975589 ns/op	 2097519 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 6
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   35854	     31736 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1203	   1832909 ns/op	 2097536 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 7
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   29364	     49989 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     285	   4597109 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 7
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   40646	     30917 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     300	   3985707 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 7
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   41082	     29826 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1210	    975151 ns/op	 2097547 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 7
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   41403	     29094 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1280	    959389 ns/op	 2097525 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 1
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   40015	     28919 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1566	    745533 ns/op	 2097514 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 1
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   40947	     29572 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1473	    772617 ns/op	 2097534 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 1
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   40329	     30271 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     300	   4316030 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 1
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   35982	     31762 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     279	   5800224 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 2
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   39276	     30002 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1221	    907199 ns/op	 2097542 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 2
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   41574	     28872 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1629	    844731 ns/op	 2097519 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 2
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   40905	     29208 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     285	   4134530 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 2
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   39457	     29417 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     301	   3951601 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 3
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   41186	     28889 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1605	    754462 ns/op	 2097524 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 3
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   40761	     29757 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1170	    978841 ns/op	 2097544 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 3
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   40734	     28877 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     301	   4017988 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 3
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   41218	     29184 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     300	   4032477 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 4
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   39950	     29831 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1192	    853827 ns/op	 2097537 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 4
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   41469	     28821 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1612	    743895 ns/op	 2097524 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 4
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   41094	     29120 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     301	   3994754 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 4
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   41510	     28751 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     300	   4000963 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 5
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   40632	     29146 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1485	    765364 ns/op	 2097503 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 5
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   40441	     29094 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1213	    986337 ns/op	 2097545 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 5
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   41618	     28645 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     303	   4008138 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 5
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   40736	     29605 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     301	   3988477 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 6
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   40899	     29740 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1215	    984325 ns/op	 2097546 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 6
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   41587	     29439 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1225	    984230 ns/op	 2097526 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 6
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   40376	     29763 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     294	   4052830 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 6
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   41377	     28979 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     301	   4018804 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 7
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   41416	     29186 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1221	    969142 ns/op	 2097530 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 7
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   41355	     29255 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1581	    763189 ns/op	 2097530 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 7
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   41330	     28796 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     295	   4012796 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 7
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   40197	     29572 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     297	   3988012 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 1
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   39672	     29743 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     289	   4056545 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 1
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   41030	     29089 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     303	   3945922 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 1
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   41268	     29041 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1554	    782386 ns/op	 2097532 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 1
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   40707	     28732 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1580	    880584 ns/op	 2097522 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 2
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   39423	     29658 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     288	   4102917 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 2
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   40316	     29486 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     300	   3982433 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 2
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   41588	     28956 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1588	    799682 ns/op	 2097521 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 2
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   36666	     34014 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	     979	   1149338 ns/op	 2097537 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 3
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   33267	     71497 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     232	   4626462 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 3
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   33835	     30175 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     300	   3995801 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 3
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   40130	     29253 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1662	    773214 ns/op	 2097535 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 3
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   41443	     28827 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1618	    991337 ns/op	 2097517 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 4
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   38385	     30538 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     176	   5737674 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 4
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   38872	     30371 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     295	   4031217 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 4
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   40700	     28869 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1569	    757062 ns/op	 2097523 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 4
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   40159	     29528 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1567	    905840 ns/op	 2097533 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 5
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   38071	     32816 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     274	   4267130 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 5
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   18728	     56512 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     291	   4331197 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 5
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   39175	     31486 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1230	   1037042 ns/op	 2097536 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 5
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   40358	     50210 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1170	    937127 ns/op	 2097521 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 6
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   41203	     28924 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     303	   3992870 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 6
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   36766	     34321 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     243	   4541662 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 6
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   37605	     34876 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	     835	   1352370 ns/op	 2097516 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 6
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   35107	     34090 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	     873	   1400645 ns/op	 2097521 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 7
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   35562	     33183 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     272	   4380749 ns/op	 2097480 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 7
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048         	   36429	     33328 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144       	     274	   4332026 ns/op	 2097464 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 7
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   36754	     33409 ns/op	   16712 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	     861	   1423441 ns/op	 2097530 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 7
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkGELUBackwardF64DirectDispatch/n2048-12         	   38403	     31591 ns/op	   16696 B/op	       5 allocs/op
+BenchmarkGELUBackwardF64DirectDispatch/n262144-12       	    1078	   1149742 ns/op	 2097515 B/op	       6 allocs/op
+PASS
