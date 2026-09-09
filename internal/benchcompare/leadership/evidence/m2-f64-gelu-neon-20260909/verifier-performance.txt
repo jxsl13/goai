@@ -1,0 +1,69 @@
+counts=[["gelu", 84, 1344], ["control", 84, 252]]
+targets=24
+TARGET,1,1,BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144,3994190.0,2895195.0,1.3795927390037632,0.0005827505827505828
+TARGET,1,1,BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144,7487837.0,2891472.0,2.5896280510411307,0.0005827505827505828
+TARGET,1,1,BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144,2640614.0,1970751.0,1.3399024026881123,0.0005827505827505828
+TARGET,1,1,BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144,5476421.0,1966649.0,2.784645862072998,0.0005827505827505828
+TARGET,1,12,BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144,751237.0,538890.0,1.3940451669171816,0.0005827505827505828
+TARGET,1,12,BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144,1200705.0,540991.0,2.219454667452878,0.0005827505827505828
+TARGET,1,12,BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144,526855.0,415079.0,1.269288496888544,0.0005827505827505828
+TARGET,1,12,BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144,933420.0,421295.0,2.21559714689232,0.0005827505827505828
+TARGET,2,1,BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144,3981995.0,2888665.0,1.3784897175684963,0.0005827505827505828
+TARGET,2,1,BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144,7480968.0,2887281.0,2.591007941381528,0.0005827505827505828
+TARGET,2,1,BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144,2633356.0,1972066.0,1.3353285336291991,0.0005827505827505828
+TARGET,2,1,BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144,5485256.0,1965482.0,2.790794319154284,0.0005827505827505828
+TARGET,2,12,BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144,757675.0,537248.0,1.4102891029840967,0.0005827505827505828
+TARGET,2,12,BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144,1188493.0,541229.0,2.1959152225767653,0.0005827505827505828
+TARGET,2,12,BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144,524392.0,416866.0,1.257939001981452,0.0005827505827505828
+TARGET,2,12,BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144,934531.0,418697.0,2.2319983185931593,0.0005827505827505828
+TARGET,3,1,BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144,4003475.0,2895286.0,1.382756314920184,0.0005827505827505828
+TARGET,3,1,BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144,7503458.0,2899498.0,2.5878472756318507,0.0005827505827505828
+TARGET,3,1,BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144,2634220.0,1973822.0,1.334578295307277,0.0005827505827505828
+TARGET,3,1,BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144,5506061.0,1969810.0,2.79522441250679,0.0005827505827505828
+TARGET,3,12,BenchmarkVGELUF64NeonBoundary/execute/backward/active/n262144,760110.0,537951.0,1.4129725569800966,0.0005827505827505828
+TARGET,3,12,BenchmarkVGELUF64NeonBoundary/execute/backward/mixed/n262144,1196850.0,534196.0,2.24046979011449,0.0005827505827505828
+TARGET,3,12,BenchmarkVGELUF64NeonBoundary/execute/forward/active/n262144,526753.0,415772.0,1.2669275468285504,0.0005827505827505828
+TARGET,3,12,BenchmarkVGELUF64NeonBoundary/execute/forward/mixed/n262144,945329.0,419542.0,2.2532404383828077,0.0005827505827505828
+CONTROL_REGRESSIONS
+CTRL,3,12,BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048,9229.0,16303.0,0.5660921302827701,0.0005827505827505828,76.64969119081158
+CTRL,2,12,BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048,9228.0,16238.0,0.5682965882497845,0.0005827505827505828,75.9644560034677
+CTRL,1,1,BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048,8550.0,15023.0,0.5691273380816082,0.0005827505827505828,75.70760233918128
+CTRL,1,12,BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048,9373.0,16338.0,0.5736932305055699,0.0005827505827505828,74.3091859596714
+CTRL,3,1,BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048,9398.0,16235.0,0.5788728056667694,0.0005827505827505828,72.74952117471803
+CTRL,2,1,BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048,9508.0,16162.0,0.5882935280287093,0.0005827505827505828,69.98317206562893
+CTRL,1,1,BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048,9575.0,16177.0,0.5918897199728009,0.0005827505827505828,68.95039164490862
+CTRL,3,1,BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048,8894.0,15017.0,0.59226210294999,0.0005827505827505828,68.84416460535192
+CTRL,1,12,BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048,8934.0,15029.0,0.59445072859139,0.0005827505827505828,68.22252070740988
+CTRL,2,1,BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048,9309.0,15010.0,0.6201865423051299,0.0005827505827505828,61.24180900204104
+CTRL,3,12,BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048,9343.0,15031.0,0.6215820637349477,0.0005827505827505828,60.87980306111527
+CTRL,2,12,BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048,9549.0,15015.0,0.635964035964036,0.0005827505827505828,57.24159597863652
+CTRL,3,12,BenchmarkSigmoidF64_64K_cpu,101495.0,106097.0,0.9566245982450022,0.534965034965035,4.534213508054585
+ALLOCATION_INCREASES
+ALLOC,2,12,BenchmarkSiLUBackwardF64_256K_cpu,B/op,4194701,4194703,0.5145687645687645
+ALLOC,3,12,BenchmarkSigmoidF64_64K_cpu,B/op,524613,524615,0.014568764568764568
+DIAGNOSTIC_SUMMARY
+DIAG,leaf,active,2048,1,1.2645973909131805,0.5691273380816082,1.2669274345832209
+DIAG,leaf,active,2048,12,1.2683815262850204,0.59445072859139,1.2799513754445995
+DIAG,leaf,active,262144,1,1.3755786017346165,1.3457061582464231,1.378303264666511
+DIAG,leaf,active,262144,12,1.3804954973067758,1.3454033927727935,1.3899785877125443
+DIAG,leaf,mixed,2048,1,2.1620807481341604,1.9260886935677188,2.183127109111361
+DIAG,leaf,mixed,2048,12,2.1825168539325843,1.9293898214761525,2.197270024326516
+DIAG,leaf,mixed,262144,1,2.8329603836054345,2.5978922705962186,2.843961747370794
+DIAG,leaf,mixed,262144,12,2.836310906257185,2.5979489742071573,2.838571926924786
+DIAG,execute,active,2048,1,1.2494347510771724,0.5788728056667694,1.255261922042437
+DIAG,execute,active,2048,12,1.2499893440177317,0.5660921302827701,1.2568635784105398
+DIAG,execute,active,262144,1,1.3784897175684963,1.334578295307277,1.382756314920184
+DIAG,execute,active,262144,12,1.3940451669171816,1.257939001981452,1.4129725569800966
+DIAG,execute,mixed,2048,1,2.1197798916520925,1.8589498364904053,2.125352473724686
+DIAG,execute,mixed,2048,12,2.1129531481874073,1.8521360176773878,2.1188219363574814
+DIAG,execute,mixed,262144,1,2.784645862072998,2.5878472756318507,2.79522441250679
+DIAG,execute,mixed,262144,12,2.2319983185931593,2.1959152225767653,2.2532404383828077
+
+INDEPENDENT VERDICT SUMMARY
+Protocol: VALID. paired.txt has exactly 84 invocations/1344 rows; controls.txt has exactly 84 invocations/252 rows. Frozen hashes, PASS markers, invocation order, three campaigns, seven pairs, GOMAXPROCS 1/12, benchmark order, and suffixes all validate.
+Large public promotion targets: 24/24 PASS. Every per-campaign serial target exceeds 1.25x and every parallel target exceeds 1.05x; every exact two-sided tied-rank probability is 0.0005827505827505828. Target speedups span 1.257939x to 2.795224x.
+Control veto: FAIL. The n2048 active-forward GELU control repeatedly regresses by more than 3%. Execute regresses in all 3 campaigns at both GOMAXPROCS values; worst is +76.6497% (campaign 3, GOMAXPROCS 12, old median 9229 ns, new median 16303 ns, p=0.0005827506). Leaf active-forward n2048 likewise regresses in all 3 campaigns at both process settings; worst +75.7076%. This is reproducible and statistically decisive, not an isolated ambient-load excursion.
+Fixed controls: no statistically significant repeatable >3% regression. Worst median percentage is Sigmoid GOMAXPROCS12 campaign3 +4.5342%, but p=0.534965 and it occurs in only one campaign.
+Allocations: no allocs/op median increase anywhere. Two isolated +2 B/op medians exist: SiLUBackward campaign2/GOMAXPROCS12 (p=0.514569) and Sigmoid campaign3/GOMAXPROCS12 (p=0.0145688). Neither repeats in 2/3 campaigns; maximum observed median increase is 2 B/op. The isolated significant B/op cell warrants disclosure but does not establish a repeatable allocation regression.
+Diagnostics: large leaf and Execute generally improve, with larger mixed-input gains. The exception is specifically small n2048 active forward, where both leaf and Execute regress reproducibly. n2048 mixed, backward, and large active cases improve. This shape-specific reversal is consistent across campaigns and cannot reasonably be dismissed as ambient loading, although one-second microbenchmark measurements still do not establish external-library or end-to-end leadership.
+Performance-only verdict: REJECT promotion under the predeclared control-regression veto despite passing all large public target gates.

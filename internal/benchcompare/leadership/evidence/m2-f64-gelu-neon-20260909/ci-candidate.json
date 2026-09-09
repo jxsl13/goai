@@ -1,0 +1,102 @@
+{
+  "run": 34375816580,
+  "head": "17a4ff45f1fbcd63b5a73a5b058f15e5122cba80",
+  "jobs": [
+    {
+      "badSteps": [],
+      "conclusion": "success",
+      "name": "select affected packages (cichange)",
+      "status": "completed"
+    },
+    {
+      "badSteps": [],
+      "conclusion": "success",
+      "name": "go mod tidy",
+      "status": "completed"
+    },
+    {
+      "badSteps": [],
+      "conclusion": "success",
+      "name": "cuda compile+link / ubuntu",
+      "status": "completed"
+    },
+    {
+      "badSteps": [],
+      "conclusion": "success",
+      "name": "pure-go / macos-latest",
+      "status": "completed"
+    },
+    {
+      "badSteps": [],
+      "conclusion": "success",
+      "name": "cgo+race / ubuntu",
+      "status": "completed"
+    },
+    {
+      "badSteps": [],
+      "conclusion": "success",
+      "name": "pure-go / ubuntu-latest",
+      "status": "completed"
+    },
+    {
+      "badSteps": [],
+      "conclusion": "success",
+      "name": "perfscan / ubuntu",
+      "status": "completed"
+    },
+    {
+      "badSteps": [],
+      "conclusion": "success",
+      "name": "pure-go / windows-latest",
+      "status": "completed"
+    },
+    {
+      "badSteps": [],
+      "conclusion": "success",
+      "name": "vulkan / macos-latest",
+      "status": "completed"
+    },
+    {
+      "badSteps": [],
+      "conclusion": "success",
+      "name": "simd / ubuntu-latest (soft)",
+      "status": "completed"
+    },
+    {
+      "badSteps": [],
+      "conclusion": "success",
+      "name": "vulkan / windows-latest",
+      "status": "completed"
+    },
+    {
+      "badSteps": [],
+      "conclusion": "success",
+      "name": "simd / macos-latest (soft)",
+      "status": "completed"
+    },
+    {
+      "badSteps": [],
+      "conclusion": "success",
+      "name": "vulkan / ubuntu-latest",
+      "status": "completed"
+    },
+    {
+      "badSteps": [],
+      "conclusion": "success",
+      "name": "cgo / windows",
+      "status": "completed"
+    },
+    {
+      "badSteps": [],
+      "conclusion": "success",
+      "name": "cgo+metal / macos",
+      "status": "completed"
+    },
+    {
+      "badSteps": [],
+      "conclusion": "success",
+      "name": "simd / windows-latest (soft)",
+      "status": "completed"
+    }
+  ]
+}

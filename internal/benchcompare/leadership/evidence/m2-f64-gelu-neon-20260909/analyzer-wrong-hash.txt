@@ -1,0 +1,5 @@
+analyze.rb:66:in `parse': Frozen binary SHA mismatch (RuntimeError)
+	from analyze.rb:93:in `block in <main>'
+	from analyze.rb:92:in `each'
+	from analyze.rb:92:in `each_with_index'
+	from analyze.rb:92:in `<main>'

@@ -1,0 +1,12 @@
+Validated paired.txt: 84 invocations, 1344 records
+Validated controls.txt: 84 invocations, 252 records
+Large public targets passing: 24/24 (expected 24)
+Controls with significant >3% time-increase flags: 4; repeated in at least two campaigns: 4
+Allocation metric/cell increase flags: 1; repeated in at least two campaigns: 0
+Time-regression campaigns 3/3: 1 BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048
+Time-regression campaigns 3/3: 1 BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048
+Time-regression campaigns 3/3: 12 BenchmarkVGELUF64NeonBoundary/execute/forward/active/n2048
+Time-regression campaigns 3/3: 12 BenchmarkVGELUF64NeonBoundary/leaf/forward/active/n2048
+Allocation-increase campaigns 1/3: B/op 12 BenchmarkSigmoidF64_64K_cpu
+All flagged rows require independent interpretation; no control or allocation pass is inferred from these descriptive counts.
+This protocol audit is not a substitute for independent review or external-library leadership evidence.

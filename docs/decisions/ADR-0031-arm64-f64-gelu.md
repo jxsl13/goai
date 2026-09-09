@@ -1,6 +1,6 @@
 # ADR-0031 — measure a separately gated ARM64 F64 GELU intrinsic path
 
-- Status: accepted experiment; production promotion pending
+- Status: accepted experiment; V1 rejected for a small-input control regression
 - Date: 2026-09-09
 - Research: `R-01M23B9YZ1E16`
 - Proposal: `P-01M23BZPZNF9V`
@@ -112,6 +112,26 @@ candidate and retain its tests and evidence. A fresh verifier reruns correctness
 checks independently before any production promotion. Neither an internal A/B
 win nor an intrinsic instruction listing proves leadership over a pinned
 external library or an end-to-end model workload.
+
+## V1 result and bounded follow-up
+
+Three complete count-seven campaigns passed all 24 large public target cells
+(1.258–2.795x), but small active-range forward Execute regressed 68.95–76.65%
+in every campaign at both process counts. The corresponding leaf also regressed.
+A fresh independent audit rejected V1 under the predeclared control veto; no
+production promotion or external leadership claim is authorized by these data.
+All raw measurements, allocation findings, and the independent verdict are
+retained in the [V1 evidence](../../internal/benchcompare/leadership/evidence/m2-f64-gelu-neon-20260909/README.md).
+
+The approved experiment allows a bounded follow-up that returns the existing
+small rational before the unused exponential and complementary rational, only
+when both vector lanes satisfy the same strict `abs(y)<1` predicate. Mixed pairs
+and boundary pairs retain the complete path. The hypothesis is removal of eager
+unused work, not an assumption that branching is free. Numerical contracts,
+scalar twins, frozen control/harness, and performance gates stay unchanged.
+Any such candidate needs a new source/binary pin and independent verification.
+The generalizable opportunity is tracked in
+[perfscan #966](https://github.com/jxsl13/perfscan/issues/966).
 
 ## Source provenance and notice
 

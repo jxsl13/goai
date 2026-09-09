@@ -1,7 +1,8 @@
 # M2 F64 GELU intrinsic experiment — September 9, 2026
 
-Status: control and candidate frozen; correctness verified, full measurement pending. No validated speedup or production
-promotion is claimed by this record.
+Status: V1 rejected for production promotion. All large public targets improved,
+but a repeatable small-input regression violates the declared control gate.
+The draft branch is continuing qualification; V1 must not be merged as-is.
 
 ## Scope and pins
 
@@ -55,7 +56,81 @@ only the four large public targets, and observed faster candidate samples in
 both arm orders. It is diagnostic, not statistical promotion evidence. macOS
 background services were consuming multiple cores before it ran; no Go builds,
 tests, profiles, or other agent benchmark runs overlapped it. The full campaigns
-and non-target controls remain required, with all samples retained.
+and non-target controls below supersede this diagnostic, with all samples retained.
+
+## Complete V1 measurement and decision
+
+All 84 GELU invocations completed: exactly 1344 records, seven per
+campaign/arm/process-count/benchmark cell. The separately run non-target control
+set completed another 84 invocations and 252 records. No samples or campaigns
+were dropped. Binary and shared-harness hashes remained unchanged.
+
+Reproduce analysis with:
+
+```sh
+ruby analyze.rb paired.txt controls.txt > analysis.csv 2> analysis-audit.txt
+benchstat -table campaign -col arm -ignore pair paired.txt controls.txt > benchstat.txt
+```
+
+The audit checks binary hashes, complete invocation order, PASS markers, exact
+cell membership, and seven pairs. Its exact two-sided permutation rank test
+enumerates all 3432 assignments and uses average tied ranks. Deliberately
+removing the final PASS or changing the candidate hash is rejected; retained
+failure logs are `analyzer-missing-pass.txt` and `analyzer-wrong-hash.txt`.
+The CSV reports time, bytes, and allocation counts separately. Descriptive flag
+counts do not automatically waive one- or two-campaign control findings.
+
+All 24 large public target/campaign cells met their speedup and significance
+requirements. Ranges below cover the three campaigns, not confidence intervals:
+
+| 262144-element public operation | Serial speedup | Parallel speedup |
+| --- | ---: | ---: |
+| Forward, active | 1.335–1.340x | 1.258–1.269x |
+| Forward, mixed | 2.785–2.795x | 2.216–2.253x |
+| Backward, active | 1.378–1.383x | 1.394–1.413x |
+| Backward, mixed | 2.588–2.591x | 2.196–2.240x |
+
+Every large target has exact nominal `p=0.0005827506` (benchstat displays 0.001).
+Nevertheless, small active-range forward Execute regressed in every campaign:
+
+| Campaign | GOMAXPROCS=1 slowdown | GOMAXPROCS=12 slowdown |
+| --- | ---: | ---: |
+| 1 | +68.95% | +74.31% |
+| 2 | +69.98% | +75.96% |
+| 3 | +72.75% | +76.65% |
+
+These six comparisons have the same nominal `p=0.0005827506`; the corresponding
+small direct-leaf controls also regressed in all three campaigns. This is a
+decisive veto under the 3% control rule. Neither a favorable geomean nor the
+large-input wins can override it.
+
+The fixed non-target controls had no repeatable significant time regression
+above 3%. Two isolated parallel medians increased by 2 B/op: campaign two's
+SiLU backward (4194701 to 4194703; exact nominal `p=0.51457`) and campaign
+three's Sigmoid (524613 to 524615; `p=0.01457`). Neither repeated in the other
+campaigns; allocation-count medians were unchanged. Both findings are retained,
+not silently treated as a universal allocation improvement.
+
+macOS background services were active before measurement and some parallel
+samples were noisy. These results describe the recorded host conditions, not
+universal latency or external-library/model leadership. The fresh independent
+[performance recomputation](verifier-performance.txt) validated the complete
+protocol and rejected promotion under the control veto. It found the small-input
+regression reproducible and statistically decisive, not an isolated ambient
+load excursion. Candidate CI at `17a4ff45` passed all 16 jobs and every individual
+step, including soft SIMD lanes; see [ci-candidate.json](ci-candidate.json).
+
+## Bounded follow-up
+
+The current helper eagerly computes the exp and complementary rational before
+selecting the small region. A prospective uniform-small fast path can return
+the already-computed small rational when **both** lanes satisfy the existing
+strict `abs(y)<1` predicate. The pinned ARM64 API provides `Mask64x2.ToInt64x2`
+and constant-index `Int64x2.GetElem(0/1)`; it has no `Mask.All` method.
+This idea is tracked as [perfscan #966](https://github.com/jxsl13/perfscan/issues/966).
+It has not yet been implemented or measured. Any follow-up must retain the
+same numerical boundaries, scalar twins, frozen control/harness, and full gates;
+extra branches or altered register allocation can still regress mixed inputs.
 
 ## Verification record
 
@@ -81,8 +156,8 @@ compilable assertion-failing replacement, are retained
 in [mutations.txt](mutations.txt). Candidate acceptance also
 requires independent numerical, special-value, input-immutability, aliasing,
 body/tail, allocation, routing, race, cross-build, and generated-code checks.
-Final commits, hashes, test outcomes, raw measurements, and the acceptance or
-rejection decision will be added when those checks have completed.
+The retained measurements above reject production promotion of V1 despite its
+passed correctness checks.
 
 The fresh verifier passed full CPU tests, focused default/SIMD tests at process
 counts 1 and 12, full-tree builds, CPU vet, AMD64 SIMD cross-compilation,
@@ -118,3 +193,5 @@ require immediate verification of the committed runtime diff before pushing.
 
 - [Previous rejected scalar experiment](../m2-f64-gelu-direct-20260909/README.md).
 - [Shared-transcendental findings](https://github.com/jxsl13/perfscan/issues/917).
+- [Constant SIMD shift lowering](https://github.com/jxsl13/perfscan/issues/965).
+- [Eager piecewise SIMD branches](https://github.com/jxsl13/perfscan/issues/966).

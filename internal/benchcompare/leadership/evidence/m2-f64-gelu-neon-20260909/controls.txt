@@ -1,0 +1,1014 @@
+protocol: three alternating count-seven campaigns; one-second samples
+boundary: leaf is preallocated; Execute includes output allocation
+fixtures: non-target F64 Sigmoid/Softplus/SiLUBackward controls
+warmup: one second per arm and cell before each campaign; excluded
+old-sha256: c95691bc1a7289094bc523250fde7a9cae614756635b78701e9c306962b246cb
+new-sha256: 045826effd7c6aab639a1b4c9e0e162e4eca03b6aaef56761291c248492301d7
+campaign: 1
+pair: 1
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1648	    710752 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9312	    126957 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1130	   1071193 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 1
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1648	    724399 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9064	    127976 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1130	   1070212 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 1
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4398	    265551 ns/op	 4194705 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    100573 ns/op	  524614 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4003	    281979 ns/op	 2097486 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 1
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4131	    284108 ns/op	 4194710 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    103602 ns/op	  524616 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4196	    281516 ns/op	 2097484 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 2
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1645	    709989 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9412	    127897 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1099	   1073458 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 2
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1683	    712739 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9232	    127864 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1123	   1081472 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 2
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4154	    266741 ns/op	 4194697 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   12028	    100317 ns/op	  524616 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4276	    277302 ns/op	 2097482 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 2
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4354	    268054 ns/op	 4194702 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   12106	    103962 ns/op	  524614 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4294	    276301 ns/op	 2097487 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 3
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1653	    709988 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    8984	    128444 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1096	   1092440 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 3
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1681	    711951 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9301	    128412 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1111	   1082550 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 3
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4206	    271148 ns/op	 4194707 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    100558 ns/op	  524614 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4153	    284314 ns/op	 2097484 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 3
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4377	    266156 ns/op	 4194700 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    101081 ns/op	  524614 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4317	    278621 ns/op	 2097486 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 4
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1666	    704480 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9428	    129613 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1100	   1097362 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 4
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1597	    706272 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9408	    128814 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1107	   1085161 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 4
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4461	    272463 ns/op	 4194701 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    101395 ns/op	  524614 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4263	    277434 ns/op	 2097485 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 4
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4383	    271663 ns/op	 4194702 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   12091	     99173 ns/op	  524614 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4329	    277345 ns/op	 2097488 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 5
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1651	    710613 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9231	    129970 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1108	   1075806 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 5
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1647	    713344 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9224	    128787 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1118	   1086649 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 5
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4402	    270408 ns/op	 4194698 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   12090	     99333 ns/op	  524616 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4430	    280365 ns/op	 2097484 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 5
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    3980	    268571 ns/op	 4194697 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    103482 ns/op	  524614 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    3475	    287962 ns/op	 2097481 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 6
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1677	    711118 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9306	    129356 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1107	   1094330 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 6
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1621	    711002 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9130	    128735 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1122	   1094054 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 6
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4432	    263705 ns/op	 4194696 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    101490 ns/op	  524613 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4327	    278325 ns/op	 2097486 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 6
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4117	    274832 ns/op	 4194701 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    101634 ns/op	  524614 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4278	    276867 ns/op	 2097484 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 7
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1670	    712888 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9351	    129925 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1111	   1097831 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 7
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1660	    717181 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9379	    128829 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1129	   1088629 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 1
+pair: 7
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4159	    264445 ns/op	 4194700 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    106364 ns/op	  524614 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4172	    278626 ns/op	 2097485 B/op	       6 allocs/op
+PASS
+campaign: 1
+pair: 7
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4454	    282323 ns/op	 4194704 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    101747 ns/op	  524612 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4316	    284995 ns/op	 2097483 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 1
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4069	    262424 ns/op	 4194689 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    100858 ns/op	  524614 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4370	    276060 ns/op	 2097481 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 1
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4429	    264009 ns/op	 4194696 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    107668 ns/op	  524616 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4352	    282747 ns/op	 2097483 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 1
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1683	    713603 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9314	    129541 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1101	   1101348 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 1
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1644	    712846 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9284	    130718 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1100	   1096590 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 2
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4696	    273505 ns/op	 4194687 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   12282	     99409 ns/op	  524616 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4278	    281995 ns/op	 2097485 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 2
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4520	    264479 ns/op	 4194706 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    100602 ns/op	  524613 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4338	    275578 ns/op	 2097485 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 2
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1688	    714742 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9241	    130737 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1101	   1100643 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 2
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1632	    712671 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9246	    129899 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1113	   1100258 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 3
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4526	    264260 ns/op	 4194696 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    104073 ns/op	  524614 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4125	    293930 ns/op	 2097481 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 3
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4412	    263599 ns/op	 4194701 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    108433 ns/op	  524614 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4556	    276069 ns/op	 2097486 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 3
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1657	    708185 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9118	    129562 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1095	   1105617 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 3
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1678	    709173 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    8868	    129788 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1108	   1095588 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 4
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4390	    270911 ns/op	 4194705 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    103659 ns/op	  524613 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4401	    281958 ns/op	 2097484 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 4
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4252	    265011 ns/op	 4194703 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    105268 ns/op	  524615 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4407	    278104 ns/op	 2097487 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 4
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1669	    713279 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9254	    130948 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1088	   1096643 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 4
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1663	    710811 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9295	    129746 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1101	   1087303 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 5
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4119	    270780 ns/op	 4194707 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   12060	     99143 ns/op	  524614 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4225	    276499 ns/op	 2097486 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 5
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4288	    271793 ns/op	 4194703 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   12015	     99565 ns/op	  524615 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4460	    273771 ns/op	 2097487 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 5
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1689	    714774 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9268	    130575 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1089	   1106229 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 5
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1663	    706945 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9531	    130071 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1095	   1100087 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 6
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4161	    267924 ns/op	 4194701 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    100233 ns/op	  524613 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4287	    274984 ns/op	 2097489 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 6
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4293	    280815 ns/op	 4194704 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    100696 ns/op	  524613 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4263	    283021 ns/op	 2097486 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 6
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1666	    714123 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9349	    130766 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1102	   1100628 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 6
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1647	    712651 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9316	    130309 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1098	   1100365 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 7
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4429	    262629 ns/op	 4194699 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    106826 ns/op	  524615 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4228	    279084 ns/op	 2097479 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 7
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4486	    267381 ns/op	 4194700 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    107700 ns/op	  524615 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4321	    277968 ns/op	 2097480 B/op	       6 allocs/op
+PASS
+campaign: 2
+pair: 7
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1659	    718699 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9247	    130484 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1096	   1099245 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 2
+pair: 7
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1684	    710876 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9056	    130544 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1098	   1098229 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 1
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1635	    709641 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9314	    130068 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1112	   1095660 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 1
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1668	    711389 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9092	    129930 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1123	   1088968 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 1
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4401	    267990 ns/op	 4194703 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    105330 ns/op	  524614 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4179	    282418 ns/op	 2097488 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 1
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    3933	    262826 ns/op	 4194696 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    107777 ns/op	  524616 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4227	    288608 ns/op	 2097481 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 2
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1645	    717218 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9396	    129541 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1098	   1090832 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 2
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1676	    708790 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9410	    129526 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1105	   1092927 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 2
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4083	    277683 ns/op	 4194697 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   12115	     98946 ns/op	  524615 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4460	    281239 ns/op	 2097484 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 2
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4429	    271289 ns/op	 4194695 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    103005 ns/op	  524615 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4335	    286723 ns/op	 2097487 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 3
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1714	    703010 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9343	    129199 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1098	   1090155 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 3
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1665	    715235 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9192	    129837 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1106	   1096429 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 3
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4587	    278303 ns/op	 4194703 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    100568 ns/op	  524612 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4490	    336575 ns/op	 2097482 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 3
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4096	    283922 ns/op	 4194686 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   12181	     99570 ns/op	  524615 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4272	    285020 ns/op	 2097489 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 4
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1702	    715673 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9249	    130967 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1104	   1097159 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 4
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1644	    710650 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9318	    129629 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1110	   1098648 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 4
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4458	    267043 ns/op	 4194694 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    108023 ns/op	  524615 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4408	    278259 ns/op	 2097481 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 4
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4454	    265500 ns/op	 4194702 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    102521 ns/op	  524612 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4395	    278888 ns/op	 2097486 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 5
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1648	    711192 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9301	    130048 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1098	   1098482 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 5
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1676	    716172 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9130	    129193 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1100	   1090527 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 5
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4375	    269092 ns/op	 4194702 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    101495 ns/op	  524613 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4233	    279601 ns/op	 2097484 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 5
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4248	    262366 ns/op	 4194691 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    107671 ns/op	  524616 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4344	    284663 ns/op	 2097481 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 6
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1674	    712765 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9304	    129519 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1083	   1099502 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 6
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1671	    714944 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9308	    129563 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1108	   1070237 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 6
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4128	    274145 ns/op	 4194694 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    100263 ns/op	  524614 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4336	    272419 ns/op	 2097483 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 6
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4275	    269078 ns/op	 4194693 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   12087	     99542 ns/op	  524615 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4300	    285535 ns/op	 2097482 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 7
+procs: 1
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1665	    717836 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9199	    131001 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1102	   1096301 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 7
+procs: 1
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu 	    1652	    714762 ns/op	 4194648 B/op	       6 allocs/op
+BenchmarkSigmoidF64_64K_cpu       	    9373	    129364 ns/op	  524584 B/op	       5 allocs/op
+BenchmarkSoftplusF64_256K_cpu     	    1130	   1101658 ns/op	 2097448 B/op	       5 allocs/op
+PASS
+campaign: 3
+pair: 7
+procs: 12
+arm: old
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4321	    290704 ns/op	 4194706 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    100627 ns/op	  524613 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4143	    281395 ns/op	 2097490 B/op	       6 allocs/op
+PASS
+campaign: 3
+pair: 7
+procs: 12
+arm: new
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUBackwardF64_256K_cpu-12    	    4435	    270588 ns/op	 4194705 B/op	       7 allocs/op
+BenchmarkSigmoidF64_64K_cpu-12          	   10000	    106097 ns/op	  524616 B/op	       6 allocs/op
+BenchmarkSoftplusF64_256K_cpu-12        	    4304	    280967 ns/op	 2097482 B/op	       6 allocs/op
+PASS
