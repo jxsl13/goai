@@ -161,3 +161,8 @@ Rationale: R-01M236QP4YEFD and DEVIRTUALIZING-REMOVES-AN-FMA-BARRIER-001 require
 WHEN three alternating count-seven M2 Pro Go1.27.1 campaigns measure 262144-element GELU backward at GOMAXPROCS1, the promotion gate SHALL require at least 1.05x median improvement with p below 0.05 in every campaign.
 
 Rationale: This is an attribution experiment before a SIMD redesign; scalar erf and exp still dominate. PROC-INTERLEAVE-001 requires small effects to exceed within-arm noise. An inconclusive experiment is rejected without a speedup claim, with all raw campaigns retained.
+
+## SCALAR-F64-GELU-DIRECT-CONTROLS-001 {applies: go:cpu.geluBackwardF64KernelCPU,go:cpu_test.BenchmarkGELUBackwardF64_256K_cpu}
+WHEN three campaigns measure 2048-element GOMAXPROCS1/12 and 262144-element GOMAXPROCS12 controls, the direct-call GELU promotion gate SHALL reject reproducible time regressions above 3 percent or allocation increases.
+
+Rationale: Retain all raw samples, discarded warmup boundaries, frozen binary hashes and build flags; small effects must satisfy PROC-INTERLEAVE-001. Preserve the AMD64 SIMD route and do not enable the ARM64 GELU SIMD gate.
