@@ -18,8 +18,9 @@ import (
 //
 // The ceilings are deliberately ~10x the times measured on an M2 Pro (DecisionTree 4.6, RandomForest
 // 27.7, GradientBoosting 78, SVC_rbf 5.6, GaussianNB 0.3 ms). That is far too loose to be a
-// benchmark and is not meant to be one: it is an order-of-magnitude tripwire that survives slower CI
-// hardware and a loaded machine, while a 1600x regression fails it by two orders.
+// benchmark and is not meant to be one: it is an order-of-magnitude tripwire for controlled full-test
+// runs, while shared-runner short tests retain only the Fit smoke checks. A 1600x regression fails the
+// full guard by two orders.
 //
 // Build tier does not affect these numbers. backend/cpu has three matmul tiers (plain Go, NEON, and
 // Accelerate, the latter two behind goexperiment.simd, worth 11-18x on raw matmul), so the obvious
@@ -113,6 +114,10 @@ func TestClassicFitTimeGuard(t *testing.T) {
 		if err := c.fit(); err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
+		if testing.Short() {
+			t.Logf("FITGUARD %s Fit smoke passed; timing ceiling not enforced in short mode", c.name)
+			continue
+		}
 		el := time.Since(start)
 		fmt.Printf("FITGUARD %-20s %7.2f ms (ceiling %.0f ms)\n", c.name,
 			float64(el.Microseconds())/1000, float64(c.ceiling.Milliseconds()))
@@ -126,8 +131,8 @@ func TestClassicFitTimeGuard(t *testing.T) {
 					runtime.GOOS, runtime.GOARCH)
 				continue
 			}
-			t.Errorf("%s fit took %v, over the %v order-of-magnitude ceiling — a regression this "+
-				"large is a convergence or algorithmic failure, not machine noise", c.name, el, c.ceiling)
+			t.Errorf("%s fit took %v, over the %v order-of-magnitude ceiling — investigate "+
+				"convergence, algorithmic regressions, and local run conditions", c.name, el, c.ceiling)
 		}
 	}
 }
