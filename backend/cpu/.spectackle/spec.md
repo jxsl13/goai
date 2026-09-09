@@ -189,3 +189,6 @@ WHEN the GELU candidate is benchmarked at 2048 elements or against non-target co
 
 ## ARM64-F64-GELU-DOMAIN-001 {applies: go:cpu.vgeluF64~3,go:cpu.vgeluGradF64~3}
 WHEN an ARM64 F64 GELU wrapper selects vector arithmetic, the preflight SHALL require every x to be finite with abs(x)<=32 and every backward g to be zero or finite with 1e-150<=abs(g)<=8.
+
+## ARM64-F64-GELU-UNIFORM-SMALL-001 {applies: go:cpu.erfF64x2GELU}
+WHEN both ARM64 GELU erf vector lanes satisfy the strict abs(y)<1 predicate, the uniform-small shortcut SHALL return the existing small rational with identical bits and skip exp and complementary rational evaluation, while all mixed or boundary pairs retain the complete path.
