@@ -55,6 +55,7 @@ NOTE ON PS4002: math.Exp at :179 is a scalar transcendental in a hot loop and a 
 kind: proposal
 state: draft
 created: 2026-09-09
+grilled: 2026-09-09 open=0
 targets: go:classic.TestClassicFitTimeGuard
 
 Goal: make TestClassicFitTimeGuard obey the existing TIMING-ASSERTIONS-SKIP-ON-RUNNERS-001 contract without dropping its five Fit error checks or weakening full local timing ceilings. Current draft PR1249 CI run34400229272 at a84cdb98 fails classic/fit_time_guard_test.go:129 under the cgo+metal macOS short command: RandomForest100 312.445542ms exceeds300ms. Other model observations: DecisionTree3.65ms, GradientBoosting100335.22ms, SVC_rbf11.82ms, GaussianNB0.42ms. These are a hosted-runner observation, not proven algorithmic regression or proof of noise. All Metal tests passed this run. Isolate this fix from rejected GELU runtime in a new branch based on clean main4f17f5a4.
