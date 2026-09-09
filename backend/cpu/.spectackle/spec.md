@@ -175,7 +175,7 @@ WHEN ARM64 SIMD evaluates eligible finite F64 GELU forward or backward, the dedi
 ## ARM64-F64-GELU-SCOPE-001 {applies: go:cpu.geluKernelCPU,go:cpu.geluBackwardF64KernelCPU,go:cpu.vexpF64Fast~2}
 WHEN F64 GELU selects the experimental ARM64 implementation, the CPU backend SHALL use a dedicated GELU capability, keep global vexpF64Fast false, and preserve default, AMD64, F32, reference, and unrelated operation arithmetic.
 
-## ARM64-F64-GELU-FALLBACK-001 {applies: go:cpu.vgeluF64~2,go:cpu.geluBackwardF64KernelCPU}
+## ARM64-F64-GELU-FALLBACK-001 {applies: go:cpu.vgeluF64~3,go:cpu.vgeluGradF64~3}
 WHEN an ARM64 GELU wrapper call contains any lane outside the declared eligibility domain, the entire wrapper call SHALL match scalar finite result bits and NaN classes, keep TestGELUBackwardF64DirectSpecialValues active, and modify 0 input elements.
 
 ## ARM64-F64-GELU-PERF-001 {applies: go:cpu.geluKernelCPU,go:cpu.geluBackwardF64KernelCPU}
