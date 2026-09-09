@@ -1,0 +1,395 @@
+Independent command records. Each section preserves the verifier's command, exit-status annotation and literal captured stdout/stderr; no executions were repeated while assembling this bundle.
+
+## verifier-focused-short-default.log
+COMMAND: PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=1 go test ./backend/metal -run '^TestMHADecodeCost$' -short -count=1 -v
+=== RUN   TestMHADecodeCost
+    mha_decode_bench_test.go:81: MHA decode smoke complete: model=tinyllama dk=64 sk=36
+    mha_decode_bench_test.go:81: MHA decode smoke complete: model=tinyllama dk=64 sk=512
+    mha_decode_bench_test.go:81: MHA decode smoke complete: model=llama7b dk=128 sk=36
+    mha_decode_bench_test.go:81: MHA decode smoke complete: model=llama7b dk=128 sk=512
+--- PASS: TestMHADecodeCost (0.02s)
+PASS
+ok  	github.com/jxsl13/goai/backend/metal	0.561s
+EXIT_STATUS=0
+
+## verifier-focused-short-simd.log
+COMMAND: PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=1 GOEXPERIMENT=simd go test ./backend/metal -run '^TestMHADecodeCost$' -short -count=1 -v
+=== RUN   TestMHADecodeCost
+    mha_decode_bench_test.go:81: MHA decode smoke complete: model=tinyllama dk=64 sk=36
+    mha_decode_bench_test.go:81: MHA decode smoke complete: model=tinyllama dk=64 sk=512
+    mha_decode_bench_test.go:81: MHA decode smoke complete: model=llama7b dk=128 sk=36
+    mha_decode_bench_test.go:81: MHA decode smoke complete: model=llama7b dk=128 sk=512
+--- PASS: TestMHADecodeCost (0.02s)
+PASS
+ok  	github.com/jxsl13/goai/backend/metal	0.321s
+EXIT_STATUS=0
+
+## verifier-focused-full-default.log
+COMMAND: PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=1 go test ./backend/metal -run '^TestMHADecodeCost$' -count=1 -v
+=== RUN   TestMHADecodeCost
+MHA decode tinyllama  dk= 64 sk=  36  12.10 us/op
+MHA decode tinyllama  dk= 64 sk= 512  16.22 us/op
+MHA decode llama7b    dk=128 sk=  36  65.65 us/op
+MHA decode llama7b    dk=128 sk= 512  278.34 us/op
+--- PASS: TestMHADecodeCost (2.84s)
+PASS
+ok  	github.com/jxsl13/goai/backend/metal	3.147s
+EXIT_STATUS=0
+
+## verifier-focused-full-simd.log
+COMMAND: PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=1 GOEXPERIMENT=simd go test ./backend/metal -run '^TestMHADecodeCost$' -count=1 -v
+=== RUN   TestMHADecodeCost
+MHA decode tinyllama  dk= 64 sk=  36  11.93 us/op
+MHA decode tinyllama  dk= 64 sk= 512  16.37 us/op
+MHA decode llama7b    dk=128 sk=  36  66.17 us/op
+MHA decode llama7b    dk=128 sk= 512  279.51 us/op
+--- PASS: TestMHADecodeCost (2.84s)
+PASS
+ok  	github.com/jxsl13/goai/backend/metal	3.149s
+EXIT_STATUS=0
+
+## verifier-gofmt-d.log
+COMMAND: gofmt -d backend/metal/mha_decode_bench_test.go
+EXIT_STATUS=0
+
+## verifier-diff-check-scoped.log
+COMMAND: git diff --check -- backend/metal/mha_decode_bench_test.go
+EXIT_STATUS=0
+
+## verifier-diff-check-all.log
+COMMAND: git diff --check
+EXIT_STATUS=0
+
+## verifier-source-sha256.log
+COMMAND: shasum -a 256 backend/metal/mha_decode_bench_test.go
+5bd34b91fe3e64e9dafa9c43037c247f84c5eeb4a7575ecb30f8f572a040337c  backend/metal/mha_decode_bench_test.go
+EXIT_STATUS=0
+
+## verifier-scope-diff.log
+COMMAND: git status --short && git diff -- backend/metal/mha_decode_bench_test.go internal/benchcompare/leadership/evidence/m2-metal-mha-short-20260909/README.md
+ M backend/metal/mha_decode_bench_test.go
+?? internal/benchcompare/leadership/evidence/m2-metal-mha-short-20260909/
+diff --git a/backend/metal/mha_decode_bench_test.go b/backend/metal/mha_decode_bench_test.go
+index 4a3ad225..0c122a55 100644
+--- a/backend/metal/mha_decode_bench_test.go
++++ b/backend/metal/mha_decode_bench_test.go
+@@ -37,6 +37,10 @@ func TestMHADecodeCost(t *testing.T) {
+ 	if !Available() {
+ 		t.Skip("no metal")
+ 	}
++	repeats := 25
++	if testing.Short() {
++		repeats = 1
++	}
+ 	for _, g := range []struct {
+ 		name                   string
+ 		dm, heads, kvHeads, dk int
+@@ -52,7 +56,7 @@ func TestMHADecodeCost(t *testing.T) {
+ 		for _, sk := range []int{36, 512} {
+ 			meas := func(n int) float64 {
+ 				best := 1e18
+-				for range 25 {
++				for range repeats {
+ 					r, err := NewRecorder()
+ 					if err != nil {
+ 						t.Fatal(err)
+@@ -72,6 +76,11 @@ func TestMHADecodeCost(t *testing.T) {
+ 				}
+ 				return best
+ 			}
++			if testing.Short() {
++				meas(1)
++				t.Logf("MHA decode smoke complete: model=%s dk=%d sk=%d", g.name, g.dk, sk)
++				continue
++			}
+ 			lo, hi := meas(32), meas(256)
+ 			us := (hi - lo) / (256 - 32) * 1e6
+ 			fmt.Printf("MHA decode %-10s dk=%3d sk=%4d  %.2f us/op\n", g.name, g.dk, sk, us)
+EXIT_STATUS=0
+
+## verifier-evidence-readme.log
+COMMAND: sed -n '1,260p' internal/benchcompare/leadership/evidence/m2-metal-mha-short-20260909/README.md
+# MHA decode short-mode CI repair — September 9, 2026
+
+Status: implementation and independent verification pending. Test-only CI
+reliability correction, not a kernel speedup or external leadership claim.
+
+Spectackle proposal `P-01M23TTRCAFA4`, task `T-01M23TWGZ5F2E`, and
+`METAL-MHA-DECODE-SHORT-001-001` apply the existing root contract
+`TIMING-ASSERTIONS-SKIP-ON-RUNNERS-001` to `TestMHADecodeCost`.
+
+## Observed failure
+
+PR #1250's pre-merge run 34393416718 at a222b045 passed all 16 jobs and
+every executed step, including Metal and soft SIMD. Its post-merge run
+[34394770011](https://github.com/jxsl13/goai/actions/runs/34394770011) at
+`fe7a9bfcc1b4f6b589aa65bf3d61bbe2998a87ae` failed a different, unchanged
+test: `TestMHADecodeCost` measured llama7b dk=128 sk=512 at 817.7 us/op,
+above its 600 us ceiling, under shared-host `go test -short`. The prefill
+test fixed in #1250 did not fail. The exact relevant CI excerpt is retained
+in `ci-failure-excerpt.txt`; it is not represented as the entire job log.
+
+## Required behavior
+
+Short mode executes one actual recorded MHA operation for each of four
+model/context cases, retains recorder/MHA error checks, Commit, Wait, Free,
+and buffer lifetimes, and logs each completed smoke case. It performs no
+slope comparison or timing ceiling assertion. The unavailable-Metal skip
+remains; it is not proof of execution on a GPU.
+
+Full mode retains 25 repetitions, measurements at 32 and 256 operations,
+the original slope calculation, all four geometries, and the unchanged
+600 us ceiling. No production code, dispatch rule, shader, or workflow changes.
+This operation smoke is not a new numerical-parity assertion.
+
+## Verification plan
+
+Pinned Go 1.27.1, Darwin ARM64, CGO enabled. Fresh implementer runs actual
+Metal focused short/full tests in default and SIMD modes, the full short
+Metal package in both modes, vet in both modes, formatting and whitespace
+checks. A fresh independent verifier repeats focused real-Metal short/full
+tests and audits the diff. Raw stdout/stderr, outcomes, source hash, and
+the original failure remain available. No skips are counted as execution.
+
+Publication requires all CI jobs and individual executed steps successful
+for the exact final PR head. The remote feature branch is deleted only
+after verified merge. Generalizable follow-up belongs on existing
+[perfscan #868](https://github.com/jxsl13/perfscan/issues/868), not a duplicate
+issue or an unverified claim about current detector coverage.
+EXIT_STATUS=0
+
+## verifier-source-audit.log
+COMMAND: sed -n '1,180p' backend/metal/mha_decode_bench_test.go
+//go:build darwin && cgo
+
+package metal
+
+import (
+	"fmt"
+	"testing"
+	"time"
+)
+
+// TestMHADecodeCost measures ONE decode attention (sq=1) against a KV cache of length sk, at the
+// head geometries real models use. It exists because this call had an sk-INDEPENDENT floor of ~99us
+// (dk=64) / ~239us (dk=128) — a single query row against eight keys cost 99us, which no amount of
+// attention work explains.
+//
+// The cause was a runtime loop bound. mha_decode_f32 declares per-thread q[128] and acc[128] and
+// walks them with `for (d=0; d<dk; d++)` where dk is a KERNEL ARGUMENT. A runtime trip count makes
+// the arrays dynamically indexed, so they cannot live in registers and spill to memory — every
+// acc[d] touch in the streaming loop AND in the 5-level simdgroup merge becomes a memory access.
+// The merge walks all dk accumulators at every level regardless of sk, which is precisely the
+// sk-independent part of the cost.
+//
+// Note the failed hypothesis, because it looks identical from the outside: halving the arrays to
+// q[64]/acc[64] for dk<=64 changed NOTHING (99.5 vs 99.1us, three alternations). Array SIZE was
+// never the problem; dynamic indexing was. Compiling dk as a constant fixes it, and the win is
+// large at every context length:
+//
+//	dk=64   sk=8    99.8 -> 11.5us (8.7x)   sk=1024  766.5 -> 129.6us (5.9x)
+//	dk=128  sk=36  238.6 -> 64.9us (3.7x)   sk=512   891.0 -> 277.2us (3.2x)
+//
+// End-to-end on a 22-layer TinyLlama-shaped Q4_K decode: 44.3 -> 49.1 tok/s at a short context, and
+// the gap widens with context since attention is the term that grows in sk.
+//
+// Reported, not asserted, apart from a loose ceiling: absolute microseconds are machine- and
+// thermal-dependent, and a tight threshold would be flaky rather than a guard.
+func TestMHADecodeCost(t *testing.T) {
+	if !Available() {
+		t.Skip("no metal")
+	}
+	repeats := 25
+	if testing.Short() {
+		repeats = 1
+	}
+	for _, g := range []struct {
+		name                   string
+		dm, heads, kvHeads, dk int
+	}{
+		{"tinyllama", 2048, 32, 4, 64},
+		{"llama7b", 4096, 32, 32, 128},
+	} {
+		const ctx = 1024
+		q, _ := NewDeviceBufferF32(make([]float32, g.dm))
+		o, _ := NewDeviceBufferF32(make([]float32, g.dm))
+		k, _ := NewDeviceBufferF32(make([]float32, ctx*g.kvHeads*g.dk))
+		v, _ := NewDeviceBufferF32(make([]float32, ctx*g.kvHeads*g.dk))
+		for _, sk := range []int{36, 512} {
+			meas := func(n int) float64 {
+				best := 1e18
+				for range repeats {
+					r, err := NewRecorder()
+					if err != nil {
+						t.Fatal(err)
+					}
+					for range n {
+						if err := r.MHA(q, k, v, o, 1, sk, g.dm, g.heads, g.kvHeads, g.dk, 1, 0, 0.125); err != nil {
+							t.Fatal(err)
+						}
+					}
+					st := time.Now()
+					r.Commit()
+					r.Wait()
+					if d := time.Since(st).Seconds(); d < best {
+						best = d
+					}
+					r.Free()
+				}
+				return best
+			}
+			if testing.Short() {
+				meas(1)
+				t.Logf("MHA decode smoke complete: model=%s dk=%d sk=%d", g.name, g.dk, sk)
+				continue
+			}
+			lo, hi := meas(32), meas(256)
+			us := (hi - lo) / (256 - 32) * 1e6
+			fmt.Printf("MHA decode %-10s dk=%3d sk=%4d  %.2f us/op\n", g.name, g.dk, sk, us)
+			// The pre-fix cost was 99-891us across these points. A loose ceiling catches a
+			// regression back onto the runtime-dk kernel without pinning absolute timings.
+			if us > 600 {
+				t.Errorf("%s dk=%d sk=%d: %.1f us/op — decode attention has regressed onto the dynamically-indexed path", g.name, g.dk, sk, us)
+			}
+		}
+		q.Release()
+		o.Release()
+		k.Release()
+		v.Release()
+	}
+}
+EXIT_STATUS=0
+
+## verifier-protocol.log
+COMMAND: sed -n '1,260p' .claude/commands/spectackle.md
+---
+description: spectackle entry point — bare = state snapshot, with a requirement = full SDD lifecycle
+---
+
+<!-- generated by spectackle `commands` — edit internal/mcpserver/templates, not this file -->
+
+If `$ARGUMENTS` is empty: call the spectackle `state` MCP tool (or, if no
+spectackle MCP server is registered in this session, drive it headlessly per
+the "Headless quickstart" recipe in this repo's README.md) and render its
+output as-is — identical to `/spectackle-state`. Do not start a lifecycle,
+do not draft or move anything.
+
+If `$ARGUMENTS` is not empty: treat it as a requirement/task description
+and act as the orchestrator (see docs/agent-workflow.md for the
+orchestrator/implementer division of labor), driving the full
+spec-driven-development lifecycle to completion:
+
+1. **Research** — `research q="$ARGUMENTS"` first (server-aggregated pack:
+   impact, contracts, rejections, history, docs, gaps). Only if that
+   doesn't answer what you need, `draft kind=research` an R-item with an
+   exhaustive brief and delegate it to a fresh, cheap subagent. Never
+   explore ad hoc, and never ask the user something the pack could answer.
+   Token economy: never shell-grep/find what the server can answer — `find scope=code` for symbols/paths, `find scope=rule|rejection|history` for specs and past failures, `get id=<node> depth=N` for impact. Shell reads raw bytes of one known file only; `.spectackle/` files are never grepped or sed-edited (server-owned).
+2. **Draft** — `draft kind=proposal targets=<ids from research>` to mint
+   the proposal and get the context pack (impact/contracts/rejections).
+3. **Grill** — `grill id=<P-id>` and close what it surfaces: unanchored
+   targets get contracts via `rule`, thin child-task briefs get rewritten
+   exhaustively (exact files, APIs, verification commands, scope — see
+   docs/agent-workflow.md "Anatomy of a thorough task body").
+4. **Decide, if still uncertain** — for any decision that actually needs
+   the user, `decide op=ask` (native UI). Never fall back to unstructured
+   chat. If no UI is available or the dialog isn't answered immediately,
+   keep working other disjoint tasks — the answer arrives later via
+   `decide op=answer`.
+5. **Approve** — on explicit user approval, `move to=approved` (or
+   straight to `active`, one call).
+6. **Fan out** — partition the approved tasks by disjoint scope (leases
+   prove disjointness) and spawn one fresh implementer per task, in
+   parallel, on a cheaper model. Each implementer pulls its task via `get`,
+   claims scope via `lease`/`work op=start`, implements, tests, and moves
+   it to `done`.
+7. **Check** — `check` until `ok`; review diffs, run the declared
+   gate/verify commands. Never trust a `done` you haven't checked. Then
+   re-verify independently: a fresh-context verifier re-runs the task's
+   VERIFY block from the diff alone — the implementer's transcript is
+   never the evidence.
+8. **Archive** — `move to=archived` (implies `done`); the delta merges
+   into spec.md. Commit/PR per this repo's normal git conventions. The
+   archive note becomes the journal tombstone every later session
+   searches: state what changed, what was measured, what was deliberately
+   not done, and where the learning landed (rule, ADR, doc).
+9. **Restart** — the resident spectackle server self-restarts after each
+   merge (committed-only watcher); only a setup without the watcher needs
+   the operator's `make dev`. Your judgment at this node is solely whether
+   to trust a stale surface — the restart itself is the server's edge.
+10. **Research capture** — every R-item ends consumed (rules, ADRs, or
+   tasks citing it) or explicitly closed with a no-action note; the server
+   enforces this at the archive gate.
+
+If any task escalates to `blocked` (rounds limit hit), resolve the
+auto-minted ADR-item via `decide` — `rescope`, `reject`, or `override-once`
+— before continuing that task's line of work.
+
+Records: write every item body — proposal, task, ADR, research — as
+compacted substance: constraints, decisions, measurements, rejected
+alternatives and why. Never paste verbatim user quotes or transcript
+excerpts; they bloat every later read of the record without adding
+information. Write every item body in American English: spelling variants
+(behavior/behaviour, initialize/initialise) fragment full-text matches
+exactly like a language mix does. Compact the input, lose nothing. Standing decisions, constraints and durable
+learnings are cast into the spec the moment they emerge — `rule op=add` or
+`decide op=ask` — never kept in agent-private memory, which no sibling
+reads and no merge versions.
+
+Defects: notice a defect in spectackle itself, not in this repository? Open
+an issue with your analysis (reproduction, observed vs. expected, isolated
+cause if known) at https://github.com/jxsl13/spectackle, never a fix PR — you lack the design
+context behind the code as written, and reviewing an unsolicited patch
+costs the maintainer more than the analysis would have saved them.
+
+Requirement: $ARGUMENTS
+
+EXIT_STATUS=0
+
+## verifier-spectackle.log
+COMMAND: spectackle -instructions
+unknown subcommand "-instructions"
+usage:
+  spectackle serve [-root DIR] [-http ADDR] [-pidfile PATH]
+                                  run the MCP server on stdio, or over
+                                  Streamable HTTP when -http is set
+                                  (workspace auto-detected); with -pidfile,
+                                  write the PID once the server is ready
+                                  and remove it on shutdown
+  spectackle call [-root DIR] [-http ADDR] [-instructions] [NAME [JSON]]
+                                  make a headless tool call: spawns a server
+                                  over stdio, or reaches a resident one via
+                                  -http; with NAME, issues that one call
+                                  (JSON is its arguments object); with none,
+                                  reads one {"name":...,"arguments":...}
+                                  JSON object per non-empty stdin line and
+                                  issues them over a single session;
+                                  -instructions prints the server's
+                                  instructions manifest and exits
+  spectackle lint  [PATH]        lint all EARS spec bundles, exit 1 on errors
+  spectackle reindex [-root DIR] rebuild the symbol graph and resync the
+                                  spec/doc cache; prints files/nodes/edges
+                                  so an operator can confirm it ran
+  spectackle version             print the version
+EXIT_STATUS=2
+
+COMMAND: spectackle call -instructions
+spectackle — spec-lifecycle server. Source of truth: versioned .spectackle/ folders (spec.md=living contracts, work.md=active items, journal.ndjson=history). NEVER edit these files yourself; all writes go through tools. Loop for any change: (1) find q=<topic> scope=rejection — learn why similar work failed before; (2) find scope=code → node IDs (go:pkg.Fn); get id=<node> depth=2 for cross-language impact; (3) draft kind=proposal targets=<ids|paths> → CONTEXT PACK (#impact radius, #contracts EARS rules that bind it, #rejections similar past failures); (4) on explicit user approval: move to=approved (or straight to=active — any forward state skip is one call), then draft kind=task parent=<P-id> per work item and rule op=add for new contracts (fill slots; server composes+lints EARS, auto-IDs); (5) implement code; (6) check until ok — d records = spec/code drift, resolve via rule op=edit or code fix; (7) move to=done then to=archived, or active→archived in one call (implies done; merges the delta into spec.md, compacts). move to=rejected REQUIRES note; a rejection made with too little information is revocable — move the rejected ID back to any previous state (never done/archived). compact when check emits c records. Results are dense line records n/e/r/i/s/j/a/d/g/c/l/ag/sw/wt/!/nf/ok; cur <token> = resume by passing cur back. Reference everything by ID — never paste file contents.
+MODES: working alongside other agents, orchestrating implementer agents, or onboarding an existing repo? Fetch the matching playbook on demand: prompt guide topic=swarm|orchestration|brownfield.
+TOKEN ECONOMY: prefer server records over shell text tools whenever you only need locations or structure — shell grep/find return file contents (cost O(codebase)), server tools return IDs+spans (cost O(results)). Substitutions: grep/rg <symbol> -> find q=<symbol> scope=code (ranked n records; add focus=<node> for near-my-work ranking); grep -r over specs/history -> find scope=rule|rejection|history (FTS5); find(1) by filename -> find scope=code (file paths and signatures match too); where is X defined / what calls X -> get id=<node> depth=N; before any sed-style bulk edit survey the sites via get depth and run check after — sed is for the edit, never for the search; NEVER grep or sed .spectackle/ files (server-owned: reads via find/get, writes via tools only). Read raw file bytes with shell only when you already know the one file you need.
+RECORDS: write item bodies as compacted substance — constraints, decisions, measurements, rejected alternatives and why. Never paste verbatim user quotes or transcript excerpts: they bloat every later read of the record without adding information. Write every item body in American English: spelling variants (behavior/behaviour, initialize/initialise) fragment full-text matches exactly like a language mix does. Same token-economy family as the output diet. Standing decisions and durable learnings are cast into the spec as they emerge — rule op=add or decide op=ask — never into agent-private memory nothing else reads or versions.
+BACKPROP: every completed or rejected item leaves its learning in one of three durable stores — spec.md rules (standing contracts), journal tombstone notes (archive/reject summaries), knowledge artifacts (docs, ADRs). The archive/reject note is what later sessions search first: what changed, what was measured, what was deliberately not done, where the learning landed — the note IS the training signal. Research items end consumed (rules/ADRs/tasks citing them) or explicitly closed no-action. Resident-server repo? the watcher self-restarts it post-merge; without one, make dev is operator work — stale binaries serve yesterday's logic.
+DEFECT REPORTS: notice a defect in this server itself, not in the repo you're operating on? File it as an issue at https://github.com/jxsl13/spectackle with your analysis — the reproduction, what you observed versus what you expected, and the isolated cause when you have one; that analysis is the expensive part and the only reason a report is worth filing. Do not send a fix PR: you lack the design context behind the code as written, and reviewing an unsolicited patch costs the maintainer more than the analysis would have saved them.
+EXIT_STATUS=0
+
+COMMAND: spectackle call get '{"id":"T-01M23TWGZ5F2E"}'
+c . journal 1116 events since last compact
+i T-01M23TWGZ5F2E task active backend/metal Honor short mode in MHA decode timing test while retaining four operation smoke cases
+parent P-01M23TTRCAFA4
+targets go:metal.TestMHADecodeCost
+OWNERSHIP: fresh implementer owns ONLY backend/metal/mha_decode_bench_test.go in /private/tmp/goai-mha-short-lEmJsP/repo. Root owns evidence/docs/lifecycle/Git/PR. Read .claude/commands/spectackle.md completely and fetch this task. apply_patch only; do not edit runtime, workflows, other tests or .spectackle bytes. No commits, pushes or lifecycle mutations. Report actual results and errors, including skips.
+
+IMPLEMENT: existing TestMHADecodeCost violates TIMING-ASSERTIONS-SKIP-ON-RUNNERS-001 under shared CI -short. Introduce repeats=25, set repeats=1 when testing.Short, preserving same recorder creation/error checks, MHA errors, Commit, Wait, time read, Free. For each existing model/context pair, when short call meas(1), log a distinctive smoke-complete line identifying model/dk/sk, then continue before slope or ceiling. There are exactly4 cases: tinyllama dk64 sk36/512 and llama7b dk128 sk36/512. Do not early-skip the whole test on short. Preserve Available skip if noMetal, all buffer lifetimes, unchanged full25repetitions with meas32/meas256, same600us ceiling and original shape/semantics. No production or threshold changes; operation smoke is not a new numerical-parity assertion.
+
+VERIFY: pinned Go1.27.1 via PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=1. Execute actual Metal focused TestMHADecodeCost short/full with -count=1 -v in default and GOEXPERIMENT=simd. Inspect logs to require4short smoke lines or4full timings and noSKIP; sandbox noMetal is NOT execution proof, use escalation forrealMetal asneeded. Run full backend/metal -short -count=1 -timeout20m default/SIMD and vet both. gofmt-d/diffcheck. Preserve full literal stdout/stderr for every command under /private/tmp/goai-mha-short-lEmJsP/implement-*.log via apply_patch or capture tool outputs; never summarize them as raw. No profiles/newbenchcampaigns. Root will schedule independent fresh verifier. Heavy testing window granted only to this implementer after dispatch; root allocation campaigns are completed and independent allocation verifier runs only lightweight analysis. Before each full timing run ensure no other owned heavy window. Stop after bounded matrix and report heavywindowclosed. Record code SHA256/diff.
+EXIT_STATUS=0

@@ -37,6 +37,10 @@ func TestMHADecodeCost(t *testing.T) {
 	if !Available() {
 		t.Skip("no metal")
 	}
+	repeats := 25
+	if testing.Short() {
+		repeats = 1
+	}
 	for _, g := range []struct {
 		name                   string
 		dm, heads, kvHeads, dk int
@@ -52,7 +56,7 @@ func TestMHADecodeCost(t *testing.T) {
 		for _, sk := range []int{36, 512} {
 			meas := func(n int) float64 {
 				best := 1e18
-				for range 25 {
+				for range repeats {
 					r, err := NewRecorder()
 					if err != nil {
 						t.Fatal(err)
@@ -71,6 +75,11 @@ func TestMHADecodeCost(t *testing.T) {
 					r.Free()
 				}
 				return best
+			}
+			if testing.Short() {
+				meas(1)
+				t.Logf("MHA decode smoke complete: model=%s dk=%d sk=%d", g.name, g.dk, sk)
+				continue
 			}
 			lo, hi := meas(32), meas(256)
 			us := (hi - lo) / (256 - 32) * 1e6
