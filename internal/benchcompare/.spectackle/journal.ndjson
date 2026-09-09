@@ -1,0 +1,1 @@
+{"t":"2026-09-09T21:39:10Z","eid":"466203d11dcba2b2","ag":"ag-fb49","ev":"rule","dir":"internal/benchcompare","op":"add","rule":"ALLOC-SITE-ANALYSIS-001","txt":"WHEN raw allocation-site snapshots are compared, the analyzer SHALL retain all rows and both collision layers, use checked integer arithmetic, and keep all 3 disjoint stack groups without inferring causation."}
