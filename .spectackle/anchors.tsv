@@ -454,4 +454,4 @@ SCALAR-F64-GELU-DIRECT-CONTROLS-001	go:cpu_test.BenchmarkGELUBackwardF64DirectDi
 SCALAR-F64-GELU-DIRECT-SEMANTICS-001	go:cpu.activationBackwardF64	backend/cpu/activation_bwd_f64.go	28-41	183b03ea7aa2017a	8cf03eefc74e6956
 METAL-PREFILL-SHORT-001	go:metal.TestPrefillOpCosts	backend/metal/prefill_ops_bench_test.go	65-134	5c817a02c84d1f7c	17224aa7e77b167a
 METAL-MHA-DECODE-SHORT-001-001	go:metal.TestMHADecodeCost	backend/metal/mha_decode_bench_test.go	36-98	cbfdf09e96300879	33388eb4c1c079ec
-CLASSIC-FIT-SHORT-001	go:classic.TestClassicFitTimeGuard	classic/fit_time_guard_test.go	65-138	ec20a1d4a3ec4b72	c9dd87c76dbbf82f
+CLASSIC-FIT-SHORT-001	go:classic.TestClassicFitTimeGuard	classic/fit_time_guard_test.go	65-138	ec20a1d4a3ec4b72	f65cbf4c71757e89
