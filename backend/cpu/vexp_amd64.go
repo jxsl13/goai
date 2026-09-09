@@ -14,9 +14,10 @@ import (
 // FFN activation). vexpNeon stays false so only the standalone exp/tanh/log kernels keep their scalar
 // paths on amd64 (that campaign is separate); their v* funcs below are scalar (dead here).
 const (
-	vexpNeon    = false
-	vexpF32Fast = true
-	vexpF64Fast = true // amd64 SIMD build: vsiluF64 (F64 SwiGLU FFN activation, §T667)
+	vexpNeon     = false
+	vexpF32Fast  = true
+	vexpF64Fast  = true // amd64 SIMD build: vsiluF64 (F64 SwiGLU FFN activation, §T667)
+	vgeluF64Fast = vexpF64Fast
 	// vsiluF64Fast gates ONLY the F64 SiLU lane. It is split out from vexpF64Fast
 	// because arm64 now has a NEON F64 SiLU while its other F64 lanes stay scalar;
 	// on amd64 both are true, so this changes nothing here.

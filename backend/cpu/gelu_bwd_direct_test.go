@@ -3,6 +3,7 @@ package cpu_test
 import (
 	"fmt"
 	"math"
+	"runtime"
 	"slices"
 	"testing"
 
@@ -32,7 +33,7 @@ func TestGELUBackwardF64DirectShapes(t *testing.T) {
 }
 
 func TestGELUBackwardF64DirectSpecialValues(t *testing.T) {
-	if geluF64Tolerant {
+	if geluF64Tolerant && runtime.GOARCH == "amd64" {
 		t.Skip("exact scalar GELU contract; amd64 SIMD retains its existing accuracy tests")
 	}
 	values := []float64{

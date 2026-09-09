@@ -276,9 +276,9 @@ func geluKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 	switch in[0].Dtype() {
 	case tensor.F64:
 		d, o := xc.Storage().F64(), out.Storage().F64()
-		if vexpF64Fast {
-			// SIMD perf build: f64-native vectorized GELU — the Cephes erf (erfF64x4,
-			// built on expF64x4; vexp_amd64.go) replacing scalar math.Erf, the last
+		if vgeluF64Fast {
+			// SIMD perf build: f64-native vectorized GELU — the Cephes erf built on
+			// the architecture's F64 exp primitive, replacing scalar math.Erf, the last
 			// transcendental activation still scalar in F64 (SiLU/Sigmoid/Tanh/Softplus
 			// F64 already vectorized). ~1 ulp, rides the model f64 tolerance. The default
 			// build keeps the scalar math.Erf path below, bit-for-bit vs ref.
