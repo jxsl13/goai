@@ -1,0 +1,1014 @@
+protocol: control-alloc-fixed1024-v1
+phase: old-old
+old-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+v2-sha256: a5317a3eecbce6c66e2f02768d39cdd6f1a2cc068072d8a62d090a93163fff63
+old-path: /private/tmp/goai-control-alloc-z9bZ4P/old.test
+v2-path: /private/tmp/goai-control-alloc-z9bZ4P/v2.test
+
+campaign: 1
+pair: 1
+procs: 1
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":715349541,"total_bytes":4295319680,"total_allocs":6147,"bytes_per_op":4194648,"bytes_remainder":128,"allocs_per_op":6,"allocs_remainder":3}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":132976375,"total_bytes":537174016,"total_allocs":5120,"bytes_per_op":524584,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1107471959,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.97s)
+PASS
+
+campaign: 1
+pair: 1
+procs: 1
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":737462292,"total_bytes":4295319632,"total_allocs":6146,"bytes_per_op":4194648,"bytes_remainder":80,"allocs_per_op":6,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":137722083,"total_bytes":537174064,"total_allocs":5121,"bytes_per_op":524584,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1110249917,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (2.00s)
+PASS
+
+campaign: 1
+pair: 1
+procs: 12
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":281658250,"total_bytes":4295391656,"total_allocs":7559,"bytes_per_op":4194718,"bytes_remainder":424,"allocs_per_op":7,"allocs_remainder":391}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":103205958,"total_bytes":537202576,"total_allocs":6181,"bytes_per_op":524611,"bytes_remainder":912,"allocs_per_op":6,"allocs_remainder":37}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":294458792,"total_bytes":2147824208,"total_allocs":6176,"bytes_per_op":2097484,"bytes_remainder":592,"allocs_per_op":6,"allocs_remainder":32}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 1
+pair: 1
+procs: 12
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":278359791,"total_bytes":4295384720,"total_allocs":7540,"bytes_per_op":4194711,"bytes_remainder":656,"allocs_per_op":7,"allocs_remainder":372}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":102171333,"total_bytes":537201392,"total_allocs":6169,"bytes_per_op":524610,"bytes_remainder":752,"allocs_per_op":6,"allocs_remainder":25}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":292943375,"total_bytes":2147831056,"total_allocs":6238,"bytes_per_op":2097491,"bytes_remainder":272,"allocs_per_op":6,"allocs_remainder":94}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 1
+pair: 2
+procs: 1
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":712559625,"total_bytes":4295319584,"total_allocs":6145,"bytes_per_op":4194648,"bytes_remainder":32,"allocs_per_op":6,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":132380666,"total_bytes":537174112,"total_allocs":5122,"bytes_per_op":524584,"bytes_remainder":96,"allocs_per_op":5,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1099086000,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.96s)
+PASS
+
+campaign: 1
+pair: 2
+procs: 1
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":731903167,"total_bytes":4295319584,"total_allocs":6145,"bytes_per_op":4194648,"bytes_remainder":32,"allocs_per_op":6,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":135236250,"total_bytes":537174064,"total_allocs":5121,"bytes_per_op":524584,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1134424667,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (2.02s)
+PASS
+
+campaign: 1
+pair: 2
+procs: 12
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":303689750,"total_bytes":4295375184,"total_allocs":7372,"bytes_per_op":4194702,"bytes_remainder":336,"allocs_per_op":7,"allocs_remainder":204}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":106388291,"total_bytes":537204976,"total_allocs":6201,"bytes_per_op":524614,"bytes_remainder":240,"allocs_per_op":6,"allocs_remainder":57}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":358794334,"total_bytes":2147821144,"total_allocs":6191,"bytes_per_op":2097481,"bytes_remainder":600,"allocs_per_op":6,"allocs_remainder":47}
+--- PASS: TestCPUControlAllocationDiagnostics (0.78s)
+PASS
+
+campaign: 1
+pair: 2
+procs: 12
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":271493250,"total_bytes":4295392776,"total_allocs":7570,"bytes_per_op":4194719,"bytes_remainder":520,"allocs_per_op":7,"allocs_remainder":402}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":102740625,"total_bytes":537203536,"total_allocs":6189,"bytes_per_op":524612,"bytes_remainder":848,"allocs_per_op":6,"allocs_remainder":45}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":301394875,"total_bytes":2147829248,"total_allocs":6221,"bytes_per_op":2097489,"bytes_remainder":512,"allocs_per_op":6,"allocs_remainder":77}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 1
+pair: 3
+procs: 1
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":715133125,"total_bytes":4295319632,"total_allocs":6146,"bytes_per_op":4194648,"bytes_remainder":80,"allocs_per_op":6,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":133318959,"total_bytes":537174064,"total_allocs":5121,"bytes_per_op":524584,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1097994792,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.96s)
+PASS
+
+campaign: 1
+pair: 3
+procs: 1
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":717200417,"total_bytes":4295319632,"total_allocs":6146,"bytes_per_op":4194648,"bytes_remainder":80,"allocs_per_op":6,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":131713708,"total_bytes":537174064,"total_allocs":5121,"bytes_per_op":524584,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1104858541,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.97s)
+PASS
+
+campaign: 1
+pair: 3
+procs: 12
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":282097417,"total_bytes":4295395336,"total_allocs":7589,"bytes_per_op":4194722,"bytes_remainder":8,"allocs_per_op":7,"allocs_remainder":421}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":103382750,"total_bytes":537201648,"total_allocs":6173,"bytes_per_op":524610,"bytes_remainder":1008,"allocs_per_op":6,"allocs_remainder":29}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":291717042,"total_bytes":2147826120,"total_allocs":6238,"bytes_per_op":2097486,"bytes_remainder":456,"allocs_per_op":6,"allocs_remainder":94}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 1
+pair: 3
+procs: 12
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":274323208,"total_bytes":4295374896,"total_allocs":7369,"bytes_per_op":4194702,"bytes_remainder":48,"allocs_per_op":7,"allocs_remainder":201}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":101221709,"total_bytes":537201280,"total_allocs":6168,"bytes_per_op":524610,"bytes_remainder":640,"allocs_per_op":6,"allocs_remainder":24}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":289580208,"total_bytes":2147823240,"total_allocs":6210,"bytes_per_op":2097483,"bytes_remainder":648,"allocs_per_op":6,"allocs_remainder":66}
+--- PASS: TestCPUControlAllocationDiagnostics (0.68s)
+PASS
+
+campaign: 1
+pair: 4
+procs: 1
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":719959791,"total_bytes":4295319632,"total_allocs":6146,"bytes_per_op":4194648,"bytes_remainder":80,"allocs_per_op":6,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":135634916,"total_bytes":537174064,"total_allocs":5121,"bytes_per_op":524584,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1098208167,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.97s)
+PASS
+
+campaign: 1
+pair: 4
+procs: 1
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":718288333,"total_bytes":4295319632,"total_allocs":6146,"bytes_per_op":4194648,"bytes_remainder":80,"allocs_per_op":6,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":132359500,"total_bytes":537174016,"total_allocs":5120,"bytes_per_op":524584,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1094351250,"total_bytes":2147786800,"total_allocs":5121,"bytes_per_op":2097448,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+--- PASS: TestCPUControlAllocationDiagnostics (1.96s)
+PASS
+
+campaign: 1
+pair: 4
+procs: 12
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":272477834,"total_bytes":4295391144,"total_allocs":7555,"bytes_per_op":4194717,"bytes_remainder":936,"allocs_per_op":7,"allocs_remainder":387}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":105109208,"total_bytes":537203072,"total_allocs":6184,"bytes_per_op":524612,"bytes_remainder":384,"allocs_per_op":6,"allocs_remainder":40}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":295746208,"total_bytes":2147829152,"total_allocs":6221,"bytes_per_op":2097489,"bytes_remainder":416,"allocs_per_op":6,"allocs_remainder":77}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 1
+pair: 4
+procs: 12
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":283666291,"total_bytes":4295391192,"total_allocs":7552,"bytes_per_op":4194717,"bytes_remainder":984,"allocs_per_op":7,"allocs_remainder":384}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":102687500,"total_bytes":537201872,"total_allocs":6175,"bytes_per_op":524611,"bytes_remainder":208,"allocs_per_op":6,"allocs_remainder":31}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":297008542,"total_bytes":2147829536,"total_allocs":6227,"bytes_per_op":2097489,"bytes_remainder":800,"allocs_per_op":6,"allocs_remainder":83}
+--- PASS: TestCPUControlAllocationDiagnostics (0.70s)
+PASS
+
+campaign: 1
+pair: 5
+procs: 1
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":711767750,"total_bytes":4295319680,"total_allocs":6147,"bytes_per_op":4194648,"bytes_remainder":128,"allocs_per_op":6,"allocs_remainder":3}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":133089792,"total_bytes":537174016,"total_allocs":5120,"bytes_per_op":524584,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1096915167,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.95s)
+PASS
+
+campaign: 1
+pair: 5
+procs: 1
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":713264708,"total_bytes":4295319632,"total_allocs":6146,"bytes_per_op":4194648,"bytes_remainder":80,"allocs_per_op":6,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":131414666,"total_bytes":537174016,"total_allocs":5120,"bytes_per_op":524584,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1095209167,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.95s)
+PASS
+
+campaign: 1
+pair: 5
+procs: 12
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":273245958,"total_bytes":4295371408,"total_allocs":7339,"bytes_per_op":4194698,"bytes_remainder":656,"allocs_per_op":7,"allocs_remainder":171}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":102741292,"total_bytes":537205312,"total_allocs":6204,"bytes_per_op":524614,"bytes_remainder":576,"allocs_per_op":6,"allocs_remainder":60}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":294968875,"total_bytes":2147817840,"total_allocs":6203,"bytes_per_op":2097478,"bytes_remainder":368,"allocs_per_op":6,"allocs_remainder":59}
+--- PASS: TestCPUControlAllocationDiagnostics (0.68s)
+PASS
+
+campaign: 1
+pair: 5
+procs: 12
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":281424334,"total_bytes":4295388776,"total_allocs":7529,"bytes_per_op":4194715,"bytes_remainder":616,"allocs_per_op":7,"allocs_remainder":361}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":102444625,"total_bytes":537203888,"total_allocs":6193,"bytes_per_op":524613,"bytes_remainder":176,"allocs_per_op":6,"allocs_remainder":49}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":289688792,"total_bytes":2147828464,"total_allocs":6214,"bytes_per_op":2097488,"bytes_remainder":752,"allocs_per_op":6,"allocs_remainder":70}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 1
+pair: 6
+procs: 1
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":749587375,"total_bytes":4295319632,"total_allocs":6146,"bytes_per_op":4194648,"bytes_remainder":80,"allocs_per_op":6,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":134469208,"total_bytes":537174064,"total_allocs":5121,"bytes_per_op":524584,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1082273542,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.98s)
+PASS
+
+campaign: 1
+pair: 6
+procs: 1
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":714131292,"total_bytes":4295319632,"total_allocs":6146,"bytes_per_op":4194648,"bytes_remainder":80,"allocs_per_op":6,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":129899458,"total_bytes":537174064,"total_allocs":5121,"bytes_per_op":524584,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1096423167,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.95s)
+PASS
+
+campaign: 1
+pair: 6
+procs: 12
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":281716125,"total_bytes":4295386552,"total_allocs":7515,"bytes_per_op":4194713,"bytes_remainder":440,"allocs_per_op":7,"allocs_remainder":347}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":102584208,"total_bytes":537204320,"total_allocs":6196,"bytes_per_op":524613,"bytes_remainder":608,"allocs_per_op":6,"allocs_remainder":52}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":289106958,"total_bytes":2147828016,"total_allocs":6210,"bytes_per_op":2097488,"bytes_remainder":304,"allocs_per_op":6,"allocs_remainder":66}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 1
+pair: 6
+procs: 12
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":281531250,"total_bytes":4295394104,"total_allocs":7581,"bytes_per_op":4194720,"bytes_remainder":824,"allocs_per_op":7,"allocs_remainder":413}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":102815375,"total_bytes":537200832,"total_allocs":6164,"bytes_per_op":524610,"bytes_remainder":192,"allocs_per_op":6,"allocs_remainder":20}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":297341667,"total_bytes":2147833584,"total_allocs":6262,"bytes_per_op":2097493,"bytes_remainder":752,"allocs_per_op":6,"allocs_remainder":118}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 1
+pair: 7
+procs: 1
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":718981750,"total_bytes":4295319680,"total_allocs":6147,"bytes_per_op":4194648,"bytes_remainder":128,"allocs_per_op":6,"allocs_remainder":3}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":131732875,"total_bytes":537174016,"total_allocs":5120,"bytes_per_op":524584,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1097259167,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.96s)
+PASS
+
+campaign: 1
+pair: 7
+procs: 1
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":711259958,"total_bytes":4295319680,"total_allocs":6147,"bytes_per_op":4194648,"bytes_remainder":128,"allocs_per_op":6,"allocs_remainder":3}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":132704750,"total_bytes":537174016,"total_allocs":5120,"bytes_per_op":524584,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1102417667,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.96s)
+PASS
+
+campaign: 1
+pair: 7
+procs: 12
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":274450875,"total_bytes":4295386648,"total_allocs":7516,"bytes_per_op":4194713,"bytes_remainder":536,"allocs_per_op":7,"allocs_remainder":348}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":106900125,"total_bytes":537205248,"total_allocs":6204,"bytes_per_op":524614,"bytes_remainder":512,"allocs_per_op":6,"allocs_remainder":60}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":291353458,"total_bytes":2147828016,"total_allocs":6210,"bytes_per_op":2097488,"bytes_remainder":304,"allocs_per_op":6,"allocs_remainder":66}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 1
+pair: 7
+procs: 12
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":276634666,"total_bytes":4295385800,"total_allocs":7505,"bytes_per_op":4194712,"bytes_remainder":712,"allocs_per_op":7,"allocs_remainder":337}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":101856166,"total_bytes":537203344,"total_allocs":6187,"bytes_per_op":524612,"bytes_remainder":656,"allocs_per_op":6,"allocs_remainder":43}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":298234333,"total_bytes":2147823864,"total_allocs":6217,"bytes_per_op":2097484,"bytes_remainder":248,"allocs_per_op":6,"allocs_remainder":73}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 2
+pair: 1
+procs: 12
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":274012417,"total_bytes":4295378704,"total_allocs":7405,"bytes_per_op":4194705,"bytes_remainder":784,"allocs_per_op":7,"allocs_remainder":237}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":103029625,"total_bytes":537201504,"total_allocs":6170,"bytes_per_op":524610,"bytes_remainder":864,"allocs_per_op":6,"allocs_remainder":26}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":299002500,"total_bytes":2147820176,"total_allocs":6223,"bytes_per_op":2097480,"bytes_remainder":656,"allocs_per_op":6,"allocs_remainder":79}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 2
+pair: 1
+procs: 12
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":279724792,"total_bytes":4295382144,"total_allocs":7517,"bytes_per_op":4194709,"bytes_remainder":128,"allocs_per_op":7,"allocs_remainder":349}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":107015042,"total_bytes":537212536,"total_allocs":6227,"bytes_per_op":524621,"bytes_remainder":632,"allocs_per_op":6,"allocs_remainder":83}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":290361084,"total_bytes":2147828592,"total_allocs":6216,"bytes_per_op":2097488,"bytes_remainder":880,"allocs_per_op":6,"allocs_remainder":72}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 2
+pair: 1
+procs: 1
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":716852750,"total_bytes":4295319680,"total_allocs":6147,"bytes_per_op":4194648,"bytes_remainder":128,"allocs_per_op":6,"allocs_remainder":3}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":134269833,"total_bytes":537174016,"total_allocs":5120,"bytes_per_op":524584,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1094064250,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.96s)
+PASS
+
+campaign: 2
+pair: 1
+procs: 1
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":730640250,"total_bytes":4295319680,"total_allocs":6147,"bytes_per_op":4194648,"bytes_remainder":128,"allocs_per_op":6,"allocs_remainder":3}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":135937625,"total_bytes":537174016,"total_allocs":5120,"bytes_per_op":524584,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1096841042,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.98s)
+PASS
+
+campaign: 2
+pair: 2
+procs: 12
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":283251625,"total_bytes":4295391448,"total_allocs":7554,"bytes_per_op":4194718,"bytes_remainder":216,"allocs_per_op":7,"allocs_remainder":386}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":103312792,"total_bytes":537204016,"total_allocs":6193,"bytes_per_op":524613,"bytes_remainder":304,"allocs_per_op":6,"allocs_remainder":49}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":294998292,"total_bytes":2147830144,"total_allocs":6233,"bytes_per_op":2097490,"bytes_remainder":384,"allocs_per_op":6,"allocs_remainder":89}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 2
+pair: 2
+procs: 12
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":283249292,"total_bytes":4295385320,"total_allocs":7501,"bytes_per_op":4194712,"bytes_remainder":232,"allocs_per_op":7,"allocs_remainder":333}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":102842916,"total_bytes":537203904,"total_allocs":6192,"bytes_per_op":524613,"bytes_remainder":192,"allocs_per_op":6,"allocs_remainder":48}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":300063750,"total_bytes":2147824296,"total_allocs":6220,"bytes_per_op":2097484,"bytes_remainder":680,"allocs_per_op":6,"allocs_remainder":76}
+--- PASS: TestCPUControlAllocationDiagnostics (0.70s)
+PASS
+
+campaign: 2
+pair: 2
+procs: 1
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":720097292,"total_bytes":4295319632,"total_allocs":6146,"bytes_per_op":4194648,"bytes_remainder":80,"allocs_per_op":6,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":132109500,"total_bytes":537174016,"total_allocs":5120,"bytes_per_op":524584,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1090553083,"total_bytes":2147786800,"total_allocs":5121,"bytes_per_op":2097448,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+--- PASS: TestCPUControlAllocationDiagnostics (1.96s)
+PASS
+
+campaign: 2
+pair: 2
+procs: 1
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":712184625,"total_bytes":4295319680,"total_allocs":6147,"bytes_per_op":4194648,"bytes_remainder":128,"allocs_per_op":6,"allocs_remainder":3}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":128957167,"total_bytes":537174016,"total_allocs":5120,"bytes_per_op":524584,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1098673459,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.95s)
+PASS
+
+campaign: 2
+pair: 3
+procs: 12
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":282904750,"total_bytes":4295395768,"total_allocs":7511,"bytes_per_op":4194722,"bytes_remainder":440,"allocs_per_op":7,"allocs_remainder":343}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":105125583,"total_bytes":537203344,"total_allocs":6189,"bytes_per_op":524612,"bytes_remainder":656,"allocs_per_op":6,"allocs_remainder":45}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":294438209,"total_bytes":2147822752,"total_allocs":6246,"bytes_per_op":2097483,"bytes_remainder":160,"allocs_per_op":6,"allocs_remainder":102}
+--- PASS: TestCPUControlAllocationDiagnostics (0.70s)
+PASS
+
+campaign: 2
+pair: 3
+procs: 12
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":281630500,"total_bytes":4295382208,"total_allocs":7517,"bytes_per_op":4194709,"bytes_remainder":192,"allocs_per_op":7,"allocs_remainder":349}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":102964666,"total_bytes":537210792,"total_allocs":6212,"bytes_per_op":524619,"bytes_remainder":936,"allocs_per_op":6,"allocs_remainder":68}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":290325500,"total_bytes":2147830480,"total_allocs":6232,"bytes_per_op":2097490,"bytes_remainder":720,"allocs_per_op":6,"allocs_remainder":88}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 2
+pair: 3
+procs: 1
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":710497917,"total_bytes":4295319632,"total_allocs":6146,"bytes_per_op":4194648,"bytes_remainder":80,"allocs_per_op":6,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":132065708,"total_bytes":537174064,"total_allocs":5121,"bytes_per_op":524584,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1101547417,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.96s)
+PASS
+
+campaign: 2
+pair: 3
+procs: 1
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":712229166,"total_bytes":4295319632,"total_allocs":6146,"bytes_per_op":4194648,"bytes_remainder":80,"allocs_per_op":6,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":129303542,"total_bytes":537174064,"total_allocs":5121,"bytes_per_op":524584,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1099594083,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.95s)
+PASS
+
+campaign: 2
+pair: 4
+procs: 12
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":278508292,"total_bytes":4295382488,"total_allocs":7478,"bytes_per_op":4194709,"bytes_remainder":472,"allocs_per_op":7,"allocs_remainder":310}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":105669000,"total_bytes":537205024,"total_allocs":6202,"bytes_per_op":524614,"bytes_remainder":288,"allocs_per_op":6,"allocs_remainder":58}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":287843084,"total_bytes":2147826056,"total_allocs":6234,"bytes_per_op":2097486,"bytes_remainder":392,"allocs_per_op":6,"allocs_remainder":90}
+--- PASS: TestCPUControlAllocationDiagnostics (0.68s)
+PASS
+
+campaign: 2
+pair: 4
+procs: 12
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":278160791,"total_bytes":4295382520,"total_allocs":7396,"bytes_per_op":4194709,"bytes_remainder":504,"allocs_per_op":7,"allocs_remainder":228}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":102950958,"total_bytes":537202848,"total_allocs":6182,"bytes_per_op":524612,"bytes_remainder":160,"allocs_per_op":6,"allocs_remainder":38}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":289014292,"total_bytes":2147817488,"total_allocs":6199,"bytes_per_op":2097478,"bytes_remainder":16,"allocs_per_op":6,"allocs_remainder":55}
+--- PASS: TestCPUControlAllocationDiagnostics (0.68s)
+PASS
+
+campaign: 2
+pair: 4
+procs: 1
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":717306958,"total_bytes":4295319584,"total_allocs":6145,"bytes_per_op":4194648,"bytes_remainder":32,"allocs_per_op":6,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":129626625,"total_bytes":537174064,"total_allocs":5121,"bytes_per_op":524584,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1099443208,"total_bytes":2147786800,"total_allocs":5121,"bytes_per_op":2097448,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+--- PASS: TestCPUControlAllocationDiagnostics (1.96s)
+PASS
+
+campaign: 2
+pair: 4
+procs: 1
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":724691917,"total_bytes":4295319632,"total_allocs":6146,"bytes_per_op":4194648,"bytes_remainder":80,"allocs_per_op":6,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":132200541,"total_bytes":537174064,"total_allocs":5121,"bytes_per_op":524584,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1100214083,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.97s)
+PASS
+
+campaign: 2
+pair: 5
+procs: 12
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":268086583,"total_bytes":4295381416,"total_allocs":7386,"bytes_per_op":4194708,"bytes_remainder":424,"allocs_per_op":7,"allocs_remainder":218}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":110346500,"total_bytes":537204976,"total_allocs":6201,"bytes_per_op":524614,"bytes_remainder":240,"allocs_per_op":6,"allocs_remainder":57}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":290361584,"total_bytes":2147816032,"total_allocs":6186,"bytes_per_op":2097476,"bytes_remainder":608,"allocs_per_op":6,"allocs_remainder":42}
+--- PASS: TestCPUControlAllocationDiagnostics (0.68s)
+PASS
+
+campaign: 2
+pair: 5
+procs: 12
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":288254834,"total_bytes":4295392856,"total_allocs":7489,"bytes_per_op":4194719,"bytes_remainder":600,"allocs_per_op":7,"allocs_remainder":321}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":102134292,"total_bytes":537202512,"total_allocs":6179,"bytes_per_op":524611,"bytes_remainder":848,"allocs_per_op":6,"allocs_remainder":35}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":314280167,"total_bytes":2147819056,"total_allocs":6213,"bytes_per_op":2097479,"bytes_remainder":560,"allocs_per_op":6,"allocs_remainder":69}
+--- PASS: TestCPUControlAllocationDiagnostics (0.72s)
+PASS
+
+campaign: 2
+pair: 5
+procs: 1
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":718239875,"total_bytes":4295319680,"total_allocs":6147,"bytes_per_op":4194648,"bytes_remainder":128,"allocs_per_op":6,"allocs_remainder":3}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":129926708,"total_bytes":537174016,"total_allocs":5120,"bytes_per_op":524584,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1094244042,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.96s)
+PASS
+
+campaign: 2
+pair: 5
+procs: 1
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":718271791,"total_bytes":4295319632,"total_allocs":6146,"bytes_per_op":4194648,"bytes_remainder":80,"allocs_per_op":6,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":133872208,"total_bytes":537174064,"total_allocs":5121,"bytes_per_op":524584,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1098834917,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.96s)
+PASS
+
+campaign: 2
+pair: 6
+procs: 12
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":276494708,"total_bytes":4295378360,"total_allocs":7359,"bytes_per_op":4194705,"bytes_remainder":440,"allocs_per_op":7,"allocs_remainder":191}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":103263917,"total_bytes":537204016,"total_allocs":6193,"bytes_per_op":524613,"bytes_remainder":304,"allocs_per_op":6,"allocs_remainder":49}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":295620083,"total_bytes":2147818944,"total_allocs":6212,"bytes_per_op":2097479,"bytes_remainder":448,"allocs_per_op":6,"allocs_remainder":68}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 2
+pair: 6
+procs: 12
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":282695667,"total_bytes":4295384496,"total_allocs":7538,"bytes_per_op":4194711,"bytes_remainder":432,"allocs_per_op":7,"allocs_remainder":370}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":102544416,"total_bytes":537204416,"total_allocs":6196,"bytes_per_op":524613,"bytes_remainder":704,"allocs_per_op":6,"allocs_remainder":52}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":346416625,"total_bytes":2147829864,"total_allocs":6185,"bytes_per_op":2097490,"bytes_remainder":104,"allocs_per_op":6,"allocs_remainder":41}
+--- PASS: TestCPUControlAllocationDiagnostics (0.74s)
+PASS
+
+campaign: 2
+pair: 6
+procs: 1
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":725040458,"total_bytes":4295319632,"total_allocs":6146,"bytes_per_op":4194648,"bytes_remainder":80,"allocs_per_op":6,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":135145125,"total_bytes":537174064,"total_allocs":5121,"bytes_per_op":524584,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1125548209,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (2.00s)
+PASS
+
+campaign: 2
+pair: 6
+procs: 1
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":718662500,"total_bytes":4295319680,"total_allocs":6147,"bytes_per_op":4194648,"bytes_remainder":128,"allocs_per_op":6,"allocs_remainder":3}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":132296375,"total_bytes":537174016,"total_allocs":5120,"bytes_per_op":524584,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1099409500,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.96s)
+PASS
+
+campaign: 2
+pair: 7
+procs: 12
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":276361208,"total_bytes":4295374048,"total_allocs":7361,"bytes_per_op":4194701,"bytes_remainder":224,"allocs_per_op":7,"allocs_remainder":193}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":102743958,"total_bytes":537200288,"total_allocs":6160,"bytes_per_op":524609,"bytes_remainder":672,"allocs_per_op":6,"allocs_remainder":16}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":289868875,"total_bytes":2147824488,"total_allocs":6220,"bytes_per_op":2097484,"bytes_remainder":872,"allocs_per_op":6,"allocs_remainder":76}
+--- PASS: TestCPUControlAllocationDiagnostics (0.68s)
+PASS
+
+campaign: 2
+pair: 7
+procs: 12
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":277785375,"total_bytes":4295376208,"total_allocs":7381,"bytes_per_op":4194703,"bytes_remainder":336,"allocs_per_op":7,"allocs_remainder":213}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":103043292,"total_bytes":537200608,"total_allocs":6162,"bytes_per_op":524609,"bytes_remainder":992,"allocs_per_op":6,"allocs_remainder":18}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":286074333,"total_bytes":2147825720,"total_allocs":6231,"bytes_per_op":2097486,"bytes_remainder":56,"allocs_per_op":6,"allocs_remainder":87}
+--- PASS: TestCPUControlAllocationDiagnostics (0.68s)
+PASS
+
+campaign: 2
+pair: 7
+procs: 1
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":721590834,"total_bytes":4295319632,"total_allocs":6146,"bytes_per_op":4194648,"bytes_remainder":80,"allocs_per_op":6,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":134364334,"total_bytes":537174064,"total_allocs":5121,"bytes_per_op":524584,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1097159917,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.97s)
+PASS
+
+campaign: 2
+pair: 7
+procs: 1
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":721683333,"total_bytes":4295319632,"total_allocs":6146,"bytes_per_op":4194648,"bytes_remainder":80,"allocs_per_op":6,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":130563500,"total_bytes":537174016,"total_allocs":5120,"bytes_per_op":524584,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1097908375,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.96s)
+PASS
+
+campaign: 3
+pair: 1
+procs: 1
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":718257375,"total_bytes":4295319584,"total_allocs":6145,"bytes_per_op":4194648,"bytes_remainder":32,"allocs_per_op":6,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":129175750,"total_bytes":537174016,"total_allocs":5120,"bytes_per_op":524584,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1093181208,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.95s)
+PASS
+
+campaign: 3
+pair: 1
+procs: 1
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":722493000,"total_bytes":4295319584,"total_allocs":6145,"bytes_per_op":4194648,"bytes_remainder":32,"allocs_per_op":6,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":133437417,"total_bytes":537174016,"total_allocs":5120,"bytes_per_op":524584,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1103604292,"total_bytes":2147786800,"total_allocs":5121,"bytes_per_op":2097448,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+--- PASS: TestCPUControlAllocationDiagnostics (1.97s)
+PASS
+
+campaign: 3
+pair: 1
+procs: 12
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":280844417,"total_bytes":4295389560,"total_allocs":7537,"bytes_per_op":4194716,"bytes_remainder":376,"allocs_per_op":7,"allocs_remainder":369}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":103588459,"total_bytes":537205184,"total_allocs":6206,"bytes_per_op":524614,"bytes_remainder":448,"allocs_per_op":6,"allocs_remainder":62}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":290169000,"total_bytes":2147826240,"total_allocs":6195,"bytes_per_op":2097486,"bytes_remainder":576,"allocs_per_op":6,"allocs_remainder":51}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 3
+pair: 1
+procs: 12
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":275084750,"total_bytes":4295384360,"total_allocs":7494,"bytes_per_op":4194711,"bytes_remainder":296,"allocs_per_op":7,"allocs_remainder":326}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":108219250,"total_bytes":537205920,"total_allocs":6210,"bytes_per_op":524615,"bytes_remainder":160,"allocs_per_op":6,"allocs_remainder":66}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":296167625,"total_bytes":2147826912,"total_allocs":6201,"bytes_per_op":2097487,"bytes_remainder":224,"allocs_per_op":6,"allocs_remainder":57}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 3
+pair: 2
+procs: 1
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":715885042,"total_bytes":4295319632,"total_allocs":6146,"bytes_per_op":4194648,"bytes_remainder":80,"allocs_per_op":6,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":132929708,"total_bytes":537174064,"total_allocs":5121,"bytes_per_op":524584,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1097198958,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.96s)
+PASS
+
+campaign: 3
+pair: 2
+procs: 1
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":716373875,"total_bytes":4295319680,"total_allocs":6147,"bytes_per_op":4194648,"bytes_remainder":128,"allocs_per_op":6,"allocs_remainder":3}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":135672917,"total_bytes":537174016,"total_allocs":5120,"bytes_per_op":524584,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1102361875,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.97s)
+PASS
+
+campaign: 3
+pair: 2
+procs: 12
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":281600041,"total_bytes":4295391496,"total_allocs":7555,"bytes_per_op":4194718,"bytes_remainder":264,"allocs_per_op":7,"allocs_remainder":387}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":103308541,"total_bytes":537202032,"total_allocs":6177,"bytes_per_op":524611,"bytes_remainder":368,"allocs_per_op":6,"allocs_remainder":33}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":295205750,"total_bytes":2147827168,"total_allocs":6205,"bytes_per_op":2097487,"bytes_remainder":480,"allocs_per_op":6,"allocs_remainder":61}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 3
+pair: 2
+procs: 12
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":283013791,"total_bytes":4295382296,"total_allocs":7476,"bytes_per_op":4194709,"bytes_remainder":280,"allocs_per_op":7,"allocs_remainder":308}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":103971166,"total_bytes":537202736,"total_allocs":6181,"bytes_per_op":524612,"bytes_remainder":48,"allocs_per_op":6,"allocs_remainder":37}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":290927833,"total_bytes":2147829936,"total_allocs":6228,"bytes_per_op":2097490,"bytes_remainder":176,"allocs_per_op":6,"allocs_remainder":84}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 3
+pair: 3
+procs: 1
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":713880958,"total_bytes":4295319680,"total_allocs":6147,"bytes_per_op":4194648,"bytes_remainder":128,"allocs_per_op":6,"allocs_remainder":3}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":128976416,"total_bytes":537174016,"total_allocs":5120,"bytes_per_op":524584,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1100820542,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.96s)
+PASS
+
+campaign: 3
+pair: 3
+procs: 1
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":715670917,"total_bytes":4295319632,"total_allocs":6146,"bytes_per_op":4194648,"bytes_remainder":80,"allocs_per_op":6,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":128897959,"total_bytes":537174064,"total_allocs":5121,"bytes_per_op":524584,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1095324167,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.95s)
+PASS
+
+campaign: 3
+pair: 3
+procs: 12
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":278092250,"total_bytes":4295373856,"total_allocs":7360,"bytes_per_op":4194701,"bytes_remainder":32,"allocs_per_op":7,"allocs_remainder":192}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":108633250,"total_bytes":537203856,"total_allocs":6191,"bytes_per_op":524613,"bytes_remainder":144,"allocs_per_op":6,"allocs_remainder":47}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":289757291,"total_bytes":2147825400,"total_allocs":6229,"bytes_per_op":2097485,"bytes_remainder":760,"allocs_per_op":6,"allocs_remainder":85}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 3
+pair: 3
+procs: 12
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":278499875,"total_bytes":4295395560,"total_allocs":7588,"bytes_per_op":4194722,"bytes_remainder":232,"allocs_per_op":7,"allocs_remainder":420}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":102566042,"total_bytes":537204336,"total_allocs":6200,"bytes_per_op":524613,"bytes_remainder":624,"allocs_per_op":6,"allocs_remainder":56}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":295094375,"total_bytes":2147827184,"total_allocs":6206,"bytes_per_op":2097487,"bytes_remainder":496,"allocs_per_op":6,"allocs_remainder":62}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 3
+pair: 4
+procs: 1
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":713842125,"total_bytes":4295319632,"total_allocs":6146,"bytes_per_op":4194648,"bytes_remainder":80,"allocs_per_op":6,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":131360209,"total_bytes":537174016,"total_allocs":5120,"bytes_per_op":524584,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1100203500,"total_bytes":2147786800,"total_allocs":5121,"bytes_per_op":2097448,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+--- PASS: TestCPUControlAllocationDiagnostics (1.96s)
+PASS
+
+campaign: 3
+pair: 4
+procs: 1
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":723658167,"total_bytes":4295319632,"total_allocs":6146,"bytes_per_op":4194648,"bytes_remainder":80,"allocs_per_op":6,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":132669833,"total_bytes":537174064,"total_allocs":5121,"bytes_per_op":524584,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1099486584,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.97s)
+PASS
+
+campaign: 3
+pair: 4
+procs: 12
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":277733375,"total_bytes":4295388744,"total_allocs":7533,"bytes_per_op":4194715,"bytes_remainder":584,"allocs_per_op":7,"allocs_remainder":365}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":105758834,"total_bytes":537204800,"total_allocs":6200,"bytes_per_op":524614,"bytes_remainder":64,"allocs_per_op":6,"allocs_remainder":56}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":295054000,"total_bytes":2147821800,"total_allocs":6196,"bytes_per_op":2097482,"bytes_remainder":232,"allocs_per_op":6,"allocs_remainder":52}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 3
+pair: 4
+procs: 12
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":282368708,"total_bytes":4295385552,"total_allocs":7545,"bytes_per_op":4194712,"bytes_remainder":464,"allocs_per_op":7,"allocs_remainder":377}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":102983500,"total_bytes":537204416,"total_allocs":6196,"bytes_per_op":524613,"bytes_remainder":704,"allocs_per_op":6,"allocs_remainder":52}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":295376375,"total_bytes":2147834504,"total_allocs":6229,"bytes_per_op":2097494,"bytes_remainder":648,"allocs_per_op":6,"allocs_remainder":85}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 3
+pair: 5
+procs: 1
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":721014875,"total_bytes":4295319584,"total_allocs":6145,"bytes_per_op":4194648,"bytes_remainder":32,"allocs_per_op":6,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":131289959,"total_bytes":537174112,"total_allocs":5122,"bytes_per_op":524584,"bytes_remainder":96,"allocs_per_op":5,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1092378208,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.96s)
+PASS
+
+campaign: 3
+pair: 5
+procs: 1
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":719803916,"total_bytes":4295319632,"total_allocs":6146,"bytes_per_op":4194648,"bytes_remainder":80,"allocs_per_op":6,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":133414792,"total_bytes":537174064,"total_allocs":5121,"bytes_per_op":524584,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1098417375,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.96s)
+PASS
+
+campaign: 3
+pair: 5
+procs: 12
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":278582584,"total_bytes":4295389976,"total_allocs":7542,"bytes_per_op":4194716,"bytes_remainder":792,"allocs_per_op":7,"allocs_remainder":374}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":104065042,"total_bytes":537200992,"total_allocs":6168,"bytes_per_op":524610,"bytes_remainder":352,"allocs_per_op":6,"allocs_remainder":24}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":297308667,"total_bytes":2147826480,"total_allocs":6198,"bytes_per_op":2097486,"bytes_remainder":816,"allocs_per_op":6,"allocs_remainder":54}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 3
+pair: 5
+procs: 12
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":282202959,"total_bytes":4295385312,"total_allocs":7544,"bytes_per_op":4194712,"bytes_remainder":224,"allocs_per_op":7,"allocs_remainder":376}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":101912000,"total_bytes":537203680,"total_allocs":6190,"bytes_per_op":524612,"bytes_remainder":992,"allocs_per_op":6,"allocs_remainder":46}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":288941333,"total_bytes":2147833560,"total_allocs":6218,"bytes_per_op":2097493,"bytes_remainder":728,"allocs_per_op":6,"allocs_remainder":74}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 3
+pair: 6
+procs: 1
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":722087833,"total_bytes":4295319632,"total_allocs":6146,"bytes_per_op":4194648,"bytes_remainder":80,"allocs_per_op":6,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":136335167,"total_bytes":537174016,"total_allocs":5120,"bytes_per_op":524584,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1096589833,"total_bytes":2147786800,"total_allocs":5121,"bytes_per_op":2097448,"bytes_remainder":48,"allocs_per_op":5,"allocs_remainder":1}
+--- PASS: TestCPUControlAllocationDiagnostics (1.97s)
+PASS
+
+campaign: 3
+pair: 6
+procs: 1
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":725707792,"total_bytes":4295319680,"total_allocs":6147,"bytes_per_op":4194648,"bytes_remainder":128,"allocs_per_op":6,"allocs_remainder":3}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":130606750,"total_bytes":537174016,"total_allocs":5120,"bytes_per_op":524584,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1096389958,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.97s)
+PASS
+
+campaign: 3
+pair: 6
+procs: 12
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":285000833,"total_bytes":4295389320,"total_allocs":7537,"bytes_per_op":4194716,"bytes_remainder":136,"allocs_per_op":7,"allocs_remainder":369}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":103081875,"total_bytes":537203760,"total_allocs":6191,"bytes_per_op":524613,"bytes_remainder":48,"allocs_per_op":6,"allocs_remainder":47}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":288140833,"total_bytes":2147826832,"total_allocs":6202,"bytes_per_op":2097487,"bytes_remainder":144,"allocs_per_op":6,"allocs_remainder":58}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 3
+pair: 6
+procs: 12
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":275498917,"total_bytes":4295383936,"total_allocs":7450,"bytes_per_op":4194710,"bytes_remainder":896,"allocs_per_op":7,"allocs_remainder":282}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":107997583,"total_bytes":537199600,"total_allocs":6153,"bytes_per_op":524608,"bytes_remainder":1008,"allocs_per_op":6,"allocs_remainder":9}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":286535667,"total_bytes":2147823368,"total_allocs":6210,"bytes_per_op":2097483,"bytes_remainder":776,"allocs_per_op":6,"allocs_remainder":66}
+--- PASS: TestCPUControlAllocationDiagnostics (0.68s)
+PASS
+
+campaign: 3
+pair: 7
+procs: 1
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":718725458,"total_bytes":4295319680,"total_allocs":6147,"bytes_per_op":4194648,"bytes_remainder":128,"allocs_per_op":6,"allocs_remainder":3}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":133184917,"total_bytes":537174016,"total_allocs":5120,"bytes_per_op":524584,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1108059625,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.97s)
+PASS
+
+campaign: 3
+pair: 7
+procs: 1
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":1,"n":1024,"total_ns":711240250,"total_bytes":4295319632,"total_allocs":6146,"bytes_per_op":4194648,"bytes_remainder":80,"allocs_per_op":6,"allocs_remainder":2}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":1,"n":1024,"total_ns":129301500,"total_bytes":537174016,"total_allocs":5120,"bytes_per_op":524584,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":1,"n":1024,"total_ns":1095015500,"total_bytes":2147786752,"total_allocs":5120,"bytes_per_op":2097448,"bytes_remainder":0,"allocs_per_op":5,"allocs_remainder":0}
+--- PASS: TestCPUControlAllocationDiagnostics (1.95s)
+PASS
+
+campaign: 3
+pair: 7
+procs: 12
+arm: A
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":275244458,"total_bytes":4295378672,"total_allocs":7403,"bytes_per_op":4194705,"bytes_remainder":752,"allocs_per_op":7,"allocs_remainder":235}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":102309875,"total_bytes":537203072,"total_allocs":6184,"bytes_per_op":524612,"bytes_remainder":384,"allocs_per_op":6,"allocs_remainder":40}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":301993958,"total_bytes":2147815024,"total_allocs":6177,"bytes_per_op":2097475,"bytes_remainder":624,"allocs_per_op":6,"allocs_remainder":33}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
+
+campaign: 3
+pair: 7
+procs: 12
+arm: B
+binary-sha256: fae91467979d5f46c26bdaa82f93d41ec6ae5b763b79eee8eac6d51b6e107eec
+=== RUN   TestCPUControlAllocationDiagnostics
+allocdiag: {"benchmark":"BenchmarkSiLUBackwardF64_256K_cpu","procs":12,"n":1024,"total_ns":278948583,"total_bytes":4295387664,"total_allocs":7481,"bytes_per_op":4194714,"bytes_remainder":528,"allocs_per_op":7,"allocs_remainder":313}
+allocdiag: {"benchmark":"BenchmarkSigmoidF64_64K_cpu","procs":12,"n":1024,"total_ns":103916666,"total_bytes":537202464,"total_allocs":6180,"bytes_per_op":524611,"bytes_remainder":800,"allocs_per_op":6,"allocs_remainder":36}
+allocdiag: {"benchmark":"BenchmarkSoftplusF64_256K_cpu","procs":12,"n":1024,"total_ns":295509417,"total_bytes":2147821912,"total_allocs":6197,"bytes_per_op":2097482,"bytes_remainder":344,"allocs_per_op":6,"allocs_remainder":53}
+--- PASS: TestCPUControlAllocationDiagnostics (0.69s)
+PASS
