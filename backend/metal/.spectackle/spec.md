@@ -631,3 +631,6 @@ WHEN TopKNInto is benchmarked on M2 with N 32000 and K 56, the Metal device buff
 
 ## METAL-PREFILL-SHORT-001 {applies: go:metal.TestPrefillOpCosts}
 WHEN testing.Short is true, the TestPrefillOpCosts SHALL execute 1 recorded operation for each of 5 cases, preserve operation-error checks, and assert 0 timing ceilings.
+
+## METAL-MHA-DECODE-SHORT-001-001 {applies: go:metal.TestMHADecodeCost}
+WHEN testing.Short is true, the TestMHADecodeCost SHALL execute 1 recorded MHA operation for each of 4 cases, preserve recorder and operation-error checks, and assert 0 timing ceilings.
