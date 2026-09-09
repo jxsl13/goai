@@ -6,6 +6,9 @@ per-element callback overhead to justify a production change. The exact
 `geluGradF64` expression, its scalar function boundary, existing SIMD route,
 materialization, allocation ownership, and scheduling policy must remain intact.
 No approximation or incumbent-leadership claim is made here.
+The generalizable function-value dispatch opportunity is tracked in
+[perfscan issue #963](https://github.com/jxsl13/perfscan/issues/963), separately
+from the generic interface/dictionary case in issue #905.
 
 ## Initial characterization
 
