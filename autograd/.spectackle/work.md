@@ -47,6 +47,7 @@ MACHINE-PRODUCED LIST, reproducible with internal/perfscan/tools/exactness_sweep
 kind: proposal
 state: draft
 created: 2026-09-09
+grilled: 2026-09-09 open=0
 targets: go:autograd.unaryVJP, go:autograd.reluVJP, go:autograd.tanhVJP, go:autograd.sigmoidVJP
 
 Goal: qualify a compiler-confirmed PS6093 optimization on Apple M2 Pro / darwin arm64 / Go1.27.1 from clean main c6afe9e4ba8b2a46c254953c921cf97ddf4f72c6. Scope is the eight F32/F64 typed Numel-bounded loops of autograd.unaryVJP, reluVJP, tanhVJP, sigmoidVJP in autograd/vjp_elementwise.go. Establish dominating equal-extent slice proofs to remove residual per-element bounds branches without changing arithmetic, callback order, panic/no-panic behavior, allocation policy, dtype fallback, or tensor views. Guarded historical cold paths must preserve short-input and branch-sensitive ReLU behavior; empty tensors never gain a panic. No unsafe indexing, vectorization, new public API, approximate math, backend routing change, or unrelated cleanup. Exp/GELU/SiLU remain backend-dispatched. Selection/Div/Clip/Where and rowwise Softmax are deferred distinct consumers: selection/Div use backing-storage range rather than Numel and require separate view-semantics research; no claim covers all PS6093 sites.
