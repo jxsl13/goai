@@ -171,3 +171,6 @@ Rationale: Retain all raw samples, discarded warmup boundaries, frozen binary ha
 
 ## ARM64-F64-GELU-NUMERIC-001 {applies: go:cpu.vgeluF64~2,go:cpu.geluBackwardF64KernelCPU}
 WHEN ARM64 SIMD evaluates eligible finite F64 GELU forward or backward, the dedicated GELU route SHALL match the exact-erf reference within 1e-12 times max(1,abs(reference)) and preserve bit-identical vector and scalar-tail results for eligible spans.
+
+## ARM64-F64-GELU-SCOPE-001 {applies: go:cpu.geluKernelCPU,go:cpu.geluBackwardF64KernelCPU,go:cpu.vexpF64Fast~2}
+WHEN F64 GELU selects the experimental ARM64 implementation, the CPU backend SHALL use a dedicated GELU capability, keep global vexpF64Fast false, and preserve default, AMD64, F32, reference, and unrelated operation arithmetic.
