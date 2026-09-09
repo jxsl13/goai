@@ -153,7 +153,7 @@ WHEN F32 Abs compiles on arm64 with Go 1.26, the CPU backend SHALL select the Na
 Rationale: Go 1.26 quiets signaling NaNs in the scalar conversion oracle.
 
 ## SCALAR-F64-GELU-DIRECT-SEMANTICS-001 {applies: go:cpu.activationBackwardF64,go:cpu.geluBackwardF64KernelCPU,go:cpu.geluGradF64,go:cpu_test.TestActivationBackwardF64CPUMatchesRef}
-WHEN scalar F64 OpGELUBackward is selected, the scalar F64 GELU backward CPU kernel SHALL preserve all finite and signed-zero reference result bits, NaN and infinity classes, input immutability, existing validation and fallback behavior, and the unchanged geluGradF64 expression with zero per-element function-value dispatch after promotion.
+WHEN scalar F64 GELU backward executes, the CPU backend SHALL preserve finite-result and signed-zero bits, nonfinite classes, validation, reference fallback, and input immutability while retaining the unchanged geluGradF64 expression.
 
 Rationale: R-01M236QP4YEFD and DEVIRTUALIZING-REMOVES-AN-FMA-BARRIER-001 require a one-ulp mutation before specialization; the current ARM64 scalar reference tolerance remains zero and no SIMD capability is enabled.
 
