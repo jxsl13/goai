@@ -280,7 +280,7 @@ func geluKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 			// SIMD perf build: f64-native vectorized GELU — the Cephes erf built on
 			// the architecture's F64 exp primitive, replacing scalar math.Erf, the last
 			// transcendental activation still scalar in F64 (SiLU/Sigmoid/Tanh/Softplus
-			// F64 already vectorized). ~1 ulp, rides the model f64 tolerance. The default
+			// F64 already vectorized). Uses the architecture's explicit numerical policy. The default
 			// build keeps the scalar math.Erf path below, bit-for-bit vs ref.
 			parallel(len(o), func(lo, hi int) { vgeluF64(o[lo:hi], d[lo:hi]) })
 			break

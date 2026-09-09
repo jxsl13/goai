@@ -1,11 +1,14 @@
 # M2 F64 GELU uniform-small follow-up — September 9, 2026
 
-Status: specification and independent plan review; no V2 measurement yet.
+Status: independent plan review passed; implementation in progress. No V2
+measurement yet.
 The rejected [V1 experiment](../m2-f64-gelu-neon-20260909/README.md) and its frozen
 binary remain immutable. This follow-up must pass the same gates; it does not
 waive the small-input regression or claim external-library leadership.
 
 - Parent: `P-01M23BZPZNF9V`; task: `T-01M23JPZT8FDM`.
+- Independent plan reviewer: `m2-gelu-v2-plan-review` (PASS).
+- Shortcut contract: `ARM64-F64-GELU-UNIFORM-SMALL-001`.
 - Original control source: `dd1e779eb085bb621ed5dafff0a4351636b6e656`.
 - Control binary SHA-256:
   `c95691bc1a7289094bc523250fde7a9cae614756635b78701e9c306962b246cb`.
