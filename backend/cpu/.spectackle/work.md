@@ -35,14 +35,6 @@ targets: backend/cpu/gemm_amx_bench_test.go
 
 Add benchmark-only cells for score shapes 128x64x128 and 512x64x512 plus output shapes 128x128x64 and 512x512x64 to the existing ADR-0027 path harness. Measure NEON and Accelerate in alternating count-seven physical-M2 campaigns from one exact binary. Advance to stride-aware binding and full MHA only if Accelerate is at least 1.35x faster in every head GEMM cell, providing margin for per-head cgo calls and causal overcompute; otherwise reject the proposal without production changes.
 
-## R-01M236QP4YEFDABMQ07MC43EHH Establish the M2 F64 GELU vectorization gate after the Go 1.27.1 rebuild
-kind: research
-state: draft
-created: 2026-09-09
-targets: go:cpu.vgeluF64~2, go:cpu.vgeluGradF64~2, go:cpu.vgeluF64, go:cpu.TestVGeluF64Accuracy
-
-Current source137b3355 retains vexpF64Fast=false on ARM64; GELU forward/backward execute scalar math.Erf/Exp while AMD64 has Cephes erfF64x4/expF64x4 plus scalar bit-twins. This is the next remaining composite after merged ARM64 F64 Softplus. Research only: inspect existing numerical contracts, freeze Go1.27.1 ARM64 SIMD CPU benchmark binary, measure existing production F64 GELU forward256x2048 and backward256K at GOMAXPROCS1/12 as an initial baseline. No implementation or speedup claim until a dedicated capability, scalar-tail identity, finite and special-value accuracy, NaN/signedzero semantics, real caller reachability, independently verified interleaved old/new benchmarks and same-semantics incumbent comparison are established. Exact-erf GELU definition per archived ADR0004 remains binding; tanh approximate GELU is not a substitute. The existing ARM64 backward CPU/ref comparison is bit-exact, whereas AMD64 SIMD has an explicit tolerant route: any proposed ARM64 relaxation requires an explicit new measured contract and keeps default exact coverage. Primary local references: pinned Go1.27.1 src/math/erf.go; backend/cpu/vexp_amd64.go erfF64x4, erfF64poly, geluF64poly; backend/cpu/vgelu_f64_internal_test.go; activation_bwd_f64_test.go. This item will be consumed by a bounded implementation proposal or closed with evidence; current PR1247 is separate and remains awaiting finalCI. Report generalizable confirmed gain upstream to perfscan per standing user mandate.
-
 ## P-01M237J19FFE5SYSTMV3442H6H Measure direct-call scalar F64 GELU backward before a wider SIMD redesign
 kind: proposal
 state: active
