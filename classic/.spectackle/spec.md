@@ -69,3 +69,6 @@ WHEN active-set membership is cached, the SVC SMO solver SHALL encode exactly th
 
 ## SVC-SMO-STATUS-CACHE-GATE-001
 WHEN the SVC status-cache candidate is evaluated, the SVC status-cache candidate SHALL be retained only if 7 order-alternated M2 binary pairs show at least 1.03x median end-to-end n4000_rbf speedup, the exact merged-control iteration count remains 79, and allocations per operation do not increase.
+
+## CLASSIC-FIT-SHORT-001 {applies: go:classic.TestClassicFitTimeGuard}
+WHEN TestClassicFitTimeGuard runs in short mode, the test SHALL execute all 5 original model fits and fail on every Fit error, while bypassing only elapsed-time ceilings; full mode retains the original data, model settings, 50/300/800/60/10 ms ceilings and architecture-dependent reporting.
