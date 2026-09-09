@@ -626,3 +626,6 @@ WHEN a freed Metal Recorder is reset, the Metal backend SHALL open exactly 1 fre
 
 ## M2-METAL-TOPKN-INTO-PERF-001
 WHEN TopKNInto is benchmarked on M2 with N 32000 and K 56, the Metal device buffer gate SHALL require 0 B/op, 0 allocs/op, and at least 0.97 times TopKN median throughput.
+
+## METAL-PREFILL-SHORT-001 {applies: go:metal.TestPrefillOpCosts}
+WHEN testing.Short is true, the TestPrefillOpCosts SHALL execute 1 recorded operation for each of 5 cases, preserve operation-error checks, and assert 0 timing ceilings.
