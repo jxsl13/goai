@@ -198,5 +198,5 @@ WHEN ARM64 GELU erf bypasses exp/P/Q, the erfF64x2GELU shortcut SHALL require 2 
 ## CPU-ALLOC-SITE-CAPTURE-001
 WHEN TestCPUControlAllocationSites is enabled, the diagnostic SHALL record exactly 1024 Softplus calls between MemStats boundaries using two fixed 65536-record buffers, with 0 runtime kernel changes.
 
-## CPU-ALLOC-SITE-RAW-001 {applies: backend/cpu/control_alloc_sites_test.go}
+## CPU-ALLOC-SITE-RAW-001
 WHEN allocation-site evidence is serialized, the diagnostic SHALL preserve every raw MemProfileRecord and ordered CallersFrames entry, write pprof after raw post capture, and keep tail counters separate.
