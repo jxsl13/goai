@@ -4,7 +4,8 @@
 - Date: 2026-09-09
 - Research: `R-01M23B9YZ1E16`
 - Proposal: `P-01M23BZPZNF9V`
-- Task: `T-01M23C5EWPE8P`
+- V1 task (rejected): `T-01M23C5EWPE8P`
+- V2 task (qualification): `T-01M23JPZT8FDM`
 - Base: `b9c059464edb4a339073c75ea8037c5472bf9aea`
 
 ## Context
@@ -130,6 +131,9 @@ and boundary pairs retain the complete path. The hypothesis is removal of eager
 unused work, not an assumption that branching is free. Numerical contracts,
 scalar twins, frozen control/harness, and performance gates stay unchanged.
 Any such candidate needs a new source/binary pin and independent verification.
+The minimal V2 shortcut and explicit pair tests are implemented in `361955ac`;
+its [separate qualification record](../../internal/benchcompare/leadership/evidence/m2-f64-gelu-neon-v2-20260909/README.md)
+does not replace or relax V1's rejected result.
 The generalizable opportunity is tracked in
 [perfscan #966](https://github.com/jxsl13/perfscan/issues/966).
 

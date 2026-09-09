@@ -128,9 +128,11 @@ the already-computed small rational when **both** lanes satisfy the existing
 strict `abs(y)<1` predicate. The pinned ARM64 API provides `Mask64x2.ToInt64x2`
 and constant-index `Int64x2.GetElem(0/1)`; it has no `Mask.All` method.
 This idea is tracked as [perfscan #966](https://github.com/jxsl13/perfscan/issues/966).
-It has not yet been implemented or measured. Any follow-up must retain the
-same numerical boundaries, scalar twins, frozen control/harness, and full gates;
-extra branches or altered register allocation can still regress mixed inputs.
+It is implemented in the separately qualified
+[V2 follow-up](../m2-f64-gelu-neon-v2-20260909/README.md), with no V2 performance
+decision yet. The same numerical boundaries, scalar twins, frozen control/harness,
+and full gates remain required; extra branches or altered register allocation
+can still regress mixed inputs. V1's raw measurements and binary are unchanged.
 
 ## Verification record
 

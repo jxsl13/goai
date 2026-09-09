@@ -1,0 +1,8 @@
+Command: ruby V2/analyze.rb V1/paired.txt
+Exit status: 1 (expected; V1 must not be accepted as V2 evidence).
+
+internal/benchcompare/leadership/evidence/m2-f64-gelu-neon-v2-20260909/analyze.rb:66:in `parse': Frozen binary SHA mismatch (RuntimeError)
+	from internal/benchcompare/leadership/evidence/m2-f64-gelu-neon-v2-20260909/analyze.rb:93:in `block in <main>'
+	from internal/benchcompare/leadership/evidence/m2-f64-gelu-neon-v2-20260909/analyze.rb:92:in `each'
+	from internal/benchcompare/leadership/evidence/m2-f64-gelu-neon-v2-20260909/analyze.rb:92:in `each_with_index'
+	from internal/benchcompare/leadership/evidence/m2-f64-gelu-neon-v2-20260909/analyze.rb:92:in `<main>'
