@@ -797,3 +797,8 @@ Rationale: One declared compiler generation prevents local, documentation, and C
 WHEN the minimum Go toolchain changes, the GoAI SHALL cross-build the full Linux AMD64 tree with GOEXPERIMENT=simd and execute 1 internal/simd CI test suite before archive.
 
 Rationale: Darwin ARM64 cannot compile AMD64-only experimental archsimd calls, whose API is outside the Go 1 compatibility promise.
+
+## PUBLIC-GIT-ARTIFACTS-001
+The GoAI public Git publication SHALL include code and small sanitized test data, with 0 private documents, books, compiler binaries, or large local evidence bundles in outgoing history.
+
+Rationale: User boundary clarified 2026-09-11. Full captures remain local. Publish concise authored summaries, small measurement fixtures and verifiers, and exclude unpublished full-evidence commits from public ancestry. This supersedes the qualification task full-public-archive requirement, not correctness or performance gates. The clean merged-state archival branch avoids replay of a retired private-local anchor; the affected local state is preserved and Spectackle issue288 records the defect.
