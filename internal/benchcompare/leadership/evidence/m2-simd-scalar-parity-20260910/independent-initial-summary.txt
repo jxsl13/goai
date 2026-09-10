@@ -1,0 +1,85 @@
+INITIAL VERIFICATION SUMMARY — NOT RAW OR COMPLETE COMMAND OUTPUT.
+This retained file is a human-written first-pass summary only. It must not be
+used as raw-command evidence; verbatim rerun artifacts will be captured under
+capture-raw/ after the root grants the heavy-Go window.
+
+Independent verification at revision c3b4d1f1 in repo worktree.
+Pinned command prefix for every Go command:
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local
+
+gofmt -w autograd/vjp_sigmoid_focal_test.go autograd/wkv_test.go autograd/simd_scalar_policy_arm64_test.go autograd/simd_scalar_policy_default_test.go autograd/simd_scalar_policy_test.go
+exit 0
+
+CGO_ENABLED=0 GOEXPERIMENT='' go test ./autograd -short -count=1
+ok  github.com/jxsl13/goai/autograd  2.714s
+exit 0
+
+CGO_ENABLED=0 GOEXPERIMENT=simd go test ./autograd -short -count=1
+ok  github.com/jxsl13/goai/autograd  1.845s
+exit 0
+
+CGO_ENABLED=1 GOEXPERIMENT='' go test ./autograd -short -count=1
+ok  github.com/jxsl13/goai/autograd  1.933s
+exit 0
+
+CGO_ENABLED=1 GOEXPERIMENT='' go test -race ./autograd -run '^(TestUnaryVJPBoundsExact|TestF64ScalarPolicyEqual|TestSigmoidFocalCoreExactCompositeVJPParity|TestWKVOpMatchesHostWKV)$' -count=1
+ok  github.com/jxsl13/goai/autograd  3.445s
+exit 0
+
+CGO_ENABLED=0 GOEXPERIMENT=simd go test ./backend/cpu -run '^(TestVsoftplusF64Arm64Accuracy|TestSoftplusGradF64Arm64Accuracy|TestSoftplusGradF64Arm64VectorTailBitIdentity|TestSoftplusGradF64Arm64Edges|TestSoftplusBackwardF64Arm64MatchesRef|TestSigmoidFocalCPUReferenceParity)$' -count=1
+ok  github.com/jxsl13/goai/backend/cpu  0.479s
+exit 0
+
+CGO_ENABLED=0 GOEXPERIMENT=simd go test ./internal/simd -run '^TestWKV' -count=1
+ok  github.com/jxsl13/goai/internal/simd  0.341s
+exit 0
+
+Mutation 1 exact diff:
+@@ func f64ScalarPolicyEqual(got, want, floor, tolerance float64) bool {
++       return true // verification mutation: helper test must reject this.
++       /*
+        if math.Float64bits(got) == math.Float64bits(want) {
+@@
+        return math.Abs(got-want)/math.Max(floor, math.Abs(want)) <= tolerance
++       */
+ }
+CGO_ENABLED=0 GOEXPERIMENT=simd go test ./autograd -run '^TestF64ScalarPolicyEqual$' -count=1
+exit 1
+FAIL: TestF64ScalarPolicyEqual; rejecting cases reached included opposite-zero-signs, different-nan-payload, nan-finite, opposite-infinities, positive-infinity-finite, focal-outside, focal-negative-outside, focal-relative-outside, wkv-floor-outside, wkv-negative-floor-outside, and wkv-relative-outside. Restored by exact reverse patch.
+
+Mutation 2 exact diff:
+@@ for i, v := range got.Storage().F64() {
+        w := want.Storage().F64()[i]
++       v += 2 // verification mutation: must exceed the focal policy bound.
+        if !f64ScalarPolicyEqual(v, w, 1, 1e-13) {
+CGO_ENABLED=0 GOEXPERIMENT=simd go test ./autograd -run '^TestSigmoidFocalCoreExactCompositeVJPParity$' -count=1
+exit 1
+FAIL: TestSigmoidFocalCoreExactCompositeVJPParity/f64 element 0: got 2.7347619234485592 (4005e0cadbfc7600) want 0.73476192344855906 (3fe7832b6ff1d7ff), scaled error 2
+FAIL: TestSigmoidFocalCoreExactCompositeVJPParity/f64#01 element 0: got 2.1195479184115018 (4000f4d589ff0ee7) want 0.11954791841150167 (3fbe9ab13fe1dcd6), scaled error 2
+Restored by exact reverse patch.
+
+Mutation 3 exact diff:
+@@
+        v, w := out[0].AtF64(idx...), want.AtF64(idx...)
+        if arm64SIMDScalarPolicy {
++               v += 2 // verification mutation: must exceed the WKV policy bound.
+                if !f64ScalarPolicyEqual(v, w, 1e-6, 1e-10) {
+CGO_ENABLED=0 GOEXPERIMENT=simd go test ./autograd -run '^TestWKVOpMatchesHostWKV$' -count=1
+exit 1
+FAIL: TestWKVOpMatchesHostWKV diverges at [0 0]: got 2.5202485921300424 (400429781807e89a) want 0.52024859213004215 (3fe0a5e0601fa266), scaled error 3.8443160255589444
+Restored by exact reverse patch.
+
+Post-restore:
+CGO_ENABLED=0 GOEXPERIMENT=simd go test ./autograd -short -count=1
+ok  github.com/jxsl13/goai/autograd  1.655s
+exit 0
+git diff --check 4ad981bf..HEAD
+exit 0
+git diff --exit-code -- autograd/vjp_sigmoid_focal_test.go autograd/wkv_test.go autograd/simd_scalar_policy_arm64_test.go autograd/simd_scalar_policy_default_test.go autograd/simd_scalar_policy_test.go
+exit 0
+git status --short
+exit 0; output empty
+
+Hashes:
+07adbf223e44d862d5f9e3e38a743eff54def329280bb8b76aa0ffe3f9b62945  autograd/vjp_elementwise.go
+bd26d0195b02e23aa1406f01f7df25fff5aa65ea81fea0c3bae9f31d3359648c  autograd/vjp_bounds_internal_test.go

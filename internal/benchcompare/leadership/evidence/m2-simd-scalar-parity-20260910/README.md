@@ -1,7 +1,8 @@
 # ARM64 SIMD scalar-parity test correction
 
-Status: test-only implementation passes root verification; fresh independent
-verification is pending. No runtime change, timing measurement, or speedup claim.
+Status: test-only implementation passes root and fresh independent verification.
+Final exact-head CI remains the merge gate. No runtime change, timing measurement,
+or speedup claim.
 
 ## Baseline and scope
 
@@ -40,7 +41,8 @@ Pinned official Go1.27.1, darwin/arm64 Apple M2 Pro. Commands, combined raw
 outputs and process exits are retained in `root-gates.txt`. Go work was
 serialized. The initially delegated implementation worker exhausted its quota
 before editing files; root implemented the declared five-file scope locally.
-Independent verification is a separate pending gate, not implied by root tests.
+Independent verification was performed in a fresh isolated worktree; it is not
+inferred from the root tests.
 
 Passing commands include full short autograd under default CGO0, SIMD CGO0 and
 default CGO1; focused default CGO1 race including the historical unary oracle;
@@ -70,11 +72,37 @@ The independently rejected eight-loop BCE candidate remains inert evidence,
 not runtime. In particular, this test policy does not permit NaN normalization
 or tolerance in the historical unary VJP oracle.
 
-## Remaining gates
+## Independent verification and final local gates
 
-Fresh independent diff/source review and VERIFY reruns, pinned Spectackle
-check/anchor refresh, canonical perfscan check, and final exact-head CI audit
-are still required. CI's soft SIMD lane builds the tree and tests internal/simd,
+The first independent report summarized some failing output. It is retained as
+`independent-initial-summary.txt`, explicitly not raw or complete evidence.
+The verifier then reran every declared command and all three compiling mutation
+probes with direct stdout/stderr capture and separate process-exit files.
+All normal and restored-suite exits are 0; the three mutations exit 1 at the
+intended assertions. The independent corruption is +2 at each actual comparator,
+separate from the root's +1 tensor-output corruptions. The restored tree is clean.
+
+`independent-capture.json` preserves 30 complete UTF-8 artifact values: command
+manifest, raw outputs, exact exits and captured unified mutation diffs. Decode a
+value without adding a newline (for example with `jq -j`) to recover its bytes.
+The scratch directory's stale preparatory README is not execution evidence and
+is deliberately excluded. Source/runtime/oracle bytes remain unchanged.
+
+The canonical `make perfscan-check` passes with direct fetching of pinned
+github.com/jxsl13/perfscan@v1.81.0: 53 compatibility checks, zero findings in its
+focused scan and passing fixtures. This is not a clean whole-tree scanner claim.
+The first attempt failed with sandbox DNS denial and a misleading registry-diff
+message; the complete failure is retained separately from the successful retry.
+
+Pinned reindex reports 6715 typed call edges with zero skipped packages. The
+Spectackle check retains 136 inherited warnings and two inherited record-only
+context errors; it heals four intentional policy anchors. Explicit rule refresh
+also updates their line spans. There is no new source/type error. Whole tracked
+Go formatting is clean; the final markdown/API tests pass. The relevant commands
+and outputs are in the numbered evidence files.
+
+Final exact-head CI still must be audited. CI's soft SIMD lane builds the tree
+and tests internal/simd,
 not autograd, so its success cannot replace the local full SIMD autograd gate.
 Merge commit only after qualification; delete exact remote feature branches
 only after the result reaches default main.
