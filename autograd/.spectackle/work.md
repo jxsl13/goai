@@ -45,7 +45,7 @@ MACHINE-PRODUCED LIST, reproducible with internal/perfscan/tools/exactness_sweep
 
 ## P-01M2643W3SF7Q8V4ESYVQ2YZD9 Qualify architecture-isolated six-loop VJP bounds proofs on M2
 kind: proposal
-state: draft
+state: active
 created: 2026-09-10
 refs: R-01M25XNPFEEP58GC32DVNHVB9Q
 grilled: 2026-09-10 open=1
