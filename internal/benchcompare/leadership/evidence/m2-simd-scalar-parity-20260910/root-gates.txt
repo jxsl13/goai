@@ -1,0 +1,192 @@
+## 01-default-autograd
+COMMAND: PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT='' go test ./autograd -short -count=1
+STDOUT+STDERR:
+ok  	github.com/jxsl13/goai/autograd	2.246s
+EXIT: 0
+
+## 02-simd-autograd
+COMMAND: PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd go test ./autograd -short -count=1
+STDOUT+STDERR:
+ok  	github.com/jxsl13/goai/autograd	1.892s
+EXIT: 0
+
+## 03-cgo-autograd
+COMMAND: PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 CGO_ENABLED=1 GOEXPERIMENT='' go test ./autograd -short -count=1
+STDOUT+STDERR:
+ok  	github.com/jxsl13/goai/autograd	1.771s
+EXIT: 0
+
+## 04-race-focused
+COMMAND: PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 CGO_ENABLED=1 GOEXPERIMENT='' go test -race ./autograd -run '^(TestUnaryVJPBoundsExact|TestF64ScalarPolicyEqual|TestSigmoidFocalCoreExactCompositeVJPParity|TestWKVOpMatchesHostWKV)$' -count=1
+STDOUT+STDERR:
+ok  	github.com/jxsl13/goai/autograd	3.354s
+EXIT: 0
+
+## 05-simd-cpu-contracts
+COMMAND: PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd go test ./backend/cpu -run '^(TestVsoftplusF64Arm64Accuracy|TestSoftplusGradF64Arm64Accuracy|TestSoftplusGradF64Arm64VectorTailBitIdentity|TestSoftplusGradF64Arm64Edges|TestSoftplusBackwardF64Arm64MatchesRef|TestSigmoidFocalCPUReferenceParity)$' -count=1 -v
+STDOUT+STDERR:
+=== RUN   TestVsoftplusF64Arm64Accuracy
+    vsoftplus_f64_arm64_test.go:50: ARM64 NEON F64 Softplus max absolute error 7.105e-15 over 262145 values
+--- PASS: TestVsoftplusF64Arm64Accuracy (0.00s)
+=== RUN   TestSoftplusGradF64Arm64Accuracy
+    vsoftplus_grad_f64_arm64_test.go:44: ARM64 NEON F64 softplus gradient max relative error 3.370e-16 over 262145 values
+--- PASS: TestSoftplusGradF64Arm64Accuracy (0.01s)
+=== RUN   TestSoftplusGradF64Arm64VectorTailBitIdentity
+--- PASS: TestSoftplusGradF64Arm64VectorTailBitIdentity (0.01s)
+=== RUN   TestSoftplusGradF64Arm64Edges
+--- PASS: TestSoftplusGradF64Arm64Edges (0.00s)
+=== RUN   TestSoftplusBackwardF64Arm64MatchesRef
+--- PASS: TestSoftplusBackwardF64Arm64MatchesRef (0.00s)
+=== RUN   TestSigmoidFocalCPUReferenceParity
+=== RUN   TestSigmoidFocalCPUReferenceParity/f32
+=== RUN   TestSigmoidFocalCPUReferenceParity/f32#01
+=== RUN   TestSigmoidFocalCPUReferenceParity/f64
+=== RUN   TestSigmoidFocalCPUReferenceParity/f64#01
+=== RUN   TestSigmoidFocalCPUReferenceParity/f32#02
+=== RUN   TestSigmoidFocalCPUReferenceParity/f32#03
+=== RUN   TestSigmoidFocalCPUReferenceParity/f64#02
+=== RUN   TestSigmoidFocalCPUReferenceParity/f64#03
+=== RUN   TestSigmoidFocalCPUReferenceParity/f32#04
+=== RUN   TestSigmoidFocalCPUReferenceParity/f32#05
+=== RUN   TestSigmoidFocalCPUReferenceParity/f64#04
+=== RUN   TestSigmoidFocalCPUReferenceParity/f64#05
+--- PASS: TestSigmoidFocalCPUReferenceParity (0.11s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f32 (0.00s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f32#01 (0.00s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f64 (0.00s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f64#01 (0.00s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f32#02 (0.00s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f32#03 (0.00s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f64#02 (0.00s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f64#03 (0.00s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f32#04 (0.01s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f32#05 (0.04s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f64#04 (0.01s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f64#05 (0.04s)
+PASS
+ok  	github.com/jxsl13/goai/backend/cpu	0.457s
+EXIT: 0
+
+## 06-simd-wkv-contracts
+COMMAND: PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd go test ./internal/simd -run '^TestWKV' -count=1 -v
+STDOUT+STDERR:
+=== RUN   TestWKVNeonFreshSentinelAndDeepUnderflow
+--- PASS: TestWKVNeonFreshSentinelAndDeepUnderflow (0.00s)
+=== RUN   TestWKVNeonUnsafePairsFallBackBeforeMutation
+=== RUN   TestWKVNeonUnsafePairsFallBackBeforeMutation/nan-k
+=== RUN   TestWKVNeonUnsafePairsFallBackBeforeMutation/inf-v
+=== RUN   TestWKVNeonUnsafePairsFallBackBeforeMutation/nan-w
+=== RUN   TestWKVNeonUnsafePairsFallBackBeforeMutation/inf-u
+=== RUN   TestWKVNeonUnsafePairsFallBackBeforeMutation/nan-aa
+=== RUN   TestWKVNeonUnsafePairsFallBackBeforeMutation/overflow-ppw
+--- PASS: TestWKVNeonUnsafePairsFallBackBeforeMutation (0.00s)
+    --- PASS: TestWKVNeonUnsafePairsFallBackBeforeMutation/nan-k (0.00s)
+    --- PASS: TestWKVNeonUnsafePairsFallBackBeforeMutation/inf-v (0.00s)
+    --- PASS: TestWKVNeonUnsafePairsFallBackBeforeMutation/nan-w (0.00s)
+    --- PASS: TestWKVNeonUnsafePairsFallBackBeforeMutation/inf-u (0.00s)
+    --- PASS: TestWKVNeonUnsafePairsFallBackBeforeMutation/nan-aa (0.00s)
+    --- PASS: TestWKVNeonUnsafePairsFallBackBeforeMutation/overflow-ppw (0.00s)
+=== RUN   TestWKVScanRangeF64BitExactVsWhole
+--- PASS: TestWKVScanRangeF64BitExactVsWhole (0.01s)
+=== RUN   TestWKVScanF64Accuracy
+    wkv_test.go:40: seq=128 d=512 maxRel=1.386e-12
+    wkv_test.go:40: seq=64 d=1024 maxRel=4.501e-12
+    wkv_test.go:40: seq=130 d=17 maxRel=2.950e-14
+    wkv_test.go:40: seq=200 d=64 maxRel=1.526e-13
+--- PASS: TestWKVScanF64Accuracy (0.01s)
+=== RUN   TestWKVScanStateF64ChunkEqualsWhole
+    wkv_test.go:111: seq=96 d=512: chunked continuing scan bit-exact vs whole scan
+    wkv_test.go:111: seq=96 d=130: chunked continuing scan bit-exact vs whole scan
+    wkv_test.go:111: seq=50 d=17: chunked continuing scan bit-exact vs whole scan
+--- PASS: TestWKVScanStateF64ChunkEqualsWhole (0.00s)
+PASS
+ok  	github.com/jxsl13/goai/internal/simd	0.333s
+EXIT: 0
+
+## 07-vet
+COMMAND: PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT='' go vet ./...
+STDOUT+STDERR:
+EXIT: 0
+
+## 08-doc-api
+COMMAND: PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT='' go test ./internal/mdlint ./internal/apicheck -short -count=1
+STDOUT+STDERR:
+ok  	github.com/jxsl13/goai/internal/mdlint	0.376s
+ok  	github.com/jxsl13/goai/internal/apicheck	1.897s
+EXIT: 0
+
+## 09-mutant-helper
+COMMAND: PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd go test ./autograd -run '^TestF64ScalarPolicyEqual$' -count=1
+STDOUT+STDERR:
+--- FAIL: TestF64ScalarPolicyEqual (0.00s)
+    --- FAIL: TestF64ScalarPolicyEqual/opposite-zero-signs (0.00s)
+        simd_scalar_policy_test.go:83: got=0000000000000000 want=8000000000000000 floor=1 tolerance=1e-13: equal=true, want false
+    --- FAIL: TestF64ScalarPolicyEqual/opposite-zero-signs-reverse (0.00s)
+        simd_scalar_policy_test.go:83: got=8000000000000000 want=0000000000000000 floor=1 tolerance=1e-13: equal=true, want false
+    --- FAIL: TestF64ScalarPolicyEqual/different-nan-payload (0.00s)
+        simd_scalar_policy_test.go:83: got=7ff8000000000084 want=7ff8000000000042 floor=1 tolerance=1e-13: equal=true, want false
+    --- FAIL: TestF64ScalarPolicyEqual/different-nan-sign (0.00s)
+        simd_scalar_policy_test.go:83: got=fff8000000000042 want=7ff8000000000042 floor=1 tolerance=1e-13: equal=true, want false
+    --- FAIL: TestF64ScalarPolicyEqual/nan-finite (0.00s)
+        simd_scalar_policy_test.go:83: got=7ff8000000000042 want=3ff0000000000000 floor=1 tolerance=1e-13: equal=true, want false
+    --- FAIL: TestF64ScalarPolicyEqual/finite-nan (0.00s)
+        simd_scalar_policy_test.go:83: got=3ff0000000000000 want=7ff8000000000042 floor=1 tolerance=1e-13: equal=true, want false
+    --- FAIL: TestF64ScalarPolicyEqual/opposite-infinities (0.00s)
+        simd_scalar_policy_test.go:83: got=7ff0000000000000 want=fff0000000000000 floor=1 tolerance=1e-13: equal=true, want false
+    --- FAIL: TestF64ScalarPolicyEqual/opposite-infinities-reverse (0.00s)
+        simd_scalar_policy_test.go:83: got=fff0000000000000 want=7ff0000000000000 floor=1 tolerance=1e-13: equal=true, want false
+    --- FAIL: TestF64ScalarPolicyEqual/positive-infinity-finite (0.00s)
+        simd_scalar_policy_test.go:83: got=7ff0000000000000 want=7fefffffffffffff floor=1 tolerance=1e-13: equal=true, want false
+    --- FAIL: TestF64ScalarPolicyEqual/finite-positive-infinity (0.00s)
+        simd_scalar_policy_test.go:83: got=7fefffffffffffff want=7ff0000000000000 floor=1 tolerance=1e-13: equal=true, want false
+    --- FAIL: TestF64ScalarPolicyEqual/negative-infinity-finite (0.00s)
+        simd_scalar_policy_test.go:83: got=fff0000000000000 want=ffefffffffffffff floor=1 tolerance=1e-13: equal=true, want false
+    --- FAIL: TestF64ScalarPolicyEqual/finite-negative-infinity (0.00s)
+        simd_scalar_policy_test.go:83: got=ffefffffffffffff want=fff0000000000000 floor=1 tolerance=1e-13: equal=true, want false
+    --- FAIL: TestF64ScalarPolicyEqual/focal-outside (0.00s)
+        simd_scalar_policy_test.go:83: got=3d3c25c268497683 want=0000000000000000 floor=1 tolerance=1e-13: equal=true, want false
+    --- FAIL: TestF64ScalarPolicyEqual/focal-negative-outside (0.00s)
+        simd_scalar_policy_test.go:83: got=bd4c25c268497682 want=0000000000000000 floor=1 tolerance=1e-13: equal=true, want false
+    --- FAIL: TestF64ScalarPolicyEqual/focal-relative-outside (0.00s)
+        simd_scalar_policy_test.go:83: got=408f4000000006df want=408f400000000000 floor=1 tolerance=1e-13: equal=true, want false
+    --- FAIL: TestF64ScalarPolicyEqual/wkv-floor-outside (0.00s)
+        simd_scalar_policy_test.go:83: got=3cacd2b297d889bc want=0000000000000000 floor=1e-06 tolerance=1e-10: equal=true, want false
+    --- FAIL: TestF64ScalarPolicyEqual/wkv-negative-floor-outside (0.00s)
+        simd_scalar_policy_test.go:83: got=bcacd2b297d889bc want=0000000000000000 floor=1e-06 tolerance=1e-10: equal=true, want false
+    --- FAIL: TestF64ScalarPolicyEqual/wkv-relative-outside (0.00s)
+        simd_scalar_policy_test.go:83: got=bfefffffffe48320 want=bff0000000000000 floor=1e-06 tolerance=1e-10: equal=true, want false
+FAIL
+FAIL	github.com/jxsl13/goai/autograd	0.345s
+FAIL
+EXIT: 1
+
+## 10-mutant-focal
+COMMAND: PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd go test ./autograd -run '^TestSigmoidFocalCoreExactCompositeVJPParity$' -count=1
+STDOUT+STDERR:
+--- FAIL: TestSigmoidFocalCoreExactCompositeVJPParity (0.02s)
+    --- FAIL: TestSigmoidFocalCoreExactCompositeVJPParity/f64 (0.00s)
+        vjp_sigmoid_focal_test.go:99: element 0: got 1.7347619234485592 (3ffbc195b7f8ec00) want 0.73476192344855906 (3fe7832b6ff1d7ff), scaled error 1
+    --- FAIL: TestSigmoidFocalCoreExactCompositeVJPParity/f64#01 (0.00s)
+        vjp_sigmoid_focal_test.go:99: element 0: got 1.1195479184115016 (3ff1e9ab13fe1dcd) want 0.11954791841150167 (3fbe9ab13fe1dcd6), scaled error 0.9999999999999999
+FAIL
+FAIL	github.com/jxsl13/goai/autograd	0.352s
+FAIL
+EXIT: 1
+
+## 11-mutant-wkv
+COMMAND: PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd go test ./autograd -run '^TestWKVOpMatchesHostWKV$' -count=1
+STDOUT+STDERR:
+--- FAIL: TestWKVOpMatchesHostWKV (0.00s)
+    wkv_test.go:66: diverges at [0 0]: got 1.5202485921300422 (3ff852f0300fd133) want 0.52024859213004215 (3fe0a5e0601fa266), scaled error 1.9221580127794722
+FAIL
+FAIL	github.com/jxsl13/goai/autograd	0.575s
+FAIL
+EXIT: 1
+
+## 12-restored-simd-autograd
+COMMAND: PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd go test ./autograd -short -count=1
+STDOUT+STDERR:
+ok  	github.com/jxsl13/goai/autograd	2.328s
+EXIT: 0
+
+

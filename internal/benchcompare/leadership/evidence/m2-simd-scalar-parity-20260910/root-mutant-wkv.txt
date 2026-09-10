@@ -1,0 +1,8 @@
+*** Begin Patch
+*** Update File: /private/tmp/goai-m2-simd-parity-policy-fOBDq3/repo/autograd/wkv_test.go
+@@
+ 	requireScalarParityLayout(t, out[0], want)
++	if arm64SIMDScalarPolicy {
++		out[0].Storage().F64()[0] += 1
++	}
+*** End Patch
