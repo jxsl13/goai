@@ -33,7 +33,7 @@ PERFSCAN RULE REQUIRED, and it has wide reach here: interface-sourced RNG in a p
 kind: research
 state: draft
 created: 2026-09-10
-targets: go:nn.TestKANForwardIsBitIdentical, go:nn.KANLayer.Forward, go:internal/archgold.PickSIMD
+targets: go:nn.TestKANForwardIsBitIdentical, go:nn.KANLayer.Forward, go:archgold.PickSIMD
 
 Goal: diagnose the inherited ARM64 GOEXPERIMENT=simd failure of nn/TestKANForwardIsBitIdentical before the separately approved six-loop unary VJP performance task can run a valid baseline. Research only; no production implementation, tolerance widening, golden regeneration, or benchmark timing is authorized.
 
