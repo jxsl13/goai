@@ -65,7 +65,7 @@ DELIVERY: one task/branch/draft PR stacked on PR1254. Benchmark evidence and gen
 
 ## T-01M25HANWFF8FTH75FRX0BZEMP Implement and qualify six exact typed VJP bounds-proof loops
 kind: task
-state: draft
+state: active
 created: 2026-09-10
 parent: P-01M25H86Z0FZRAK5B99V05DYM6
 grilled: 2026-09-10 open=0
