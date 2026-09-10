@@ -47,6 +47,7 @@ MACHINE-PRODUCED LIST, reproducible with internal/perfscan/tools/exactness_sweep
 kind: proposal
 state: draft
 created: 2026-09-10
+refs: R-01M249HFAVFQR8HNHQQVYZPEP6
 grilled: 2026-09-10 open=0
 targets: go:autograd.unaryVJP, go:autograd.reluVJP, go:autograd.sigmoidVJP
 
