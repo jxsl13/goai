@@ -3969,7 +3969,7 @@ choice: One bounded BiasGELU recorder dispatch
 
 ## T-01M25NHXPAEYABCQWC637CASR1 Qualify exact KAN CPU goldens by architecture and SIMD feature
 kind: task
-state: draft
+state: active
 created: 2026-09-10
 refs: P-01M25KRMYZEH599AP2131M1GD6, R-01M25JEGEJFDEVBR7B0YZKQ3MX
 grilled: 2026-09-10 open=0
