@@ -1,0 +1,275 @@
+require "digest"
+require "fileutils"
+require "json"
+require "minitest/autorun"
+require "open3"
+require "rbconfig"
+require "stringio"
+require "tmpdir"
+require_relative "repo/internal/benchcompare/leadership/evidence/m2-autograd-bce-20260910/run"
+
+class SupplementalRunnerV2AuditTest < Minitest::Test
+  C = UnaryBCECampaign
+  RUNNER = File.expand_path("repo/internal/benchcompare/leadership/evidence/m2-autograd-bce-20260910/run.rb", __dir__)
+
+  def fixture(expected, procs: 1, scope: "autograd")
+    suffix = procs == 1 ? "" : "-#{procs}"
+    headers = ["goos: darwin", "goarch: arm64",
+               "pkg: github.com/jxsl13/goai/#{scope}", "cpu: Apple M2 Pro"]
+    rows = expected.flat_map do |name|
+      ["#{name}#{suffix} 10 20 ns/op 32 B/op 2 allocs/op",
+       "#{name}#{suffix} 20 10 ns/op 32 B/op 2 allocs/op"]
+    end
+    (headers + rows + ["PASS", ""]).join("\n")
+  end
+
+  def roots(base, old_code:, new_code: old_code)
+    {"old" => old_code, "new" => new_code}.map do |arm, code|
+      root = File.join(base, arm)
+      Dir.mkdir(root)
+      path = File.join(root, "default-autograd.test")
+      File.write(path, "#!/usr/bin/env ruby\n#{code}\n")
+      File.chmod(0755, path)
+      root
+    end
+  end
+
+  def quietly
+    previous = $stdout
+    $stdout = StringIO.new
+    yield
+  ensure
+    $stdout = previous
+  end
+
+  def invocation_records(destination)
+    Dir[File.join(destination, "[0-9][0-9][0-9].json")].sort.map do |path|
+      [path, JSON.parse(File.read(path))]
+    end
+  end
+
+  def test_exact_schedule_cells_order_and_sample_arithmetic
+    pilot = C.plan(true)
+    qualify = C.plan(false)
+    assert_equal 14, pilot.length
+    assert_equal 336, qualify.length
+    assert_equal 336, qualify.uniq.length
+    assert_equal 8, C.cells("autograd", true).length
+    assert_equal 48, C.cells("autograd", false).length
+    assert_equal 3, C.cells("nn", false).length
+    assert_equal 112, pilot.sum { |entry| C.cells(entry[:scope], true).length }
+    assert_equal 8_568, qualify.sum { |entry| C.cells(entry[:scope], false).length }
+    [pilot, qualify].each do |plan|
+      plan.each_slice(2) do |left, right|
+        assert_equal left.reject { |key, _| key == :arm }, right.reject { |key, _| key == :arm }
+        assert_equal %w[new old], [left[:arm], right[:arm]].sort
+      end
+    end
+    assert_equal %w[old new old], ((1..3).map do |campaign|
+      qualify.find { |entry| entry[:campaign] == campaign && entry[:pair] == 1 }[:arm]
+    end)
+    assert_equal [[1, 12], [12, 1], [1, 12]], ((1..3).map do |campaign|
+      qualify.select { |entry| entry[:campaign] == campaign }.map { |entry| entry[:procs] }.uniq
+    end)
+  end
+
+  def test_parser_rejects_every_contradictory_header_and_numeric_edges
+    expected = C.cells("autograd", true)
+    valid = fixture(expected)
+    ["goos: linux", "goarch: amd64", "cpu: Other CPU", "pkg: example.invalid/other"].each do |header|
+      assert_raises(C::Invalid, header) { C.parse(valid.sub("PASS\n", "#{header}\nPASS\n"), expected, 1, "autograd") }
+    end
+    assert_raises(C::Invalid) { C.parse(valid, expected, 12, "autograd") }
+
+    huge = "9" * 10_000
+    boundary = valid.sub("10 20 ns/op 32 B/op 2 allocs/op",
+                         "#{huge} 1.7976931348623157e308 ns/op #{huge} B/op #{huge} allocs/op")
+    assert_equal expected.length, C.parse(boundary, expected, 1, "autograd").length
+    ["1e3 B/op", "1e3 allocs/op", "1e309 ns/op", "-0.1 ns/op", "0 ns/op"].each do |metric|
+      bad = valid.sub(/20 ns\/op 32 B\/op 2 allocs\/op/, metric)
+      assert_raises(C::Invalid, metric) { C.parse(bad, expected, 1, "autograd") }
+    end
+  end
+
+  def test_mutation_or_removal_is_detected_immediately_after_first_invocation
+    ["File.open(__FILE__, 'a') { |file| file.puts '# changed' }", "File.unlink(__FILE__)"].each do |mutation|
+      Dir.mktmpdir("runner-v2-immediate-") do |base|
+        output = fixture(C.cells("autograd", true)).dump
+        code = "#{mutation} if File.basename(File.dirname(__FILE__)) == 'old'\nprint #{output}"
+        old_root, new_root = roots(base, old_code: code)
+        destination = File.join(base, "evidence")
+        error = assert_raises(C::Invalid) { quietly { C.run(old_root, new_root, destination, "pilot") } }
+        assert_match(/binary changed after invocation 0/, error.message)
+        assert_equal "failed", JSON.parse(File.read(File.join(destination, "manifest.json"))).fetch("status")
+        records = invocation_records(destination)
+        assert_equal 1, records.length
+        path, record = records.first
+        assert_equal 0, record.fetch("exit_code")
+        refute_equal record.fetch("binary_sha256_before"), record.fetch("binary_sha256_after")
+        assert_equal Digest::SHA256.file(path.sub(/\.json\z/, ".stdout")).hexdigest, record.fetch("stdout_sha256")
+        assert_equal Digest::SHA256.file(path.sub(/\.json\z/, ".stderr")).hexdigest, record.fetch("stderr_sha256")
+        refute File.exist?(File.join(destination, "retained.txt"))
+        if mutation.include?("unlink")
+          assert_nil record.fetch("binary_sha256_after")
+          assert_match(/ENOENT/, record.fetch("binary_hash_error"))
+        else
+          assert_nil record.fetch("binary_hash_error")
+        end
+      end
+    end
+  end
+
+  def test_final_current_binary_mutation_or_removal_retains_raw_json_and_fails
+    ["File.open(__FILE__, 'a') { |file| file.puts '# changed' }", "File.unlink(__FILE__)"].each do |mutation|
+      Dir.mktmpdir("runner-v2-final-current-") do |base|
+        output = fixture(C.cells("autograd", true)).dump
+        code = <<~RUBY
+          state = __FILE__ + ".count"
+          count = File.exist?(state) ? File.read(state).to_i + 1 : 1
+          File.write(state, count)
+          #{mutation} if count == 7 && File.basename(File.dirname(__FILE__)) == "new"
+          print #{output}
+        RUBY
+        old_root, new_root = roots(base, old_code: code)
+        destination = File.join(base, "evidence")
+        error = assert_raises(C::Invalid) { quietly { C.run(old_root, new_root, destination, "pilot") } }
+        assert_match(/binary changed after invocation 13/, error.message)
+        assert_equal "failed", JSON.parse(File.read(File.join(destination, "manifest.json"))).fetch("status")
+        records = invocation_records(destination)
+        assert_equal 14, records.length
+        path, record = records.last
+        assert_equal 0, record.fetch("exit_code")
+        assert_equal Digest::SHA256.file(path.sub(/\.json\z/, ".stdout")).hexdigest, record.fetch("stdout_sha256")
+        assert_equal Digest::SHA256.file(path.sub(/\.json\z/, ".stderr")).hexdigest, record.fetch("stderr_sha256")
+        assert_equal 104, File.readlines(File.join(destination, "retained.txt")).grep(/^Benchmark/).length
+      end
+    end
+  end
+
+  def test_final_other_binary_mutation_or_removal_is_caught_by_completion_sweep
+    ["File.open(other, 'a') { |file| file.puts '# changed after last use' }", "File.unlink(other)"].each do |mutation|
+      Dir.mktmpdir("runner-v2-final-other-") do |base|
+        output = fixture(C.cells("autograd", true)).dump
+        code = <<~RUBY
+          state = __FILE__ + ".count"
+          count = File.exist?(state) ? File.read(state).to_i + 1 : 1
+          File.write(state, count)
+          if count == 7 && File.basename(File.dirname(__FILE__)) == "new"
+            other = File.join(File.dirname(File.dirname(__FILE__)), "old", "default-autograd.test")
+            #{mutation}
+          end
+          print #{output}
+        RUBY
+        old_root, new_root = roots(base, old_code: code)
+        destination = File.join(base, "evidence")
+        error = assert_raises(StandardError) { quietly { C.run(old_root, new_root, destination, "pilot") } }
+        if mutation.include?("unlink")
+          assert_kind_of Errno::ENOENT, error
+        else
+          assert_kind_of C::Invalid, error
+          assert_match(/binary changed before completion/, error.message)
+        end
+        manifest = JSON.parse(File.read(File.join(destination, "manifest.json")))
+        assert_equal "failed", manifest.fetch("status")
+        assert_equal 14, invocation_records(destination).length
+        assert_equal 112, File.readlines(File.join(destination, "retained.txt")).grep(/^Benchmark/).length
+      end
+    end
+  end
+
+  def test_exact_child_environment_is_recorded_and_parent_sentinel_is_absent
+    Dir.mktmpdir("runner-v2-environment-") do |base|
+      expected_env = C::CHILD_ENV.merge("GOMAXPROCS" => "1")
+      output = fixture(C.cells("autograd", true)).dump
+      code = <<~RUBY
+        require "json"
+        warn "ENVJSON:" + JSON.generate(ENV.to_h)
+        abort "unexpected environment" unless ENV.to_h == #{expected_env.inspect}
+        print #{output}
+      RUBY
+      old_root, new_root = roots(base, old_code: code)
+      destination = File.join(base, "evidence")
+      sentinel = "SUPPLEMENTAL_RUNNER_V2_PRIVATE_SENTINEL"
+      previous = ENV[sentinel]
+      ENV[sentinel] = "must-not-reach-child-or-evidence"
+      begin
+        quietly { C.run(old_root, new_root, destination, "pilot") }
+      ensure
+        previous.nil? ? ENV.delete(sentinel) : ENV[sentinel] = previous
+      end
+      manifest_text = File.read(File.join(destination, "manifest.json"))
+      manifest = JSON.parse(manifest_text)
+      assert_equal C::CHILD_ENV, manifest.fetch("child_environment")
+      assert_equal true, manifest.fetch("unsetenv_others")
+      refute_includes manifest_text, sentinel
+      invocation_records(destination).each do |path, record|
+        json_text = File.read(path)
+        stderr_text = File.read(path.sub(/\.json\z/, ".stderr"))
+        actual_env = JSON.parse(stderr_text.lines.fetch(0).delete_prefix("ENVJSON:"))
+        assert_equal expected_env, actual_env
+        assert_equal actual_env, record.fetch("env")
+        assert_equal true, record.fetch("unsetenv_others")
+        refute_includes json_text, sentinel
+        refute_includes File.read(path.sub(/\.json\z/, ".stdout")), sentinel
+        refute_includes stderr_text, sentinel
+        assert_equal record.fetch("binary_sha256_before"), record.fetch("binary_sha256_after")
+      end
+    end
+  end
+
+  def test_signal_failure_retains_complete_process_evidence
+    Dir.mktmpdir("runner-v2-signal-") do |base|
+      code = <<~RUBY
+        STDOUT.sync = true
+        STDERR.sync = true
+        puts "partial stdout"
+        warn "partial stderr"
+        Process.kill("TERM", Process.pid)
+        sleep
+      RUBY
+      old_root, new_root = roots(base, old_code: code)
+      destination = File.join(base, "evidence")
+      assert_raises(C::Invalid) { quietly { C.run(old_root, new_root, destination, "pilot") } }
+      path, record = invocation_records(destination).fetch(0)
+      assert_nil record.fetch("exit_code")
+      assert_equal Signal.list.fetch("TERM"), record.fetch("signal")
+      assert_equal Digest::SHA256.file(path.sub(/\.json\z/, ".stdout")).hexdigest, record.fetch("stdout_sha256")
+      assert_equal Digest::SHA256.file(path.sub(/\.json\z/, ".stderr")).hexdigest, record.fetch("stderr_sha256")
+      assert_equal record.fetch("binary_sha256_before"), record.fetch("binary_sha256_after")
+      assert_equal "failed", JSON.parse(File.read(File.join(destination, "manifest.json"))).fetch("status")
+    end
+  end
+
+  def test_runner_copy_mutation_is_caught_before_completion
+    Dir.mktmpdir("runner-v2-self-integrity-") do |base|
+      runner_copy = File.join(base, "run.rb")
+      FileUtils.cp(RUNNER, runner_copy)
+      output = fixture(C.cells("autograd", true)).dump
+      code = <<~RUBY
+        state = __FILE__ + ".count"
+        count = File.exist?(state) ? File.read(state).to_i + 1 : 1
+        File.write(state, count)
+        File.open(#{runner_copy.dump}, "a") { |file| file.puts "# changed" } if count == 7 && File.basename(File.dirname(__FILE__)) == "new"
+        print #{output}
+      RUBY
+      old_root, new_root = roots(base, old_code: code)
+      destination = File.join(base, "evidence")
+      driver = File.join(base, "driver.rb")
+      File.write(driver, <<~RUBY)
+        require #{runner_copy.dump}
+        begin
+          UnaryBCECampaign.run(#{old_root.dump}, #{new_root.dump}, #{destination.dump}, "pilot")
+        rescue StandardError => error
+          warn "DRIVER_ERROR:" + error.class.to_s + ":" + error.message
+          exit 23
+        end
+      RUBY
+      stdout, stderr, status = Open3.capture3(RbConfig.ruby, driver)
+      assert_equal 23, status.exitstatus, stdout + stderr
+      assert_match(/DRIVER_ERROR:UnaryBCECampaign::Invalid:runner changed before completion/, stderr)
+      assert_equal "failed", JSON.parse(File.read(File.join(destination, "manifest.json"))).fetch("status")
+      assert_equal 14, invocation_records(destination).length
+      assert_equal 112, File.readlines(File.join(destination, "retained.txt")).grep(/^Benchmark/).length
+    end
+  end
+end

@@ -1,0 +1,127 @@
+# Independent corrected benchmark-runner verification v2
+
+Verdict: **PASS** for the corrected benchmark-runner integrity slice of
+Spectackle `T-01M246GYK2F9N` / proposal `P-01M246EFHMFR3`.
+
+This supersedes neither the preserved initial runner review nor any runtime,
+correctness, or performance verdict. It does not qualify a performance gain.
+No Go build, test, benchmark, or profile command was run. No Git, Spectackle,
+network, or production edit was performed. All additional executable fixtures
+were synthetic Ruby programs created in temporary directories.
+
+## Authenticated inputs
+
+- Corrected `run.rb` SHA-256:
+  `824cadb31abf90465e4978ec82d7c88ac1970c08fc7edfe0079a6f9c5ca6d662`.
+- Corrected `run_test.rb` SHA-256:
+  `c54ab9f7ade922c408ca29036db9fe8c5244b29b1ea28ffee8969f18f3a7860f`.
+- Updated primary README SHA-256:
+  `0da71e19f01a26311060a75a8ec374e155031a79283b585efdbd5d01f899cc19`.
+
+Both corrected Ruby files and the updated primary README were read in full.
+The original `REPORT.md`, supplemental source, and failing output remain
+unchanged at their prior SHA-256 values.
+
+## Result
+
+No remaining defect was found against the frozen runner requirements.
+
+The three initial defects are repaired:
+
+- Metadata validation now rejects any missing, duplicate, or contradictory
+  `goos:`, `goarch:`, `cpu:`, or `pkg:` family line. The v2 adversarial suite
+  independently confirmed rejection of all four contradictory variants and a
+  mismatched process suffix.
+- Every child receives exactly the recorded `CHILD_ENV` plus its recorded
+  GOMAXPROCS with `unsetenv_others: true`. A private parent sentinel did not
+  reach child stdout, stderr, invocation JSON, or the manifest. Every child
+  printed its observed environment; it exactly matched the invocation record.
+  The CF encoding value was present with the process UID-derived value.
+- Each binary is hashed before and immediately after every invocation, with
+  before/after values and hash errors recorded. Mutation and removal during
+  invocation 0 and invocation 13 were rejected immediately while preserving
+  raw stdout/stderr and invocation JSON. A final sweep also rejected mutation
+  and removal of the other arm after that arm's last use. Mutation of a
+  temporary copy of the runner itself was rejected before completion.
+
+Additional passed checks:
+
+- Required syntax check and corrected stock suite: 16 runs, 578 assertions,
+  no failures, errors, or skips.
+- Independent v2 suite: 8 runs, 582 assertions, no failures, errors, or skips.
+- Process failure by signal retains nil exit code, numeric signal, raw streams,
+  matching stream hashes, unchanged before/after binary hashes, and a failed
+  manifest.
+- Decimal counters accept a 10,000-digit value without overflow; exponent
+  counters, nonfinite/negative/zero timing, and malformed metrics are rejected.
+- Pilot: 14 invocations, 8 cells, 112 retained rows, 112 discarded warmups,
+  224 total raw rows.
+- Qualification: 336 unique invocations, 48 autograd cells plus 3 training
+  controls, 8,568 retained rows, 8,568 discarded warmups, 17,136 total raw rows.
+- Adjacent entries are exact old/new pairs. Initial arm and GOMAXPROCS order
+  reverse in campaign 2 and return in campaign 3; arms alternate per pair.
+- The exact 200 ms, count-2 patterns, complete cell lists, sanitized child
+  environment, and all 350 schedule entries are preserved in the v2 plan dump.
+- Existing-destination refusal, failure-vs-missing-measurement behavior, full
+  raw streams, argv/environment/timestamps/exit/signal/output hashes, manifest
+  state, warmup exclusion, and the absence of a runner performance decision
+  are covered by the combined stock and independent suites.
+
+The final-other-binary removal path raises `Errno::ENOENT` rather than the
+runner's custom `Invalid`, but this is a `SystemCallError` handled by the CLI;
+the manifest becomes failed and all 14 raw/JSON invocation records plus all
+112 already validated retained rows remain present. This meets the stated
+rejection and evidence-retention requirements and is not a blocker.
+
+## Exact commands and complete outputs
+
+All commands below ran from
+`/private/tmp/goai-bce-runner-verify-J8eROr`.
+
+1. `ruby -c repo/internal/benchcompare/leadership/evidence/m2-autograd-bce-20260910/run.rb 2>&1 | tee ruby-c-run-rb-v2.full.txt; exit ${pipestatus[1]}`
+   — exit 0. Full output:
+   `/private/tmp/goai-bce-runner-verify-J8eROr/ruby-c-run-rb-v2.full.txt`
+   — SHA-256 `bbafef10c22b9323fa5589564990f57fbf57f9a632381d5e765dc5a3b25b4a1b`.
+
+2. `ruby repo/internal/benchcompare/leadership/evidence/m2-autograd-bce-20260910/run_test.rb 2>&1 | tee v2-ruby-run-test.full.txt; exit ${pipestatus[1]}`
+   — exit 0. Full output:
+   `/private/tmp/goai-bce-runner-verify-J8eROr/v2-ruby-run-test.full.txt`
+   — SHA-256 `9baf2bf31972c2fbf10461a0474f870e910780b77a409b13ce633969ac57036c`.
+
+3. `ruby -c supplemental_runner_v2_test.rb 2>&1 | tee ruby-c-supplemental-v2-rerun.full.txt; exit ${pipestatus[1]}`
+   — exit 0. Full output:
+   `/private/tmp/goai-bce-runner-verify-J8eROr/ruby-c-supplemental-v2-rerun.full.txt`
+   — SHA-256 `bbafef10c22b9323fa5589564990f57fbf57f9a632381d5e765dc5a3b25b4a1b`.
+
+4. `ruby supplemental_runner_v2_test.rb --seed 1 2>&1 | tee supplemental-runner-v2-test-seed1-rerun.full.txt; exit ${pipestatus[1]}`
+   — exit 0. Full output:
+   `/private/tmp/goai-bce-runner-verify-J8eROr/supplemental-runner-v2-test-seed1-rerun.full.txt`
+   — SHA-256 `253bbce2e2c5fb814dad821901a6edf16e3cf9a0a34fe9450ab2e5aaf1f79156`.
+
+5. `ruby plan_check_v2.rb 2>&1 | tee plan-check-v2.full.txt; exit ${pipestatus[1]}`
+   — exit 0. Full output:
+   `/private/tmp/goai-bce-runner-verify-J8eROr/plan-check-v2.full.txt`
+   — SHA-256 `afb0ec277be9913b1bb76f9bcf47e5a1cec604ec7507107ee59b2b42ba243103`.
+
+6. `ruby plan_dump_v2.rb | tee plan-and-cells-v2.full.json >/dev/null; exit ${pipestatus[1]}`
+   — exit 0. Complete cells, patterns, child environment, and schedules:
+   `/private/tmp/goai-bce-runner-verify-J8eROr/plan-and-cells-v2.full.json`
+   — SHA-256 `17ba2ba4cc04ff05e6c889a27dabadec24cd3e2d850d912f4a2cb3a848d7971a`.
+
+## V2 supplemental sources
+
+- `/private/tmp/goai-bce-runner-verify-J8eROr/supplemental_runner_v2_test.rb`
+  — SHA-256 `526007daed986ac9af9d65f01ebbb799361a242f3b93bf8235ea672a0d4b3623`.
+- `/private/tmp/goai-bce-runner-verify-J8eROr/plan_check_v2.rb`
+  — SHA-256 `ec78557e42bd4621204eda294499f9aa8c984cba7b8820d469dc10a635b2a9e2`.
+- `/private/tmp/goai-bce-runner-verify-J8eROr/plan_dump_v2.rb`
+  — SHA-256 `d83878d677797a821254ff3e9dbced26e1c2e922befdfe4f6807262658fa94c6`.
+
+## Preserved initial review
+
+- `/private/tmp/goai-bce-runner-verify-J8eROr/REPORT.md`
+  — SHA-256 `770b1aca59212aab1a4cbcbf083296b982ccfd54d0726558e3282f852c8e8040`.
+- `/private/tmp/goai-bce-runner-verify-J8eROr/supplemental_runner_test.rb`
+  — SHA-256 `08e7b3763b4d7a984c082dd1b969646d8874f857e3c044f781c4ba74dcb8d38e`.
+- `/private/tmp/goai-bce-runner-verify-J8eROr/supplemental-runner-test-seed1.full.txt`
+  — SHA-256 `b52e21accb42bd30c8b75b94176d1449cde3d0e699ee2f90d96c7d8158eaa099`.

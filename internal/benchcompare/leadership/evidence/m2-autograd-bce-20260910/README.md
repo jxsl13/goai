@@ -175,7 +175,24 @@ The runner's first independent review failed on final-invocation binary
 mutation, contradictory extra headers, and incomplete inherited environment
 capture. The initial verdict and supplemental output are preserved as
 `runner-review-initial-fail.txt` and `runner-review-initial-supplement.txt`.
-Regression fixes are under independent re-review; no live timings have run.
+The corrected runner passed independent re-review: stock suite 16 tests / 578
+assertions; independent supplement 8 tests / 582 assertions. The v2 report,
+complete test outputs, and original supplemental source are retained in the
+`runner-review-v2-*` files. This is runner-integrity verification only; no live
+timings have run. The supplemental source retains its original scratch-relative
+paths, as documented in the report, and is archived as text rather than added
+to the executable test suite.
 
 Benchmark `MB/s` is based on nominal output bytes from `SetBytes`, not measured
 memory bandwidth. Qualification uses ns/op, B/op, and allocs/op.
+
+For benchstat comparisons, aggregate the seven pairs rather than making
+seven one-sample tables. Pin old/new column order even in reversed campaigns:
+
+```sh
+benchstat -col 'arm@(old new)' -ignore pair -filter 'campaign:1 build:default procs:1 scope:autograd' /absolute/campaign/retained.txt
+```
+
+Repeat each campaign/build/procs/scope combination without pooling campaigns.
+Check that each arm/cell has seven retained samples. Apply the frozen thresholds
+to individual target and control cells, not the geometric-mean summary.
