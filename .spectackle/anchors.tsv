@@ -467,4 +467,6 @@ ARM64-SIMD-FOCAL-COMPOSITE-001	go:autograd_test.TestSigmoidFocalCoreExactComposi
 ARM64-SIMD-WKV-SCALAR-001	go:autograd_test.TestWKVOpMatchesHostWKV	autograd/wkv_test.go	37-70	ca857934162cd8f3	fb5d9ea5844b88da
 ARM64-SIMD-PARITY-GUARDS-001	go:autograd_test.TestWKVOpMatchesHostWKV	autograd/wkv_test.go	37-70	ca857934162cd8f3	aee0f3183293e24a
 ARM64-SIMD-PARITY-GUARDS-001	go:autograd_test.TestSigmoidFocalCoreExactCompositeVJPParity	autograd/vjp_sigmoid_focal_test.go	70-110	faa74e8788d38a99	aee0f3183293e24a
-SIXLOOP-BCE-TANH-FROZEN-001	go:autograd.tanhVJP	autograd/vjp_elementwise.go	155-176	d499c5b3fd45443b	2eebd3316a6bcf76
+KAN-SIMD-BASELINE-DIAGNOSIS-001	go:nn.TestKANForwardIsBitIdentical	nn/kan_bitidentity_test.go	21-66	7feb5debd8ee9f56	f819ff27f468cc6f
+KAN-SIMD-BASELINE-DIAGNOSIS-001	go:nn.KANLayer.Forward	nn/kan.go	181-228	42f7a1580f191b98	f819ff27f468cc6f
+KAN-FEATURE-CI-DIGEST-001	go:nn.TestKANForwardIsBitIdentical	nn/kan_bitidentity_test.go	21-66	7feb5debd8ee9f56	9100d5fb1aad10db

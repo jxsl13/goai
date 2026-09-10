@@ -1,0 +1,237 @@
+{
+  "COMMANDS.md": {
+    "sha256": "6ad35094b19c25429bb02e57c5d92ae2dbcf53a8c38374b89b2a46da212544c2",
+    "bytes": 6765,
+    "content": "# KAN SIMD baseline research command manifest\n\nAll commands were run from the `cwd` shown below.  `raw.log` contains direct\ncombined stdout/stderr; its paired `.exit` contains the numeric child exit.\nThe shell wrapper captured the child exit as `test_exit`; a successful wrapper\ndoes not change the recorded child exit.  No log is hand-abbreviated.\n\n## Shared values\n\n- Research cwd: `/private/tmp/goai-kan-simd-research-XNMqPD/repo`\n- Pristine comparison cwd: `/private/tmp/goai-bce-clean-baseline-NodpS5/repo`\n- Pinned environment for native Go invocations:\n  `PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0`\n- Pinned compiler: `go version go1.27.1 darwin/arm64`.\n- Final diagnostic source artifact:\n  `kan_simd_baseline_diagnostic_test.go`, SHA-256\n  `284e0869f3c96c6188e7a1ab47ddc6156f00718bf28d57092631cb24c76f2fa9`.\n  Its genuine add-file patch is `kan_simd_baseline_diagnostic.add.patch`; the\n  `git diff --no-index` child exit is intentionally `1` in\n  `kan_simd_baseline_diagnostic.add.patch.exit`.\n\n## Unchanged-source arm64 KAN test\n\nEach row’s exact argv is\n`go test ./nn -run '^TestKANForwardIsBitIdentical$' -count=1 -v` with the\nshared pinned environment plus the stated `GOEXPERIMENT`.\n\n| Raw log and exit | cwd | GOEXPERIMENT | Diagnostic source |\n| --- | --- | --- | --- |\n| `research-default-raw.log`, `research-default.exit` | research | `''` | absent |\n| `research-simd-raw.log`, `research-simd.exit` | research | `simd` | absent |\n| `c6-default-raw.log`, `c6-default.exit` | pristine comparison | `''` | absent |\n| `c6-simd-raw.log`, `c6-simd.exit` | pristine comparison | `simd` | absent |\n\n## Temporary arm64 diagnostic\n\nEach row’s exact argv is\n`go test ./nn -run '^TestKANSIMDBaselineDiagnostic$' -count=1 -v` with the\nresearch cwd, shared pinned environment, and stated `GOEXPERIMENT`.\n\n| Raw log and exit | GOEXPERIMENT | Diagnostic source version |\n| --- | --- | --- |\n| `diagnostic-default-raw.log`, `diagnostic-default.exit` | `''` | earlier temporary revision: stage/fused/generic/serial instrumentation; source was not retained |\n| `diagnostic-simd-raw.log`, `diagnostic-simd.exit` | `simd` | same earlier unretained revision |\n| `diagnostic-hybrid-simd-raw.log`, `diagnostic-hybrid-simd.exit` | `simd` | earlier temporary revision adding ref-SiLU hybrid; source was not retained |\n| `diagnostic-causal-simd-raw.log`, `diagnostic-causal-simd.exit` | `simd` | final retained source SHA-256 above |\n\nThe final diagnostic was applied only at\n`nn/kan_simd_baseline_diagnostic_test.go`, then removed with `apply_patch` and\nits lease released. The final source is retained outside the repo solely for\nreproduction of the final causal log.\n\n## AMD64 Rosetta amendment\n\nThe pinned `go` executable is arm64-only. The direct launch evidence is:\n\n| Raw log and exit | cwd | exact argv | env/source |\n| --- | --- | --- | --- |\n| `amd64-direct-go-launch-raw.log`, `amd64-direct-go-launch.exit` | research | `/usr/bin/arch -x86_64 /private/tmp/goai-go1271-j1cLvq/go/bin/go version` | no extra env; expected child exit `1` |\n\nThe replacement workflow cross-compiled test binaries with the pinned Go SDK,\nthen executed them through Rosetta. Both binaries include the final retained\ndiagnostic source above (although the KAN test invocation does not execute it).\n\n| Compile raw log and exit | cwd | exact compile argv | env |\n| --- | --- | --- | --- |\n| `amd64-default-compile-raw.log`, `amd64-default-compile.exit` | research | `go test -c -o /private/tmp/goai-kan-simd-research-XNMqPD/artifacts/nn-amd64-default.test ./nn` | shared pinned env + `GOARCH=amd64 GOOS=darwin GOEXPERIMENT=''` |\n| `amd64-simd-compile-raw.log`, `amd64-simd-compile.exit` | research | `go test -c -o /private/tmp/goai-kan-simd-research-XNMqPD/artifacts/nn-amd64-simd.test ./nn` | shared pinned env + `GOARCH=amd64 GOOS=darwin GOEXPERIMENT=simd` |\n\n| Run raw log and exit | cwd | exact argv | source |\n| --- | --- | --- | --- |\n| `amd64-default-raw.log`, `amd64-default.exit` | research | `/usr/bin/arch -x86_64 /private/tmp/goai-kan-simd-research-XNMqPD/artifacts/nn-amd64-default.test -test.run '^TestKANForwardIsBitIdentical$' -test.count=1 -test.v` | final source compiled in, test not executed |\n| `amd64-simd-raw.log`, `amd64-simd.exit` | research | `/usr/bin/arch -x86_64 /private/tmp/goai-kan-simd-research-XNMqPD/artifacts/nn-amd64-simd.test -test.run '^TestKANForwardIsBitIdentical$' -test.count=1 -test.v` | final source compiled in, test not executed |\n| `amd64-diagnostic-default-raw.log`, `amd64-diagnostic-default.exit` | research | `/usr/bin/arch -x86_64 /private/tmp/goai-kan-simd-research-XNMqPD/artifacts/nn-amd64-default.test -test.run '^TestKANSIMDBaselineDiagnostic$' -test.count=1 -test.v` | final retained source |\n| `amd64-diagnostic-simd-raw.log`, `amd64-diagnostic-simd.exit` | research | `/usr/bin/arch -x86_64 /private/tmp/goai-kan-simd-research-XNMqPD/artifacts/nn-amd64-simd.test -test.run '^TestKANSIMDBaselineDiagnostic$' -test.count=1 -test.v` | final retained source |\n\n## Supporting raw evidence\n\n| Raw log and exit | cwd | exact argv | purpose |\n| --- | --- | --- | --- |\n| `go-version-raw.log`, `go-version.exit` | research | `go version` | pinned compiler identity; shared env except cache variables were not needed |\n| `revisions-raw.log`, `revisions.exit` | research | `git rev-parse HEAD c6afe9e4ba8b2a46c254953c921cf97ddf4f72c6 6322ae6ac7afae1b4af33f5a16f947258437d2f6 e4827df51309fc73e89b7f3d97dff367fc77d419 HEAD^{tree} c6afe9e4ba8b2a46c254953c921cf97ddf4f72c6^{tree} 6322ae6ac7afae1b4af33f5a16f947258437d2f6^{tree} e4827df51309fc73e89b7f3d97dff367fc77d419^{tree}` | revision/tree values in argv order |\n| `diagnostic-diff-check-raw.log`, `diagnostic-diff-check.exit` | research | `git diff --check` | checked the temporary untracked diagnostic before removal |\n| `research-final-status-raw.log`, `research-final-status.exit` | research | `git status --porcelain=v1 --branch` | final clean research tree |\n| `c6-final-status-raw.log`, `c6-final-status.exit` | pristine comparison | `git status --porcelain=v1 --branch` | final clean pristine tree |\n| `diagnostic-source-sha256-raw.log`, `diagnostic-source-sha256.exit` | research | `shasum -a 256 /private/tmp/goai-kan-simd-research-XNMqPD/artifacts/kan_simd_baseline_diagnostic_test.go /private/tmp/goai-kan-simd-research-XNMqPD/artifacts/kan_simd_baseline_diagnostic.add.patch` | hashes final source and genuine patch |\n\n`kan_simd_baseline_diagnostic.patch` is the earlier invalid empty `git diff`\ncapture of an untracked file. It is retained only to document the capture error;\nit is not evidence. Use the retained source plus `.add.patch` instead.\n"
+  },
+  "amd64-default-compile-raw.log": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "amd64-default-compile.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "amd64-default-raw.log": {
+    "sha256": "7a677a3ffb8926ce4bc31424f561aadbeecec0ad46c3bcea4bb916b17f43fc8d",
+    "bytes": 184,
+    "content": "=== RUN   TestKANForwardIsBitIdentical\n    kan_bitidentity_test.go:51: 13x8x6 digest 14622643123133920247, want 6609257596807823200\n--- FAIL: TestKANForwardIsBitIdentical (0.00s)\nFAIL\n"
+  },
+  "amd64-default.exit": {
+    "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "bytes": 2,
+    "content": "1\n"
+  },
+  "amd64-diagnostic-default-raw.log": {
+    "sha256": "bb14780781ebe669ec35594668ef79cf7bce3ae9ea207a3a99c0c653f573947a",
+    "bytes": 2841,
+    "content": "=== RUN   TestKANSIMDBaselineDiagnostic\n=== RUN   TestKANSIMDBaselineDiagnostic/fixture\n    kan_simd_baseline_diagnostic_test.go:77: 3x5x7 dispatch=cpu primitives=SiLU,MatMul,Einsum,Einsum,Add hybrids=silu:ref,rest:cpu;silu:scalar-baseline,rest:cpu x=2271132023597476287 wbase=875965249537642748 wscale=13082871175863220312 coef=11134960910992239907 silu=6893617327677289866 silu-ref=6649074581506019742 silu-scalar-baseline=6893617327677289866 ybase=13447371760660789599 ybase-ref-silu=13295960880401538183 ybase-scalar-baseline=13447371760660789599 basis=17046071597512053979 spline-fused=8857271469137275669 spline-generic=8857271469137275669 spline-serial=8857271469137275669 final-fused=14272068029666688409 final-ref-silu=12717233990155216336 final-scalar-baseline=14272068029666688409 final-generic=14272068029666688409 final-serial=14272068029666688409 forward=14272068029666688409\n=== RUN   TestKANSIMDBaselineDiagnostic/fixture#01\n    kan_simd_baseline_diagnostic_test.go:77: 13x8x6 dispatch=cpu primitives=SiLU,MatMul,Einsum,Einsum,Add hybrids=silu:ref,rest:cpu;silu:scalar-baseline,rest:cpu x=11185463176717821521 wbase=3373890848899298341 wscale=17929058314404591141 coef=10739547431501718144 silu=1923556385635757860 silu-ref=12904345067191575252 silu-scalar-baseline=1923556385635757860 ybase=15167409518393338971 ybase-ref-silu=17704074559993741595 ybase-scalar-baseline=15167409518393338971 basis=2955965949469923442 spline-fused=15407013713739744163 spline-generic=15407013713739744163 spline-serial=15407013713739744163 final-fused=14622643123133920247 final-ref-silu=7057396893837477664 final-scalar-baseline=14622643123133920247 final-generic=14622643123133920247 final-serial=14622643123133920247 forward=14622643123133920247\n=== RUN   TestKANSIMDBaselineDiagnostic/fixture#02\n    kan_simd_baseline_diagnostic_test.go:77: 96x24x32 dispatch=cpu primitives=SiLU,MatMul,Einsum,Einsum,Add hybrids=silu:ref,rest:cpu;silu:scalar-baseline,rest:cpu x=1564713045434207861 wbase=10398864469647405138 wscale=13905868791273181989 coef=1736239699950672297 silu=9960630009569499945 silu-ref=17431775638745802030 silu-scalar-baseline=9960630009569499945 ybase=14967244181471578898 ybase-ref-silu=17169273598498454273 ybase-scalar-baseline=14967244181471578898 basis=6210022100124200926 spline-fused=16305940654001877309 spline-generic=16305940654001877309 spline-serial=16305940654001877309 final-fused=1788711544738185816 final-ref-silu=4826293334631945556 final-scalar-baseline=1788711544738185816 final-generic=1788711544738185816 final-serial=1788711544738185816 forward=1788711544738185816\n--- PASS: TestKANSIMDBaselineDiagnostic (0.01s)\n    --- PASS: TestKANSIMDBaselineDiagnostic/fixture (0.00s)\n    --- PASS: TestKANSIMDBaselineDiagnostic/fixture#01 (0.00s)\n    --- PASS: TestKANSIMDBaselineDiagnostic/fixture#02 (0.01s)\nPASS\n"
+  },
+  "amd64-diagnostic-default.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "amd64-diagnostic-simd-raw.log": {
+    "sha256": "9679f4536521b78656eb034efac0b9bacdc3309185abaabae5d327f2006b9f9a",
+    "bytes": 2839,
+    "content": "=== RUN   TestKANSIMDBaselineDiagnostic\n=== RUN   TestKANSIMDBaselineDiagnostic/fixture\n    kan_simd_baseline_diagnostic_test.go:77: 3x5x7 dispatch=cpu primitives=SiLU,MatMul,Einsum,Einsum,Add hybrids=silu:ref,rest:cpu;silu:scalar-baseline,rest:cpu x=2271132023597476287 wbase=875965249537642748 wscale=13082871175863220312 coef=11134960910992239907 silu=15761373893298845186 silu-ref=6649074581506019742 silu-scalar-baseline=6893617327677289866 ybase=14032959291967677020 ybase-ref-silu=13295960880401538183 ybase-scalar-baseline=13447371760660789599 basis=17046071597512053979 spline-fused=8857271469137275669 spline-generic=8857271469137275669 spline-serial=8857271469137275669 final-fused=2682677407054700113 final-ref-silu=12717233990155216336 final-scalar-baseline=14272068029666688409 final-generic=2682677407054700113 final-serial=2682677407054700113 forward=2682677407054700113\n=== RUN   TestKANSIMDBaselineDiagnostic/fixture#01\n    kan_simd_baseline_diagnostic_test.go:77: 13x8x6 dispatch=cpu primitives=SiLU,MatMul,Einsum,Einsum,Add hybrids=silu:ref,rest:cpu;silu:scalar-baseline,rest:cpu x=11185463176717821521 wbase=3373890848899298341 wscale=17929058314404591141 coef=10739547431501718144 silu=12115842293221388766 silu-ref=12904345067191575252 silu-scalar-baseline=1923556385635757860 ybase=16821951930971622651 ybase-ref-silu=17704074559993741595 ybase-scalar-baseline=15167409518393338971 basis=2955965949469923442 spline-fused=15407013713739744163 spline-generic=15407013713739744163 spline-serial=15407013713739744163 final-fused=6265150516934122901 final-ref-silu=7057396893837477664 final-scalar-baseline=14622643123133920247 final-generic=6265150516934122901 final-serial=6265150516934122901 forward=6265150516934122901\n=== RUN   TestKANSIMDBaselineDiagnostic/fixture#02\n    kan_simd_baseline_diagnostic_test.go:77: 96x24x32 dispatch=cpu primitives=SiLU,MatMul,Einsum,Einsum,Add hybrids=silu:ref,rest:cpu;silu:scalar-baseline,rest:cpu x=1564713045434207861 wbase=10398864469647405138 wscale=13905868791273181989 coef=1736239699950672297 silu=12165985039285422692 silu-ref=17431775638745802030 silu-scalar-baseline=9960630009569499945 ybase=3514562430277452678 ybase-ref-silu=17169273598498454273 ybase-scalar-baseline=14967244181471578898 basis=6210022100124200926 spline-fused=16305940654001877309 spline-generic=16305940654001877309 spline-serial=16305940654001877309 final-fused=12003654425765141557 final-ref-silu=4826293334631945556 final-scalar-baseline=1788711544738185816 final-generic=12003654425765141557 final-serial=12003654425765141557 forward=12003654425765141557\n--- PASS: TestKANSIMDBaselineDiagnostic (0.02s)\n    --- PASS: TestKANSIMDBaselineDiagnostic/fixture (0.01s)\n    --- PASS: TestKANSIMDBaselineDiagnostic/fixture#01 (0.00s)\n    --- PASS: TestKANSIMDBaselineDiagnostic/fixture#02 (0.01s)\nPASS\n"
+  },
+  "amd64-diagnostic-simd.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "amd64-direct-go-launch-raw.log": {
+    "sha256": "014e63d53a9b2631998db6f24db98ee53250d72166a19747eb4adafb4b3df968",
+    "bytes": 90,
+    "content": "arch: posix_spawnp: /private/tmp/goai-go1271-j1cLvq/go/bin/go: Bad CPU type in executable\n"
+  },
+  "amd64-direct-go-launch.exit": {
+    "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "bytes": 2,
+    "content": "1\n"
+  },
+  "amd64-simd-compile-raw.log": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "amd64-simd-compile.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "amd64-simd-raw.log": {
+    "sha256": "7c7a5181c732c2991df719ea762c2bfe9b40165aa12ba1546c20a7833007eb40",
+    "bytes": 183,
+    "content": "=== RUN   TestKANForwardIsBitIdentical\n    kan_bitidentity_test.go:51: 3x5x7 digest 2682677407054700113, want 14272068029666688409\n--- FAIL: TestKANForwardIsBitIdentical (0.00s)\nFAIL\n"
+  },
+  "amd64-simd.exit": {
+    "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "bytes": 2,
+    "content": "1\n"
+  },
+  "c6-default-raw.log": {
+    "sha256": "9f8120abab7d69f670a5f670b10c08b105fcc04690da50bb136c9399588961fa",
+    "bytes": 129,
+    "content": "=== RUN   TestKANForwardIsBitIdentical\n--- PASS: TestKANForwardIsBitIdentical (0.00s)\nPASS\nok  \tgithub.com/jxsl13/goai/nn\t0.409s\n"
+  },
+  "c6-default.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "c6-final-status-raw.log": {
+    "sha256": "ba051334ebc33f3162a4fd5be48615e03c8dac8ec7977e7c2752dbc1cf981841",
+    "bytes": 20,
+    "content": "## HEAD (no branch)\n"
+  },
+  "c6-final-status.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "c6-simd-raw.log": {
+    "sha256": "de4967efe8b9042677a4e664d4df347c2b55017a23cd44b2a77194c3a15845e8",
+    "bytes": 226,
+    "content": "=== RUN   TestKANForwardIsBitIdentical\n    kan_bitidentity_test.go:51: 3x5x7 digest 17265271475585544907, want 5936029728971432568\n--- FAIL: TestKANForwardIsBitIdentical (0.00s)\nFAIL\nFAIL\tgithub.com/jxsl13/goai/nn\t0.371s\nFAIL\n"
+  },
+  "c6-simd.exit": {
+    "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "bytes": 2,
+    "content": "1\n"
+  },
+  "diagnostic-causal-simd-raw.log": {
+    "sha256": "b1a861673adaa4b263decf94cd3c69b2ab2c635d6b4494e5dcf9ef4ac45f7ca8",
+    "bytes": 2870,
+    "content": "=== RUN   TestKANSIMDBaselineDiagnostic\n=== RUN   TestKANSIMDBaselineDiagnostic/fixture\n    kan_simd_baseline_diagnostic_test.go:77: 3x5x7 dispatch=cpu primitives=SiLU,MatMul,Einsum,Einsum,Add hybrids=silu:ref,rest:cpu;silu:scalar-baseline,rest:cpu x=2271132023597476287 wbase=14821295268590429716 wscale=13082871175863220312 coef=11134960910992239907 silu=15761373893298845186 silu-ref=6649074581506019742 silu-scalar-baseline=6893617327677289866 ybase=8807050740105467423 ybase-ref-silu=8003090102055064378 ybase-scalar-baseline=9044188849796024961 basis=3856257054487578794 spline-fused=2786541717420469331 spline-generic=2786541717420469331 spline-serial=2786541717420469331 final-fused=17265271475585544907 final-ref-silu=2667175729763818327 final-scalar-baseline=5936029728971432568 final-generic=17265271475585544907 final-serial=17265271475585544907 forward=17265271475585544907\n=== RUN   TestKANSIMDBaselineDiagnostic/fixture#01\n    kan_simd_baseline_diagnostic_test.go:77: 13x8x6 dispatch=cpu primitives=SiLU,MatMul,Einsum,Einsum,Add hybrids=silu:ref,rest:cpu;silu:scalar-baseline,rest:cpu x=10744153288361238588 wbase=8250915590067501238 wscale=17929058314404591141 coef=10739547431501718144 silu=1916639142390522992 silu-ref=13785757719176664101 silu-scalar-baseline=1318482819433946787 ybase=4961308547367583321 ybase-ref-silu=1561530137534879955 ybase-scalar-baseline=5828782429135128842 basis=10386483064882171231 spline-fused=17498967278828578028 spline-generic=17498967278828578028 spline-serial=17498967278828578028 final-fused=5035091549113534389 final-ref-silu=14495897768418594159 final-scalar-baseline=15159748691548848689 final-generic=5035091549113534389 final-serial=5035091549113534389 forward=5035091549113534389\n=== RUN   TestKANSIMDBaselineDiagnostic/fixture#02\n    kan_simd_baseline_diagnostic_test.go:77: 96x24x32 dispatch=cpu primitives=SiLU,MatMul,Einsum,Einsum,Add hybrids=silu:ref,rest:cpu;silu:scalar-baseline,rest:cpu x=6149091328996871201 wbase=10398864469647405138 wscale=13905868791273181989 coef=1736239699950672297 silu=1871354419416439659 silu-ref=6053401967832459475 silu-scalar-baseline=14727576228475404989 ybase=7029067319061670368 ybase-ref-silu=8001205790721073348 ybase-scalar-baseline=10961971128536953318 basis=5849206782737455424 spline-fused=1073392024740377657 spline-generic=1073392024740377657 spline-serial=1073392024740377657 final-fused=12048638696559957597 final-ref-silu=15677638971759890978 final-scalar-baseline=515177776064738749 final-generic=12048638696559957597 final-serial=12048638696559957597 forward=12048638696559957597\n--- PASS: TestKANSIMDBaselineDiagnostic (0.00s)\n    --- PASS: TestKANSIMDBaselineDiagnostic/fixture (0.00s)\n    --- PASS: TestKANSIMDBaselineDiagnostic/fixture#01 (0.00s)\n    --- PASS: TestKANSIMDBaselineDiagnostic/fixture#02 (0.00s)\nPASS\nok  \tgithub.com/jxsl13/goai/nn\t0.383s\n"
+  },
+  "diagnostic-causal-simd.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "diagnostic-default-raw.log": {
+    "sha256": "a0f547949b347d4d44a66f1f3cdc55cf1285fd9920b2c0f12cd2b1d5e0b6ec18",
+    "bytes": 2018,
+    "content": "=== RUN   TestKANSIMDBaselineDiagnostic\n=== RUN   TestKANSIMDBaselineDiagnostic/fixture\n    kan_simd_baseline_diagnostic_test.go:61: 3x5x7 dispatch=cpu primitives=SiLU,MatMul,Einsum,Einsum,Add x=2271132023597476287 wbase=14821295268590429716 wscale=13082871175863220312 coef=11134960910992239907 silu=6893617327677289866 ybase=9044188849796024961 basis=3856257054487578794 spline-fused=2786541717420469331 spline-generic=2786541717420469331 spline-serial=2786541717420469331 final-fused=5936029728971432568 final-generic=5936029728971432568 final-serial=5936029728971432568 forward=5936029728971432568\n=== RUN   TestKANSIMDBaselineDiagnostic/fixture#01\n    kan_simd_baseline_diagnostic_test.go:61: 13x8x6 dispatch=cpu primitives=SiLU,MatMul,Einsum,Einsum,Add x=10744153288361238588 wbase=8250915590067501238 wscale=17929058314404591141 coef=10739547431501718144 silu=1318482819433946787 ybase=5828782429135128842 basis=10386483064882171231 spline-fused=17498967278828578028 spline-generic=17498967278828578028 spline-serial=17498967278828578028 final-fused=15159748691548848689 final-generic=15159748691548848689 final-serial=15159748691548848689 forward=15159748691548848689\n=== RUN   TestKANSIMDBaselineDiagnostic/fixture#02\n    kan_simd_baseline_diagnostic_test.go:61: 96x24x32 dispatch=cpu primitives=SiLU,MatMul,Einsum,Einsum,Add x=6149091328996871201 wbase=10398864469647405138 wscale=13905868791273181989 coef=1736239699950672297 silu=14727576228475404989 ybase=10961971128536953318 basis=5849206782737455424 spline-fused=1073392024740377657 spline-generic=1073392024740377657 spline-serial=1073392024740377657 final-fused=515177776064738749 final-generic=515177776064738749 final-serial=515177776064738749 forward=515177776064738749\n--- PASS: TestKANSIMDBaselineDiagnostic (0.01s)\n    --- PASS: TestKANSIMDBaselineDiagnostic/fixture (0.00s)\n    --- PASS: TestKANSIMDBaselineDiagnostic/fixture#01 (0.00s)\n    --- PASS: TestKANSIMDBaselineDiagnostic/fixture#02 (0.01s)\nPASS\nok  \tgithub.com/jxsl13/goai/nn\t0.548s\n"
+  },
+  "diagnostic-default.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "diagnostic-diff-check-raw.log": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "diagnostic-diff-check.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "diagnostic-hybrid-simd-raw.log": {
+    "sha256": "e36173dd5e36666922d8bb2b27979c3d68822874b2675e1223e0531ec48f2565",
+    "bytes": 2400,
+    "content": "=== RUN   TestKANSIMDBaselineDiagnostic\n=== RUN   TestKANSIMDBaselineDiagnostic/fixture\n    kan_simd_baseline_diagnostic_test.go:71: 3x5x7 dispatch=cpu primitives=SiLU,MatMul,Einsum,Einsum,Add hybrid=silu:ref,rest:cpu x=2271132023597476287 wbase=14821295268590429716 wscale=13082871175863220312 coef=11134960910992239907 silu=15761373893298845186 silu-ref=6649074581506019742 ybase=8807050740105467423 ybase-ref-silu=8003090102055064378 basis=3856257054487578794 spline-fused=2786541717420469331 spline-generic=2786541717420469331 spline-serial=2786541717420469331 final-fused=17265271475585544907 final-ref-silu=2667175729763818327 final-generic=17265271475585544907 final-serial=17265271475585544907 forward=17265271475585544907\n=== RUN   TestKANSIMDBaselineDiagnostic/fixture#01\n    kan_simd_baseline_diagnostic_test.go:71: 13x8x6 dispatch=cpu primitives=SiLU,MatMul,Einsum,Einsum,Add hybrid=silu:ref,rest:cpu x=10744153288361238588 wbase=8250915590067501238 wscale=17929058314404591141 coef=10739547431501718144 silu=1916639142390522992 silu-ref=13785757719176664101 ybase=4961308547367583321 ybase-ref-silu=1561530137534879955 basis=10386483064882171231 spline-fused=17498967278828578028 spline-generic=17498967278828578028 spline-serial=17498967278828578028 final-fused=5035091549113534389 final-ref-silu=14495897768418594159 final-generic=5035091549113534389 final-serial=5035091549113534389 forward=5035091549113534389\n=== RUN   TestKANSIMDBaselineDiagnostic/fixture#02\n    kan_simd_baseline_diagnostic_test.go:71: 96x24x32 dispatch=cpu primitives=SiLU,MatMul,Einsum,Einsum,Add hybrid=silu:ref,rest:cpu x=6149091328996871201 wbase=10398864469647405138 wscale=13905868791273181989 coef=1736239699950672297 silu=1871354419416439659 silu-ref=6053401967832459475 ybase=7029067319061670368 ybase-ref-silu=8001205790721073348 basis=5849206782737455424 spline-fused=1073392024740377657 spline-generic=1073392024740377657 spline-serial=1073392024740377657 final-fused=12048638696559957597 final-ref-silu=15677638971759890978 final-generic=12048638696559957597 final-serial=12048638696559957597 forward=12048638696559957597\n--- PASS: TestKANSIMDBaselineDiagnostic (0.00s)\n    --- PASS: TestKANSIMDBaselineDiagnostic/fixture (0.00s)\n    --- PASS: TestKANSIMDBaselineDiagnostic/fixture#01 (0.00s)\n    --- PASS: TestKANSIMDBaselineDiagnostic/fixture#02 (0.00s)\nPASS\nok  \tgithub.com/jxsl13/goai/nn\t0.392s\n"
+  },
+  "diagnostic-hybrid-simd.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "diagnostic-simd-raw.log": {
+    "sha256": "bed9ac381529b34f019b73c910c7588098d9a5b8bc0be38a4cb03fa33428a0ef",
+    "bytes": 2025,
+    "content": "=== RUN   TestKANSIMDBaselineDiagnostic\n=== RUN   TestKANSIMDBaselineDiagnostic/fixture\n    kan_simd_baseline_diagnostic_test.go:61: 3x5x7 dispatch=cpu primitives=SiLU,MatMul,Einsum,Einsum,Add x=2271132023597476287 wbase=14821295268590429716 wscale=13082871175863220312 coef=11134960910992239907 silu=15761373893298845186 ybase=8807050740105467423 basis=3856257054487578794 spline-fused=2786541717420469331 spline-generic=2786541717420469331 spline-serial=2786541717420469331 final-fused=17265271475585544907 final-generic=17265271475585544907 final-serial=17265271475585544907 forward=17265271475585544907\n=== RUN   TestKANSIMDBaselineDiagnostic/fixture#01\n    kan_simd_baseline_diagnostic_test.go:61: 13x8x6 dispatch=cpu primitives=SiLU,MatMul,Einsum,Einsum,Add x=10744153288361238588 wbase=8250915590067501238 wscale=17929058314404591141 coef=10739547431501718144 silu=1916639142390522992 ybase=4961308547367583321 basis=10386483064882171231 spline-fused=17498967278828578028 spline-generic=17498967278828578028 spline-serial=17498967278828578028 final-fused=5035091549113534389 final-generic=5035091549113534389 final-serial=5035091549113534389 forward=5035091549113534389\n=== RUN   TestKANSIMDBaselineDiagnostic/fixture#02\n    kan_simd_baseline_diagnostic_test.go:61: 96x24x32 dispatch=cpu primitives=SiLU,MatMul,Einsum,Einsum,Add x=6149091328996871201 wbase=10398864469647405138 wscale=13905868791273181989 coef=1736239699950672297 silu=1871354419416439659 ybase=7029067319061670368 basis=5849206782737455424 spline-fused=1073392024740377657 spline-generic=1073392024740377657 spline-serial=1073392024740377657 final-fused=12048638696559957597 final-generic=12048638696559957597 final-serial=12048638696559957597 forward=12048638696559957597\n--- PASS: TestKANSIMDBaselineDiagnostic (0.00s)\n    --- PASS: TestKANSIMDBaselineDiagnostic/fixture (0.00s)\n    --- PASS: TestKANSIMDBaselineDiagnostic/fixture#01 (0.00s)\n    --- PASS: TestKANSIMDBaselineDiagnostic/fixture#02 (0.00s)\nPASS\nok  \tgithub.com/jxsl13/goai/nn\t0.380s\n"
+  },
+  "diagnostic-simd.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "diagnostic-source-sha256-raw.log": {
+    "sha256": "79e23f195f6a5a704ac34ea396ce886d7fccab9622da3445277f39db001750e2",
+    "bytes": 314,
+    "content": "284e0869f3c96c6188e7a1ab47ddc6156f00718bf28d57092631cb24c76f2fa9  /private/tmp/goai-kan-simd-research-XNMqPD/artifacts/kan_simd_baseline_diagnostic_test.go\n53b9ec6fc96481645a17c2e21e17d266fc2d7c0361be4556f09d9347d60aaede  /private/tmp/goai-kan-simd-research-XNMqPD/artifacts/kan_simd_baseline_diagnostic.add.patch\n"
+  },
+  "diagnostic-source-sha256.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "go-version-raw.log": {
+    "sha256": "c528ba02b39880f1357f51dee70e41c1ef03e3a70c7a03055c080532b9635f58",
+    "bytes": 33,
+    "content": "go version go1.27.1 darwin/arm64\n"
+  },
+  "go-version.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "kan_simd_baseline_diagnostic.add.patch": {
+    "sha256": "53b9ec6fc96481645a17c2e21e17d266fc2d7c0361be4556f09d9347d60aaede",
+    "bytes": 4938,
+    "content": "diff --git a/private/tmp/goai-kan-simd-research-XNMqPD/artifacts/kan_simd_baseline_diagnostic_test.go b/private/tmp/goai-kan-simd-research-XNMqPD/artifacts/kan_simd_baseline_diagnostic_test.go\nnew file mode 100644\nindex 00000000..6b2324f3\n--- /dev/null\n+++ b/private/tmp/goai-kan-simd-research-XNMqPD/artifacts/kan_simd_baseline_diagnostic_test.go\n@@ -0,0 +1,80 @@\n+package nn\n+\n+import (\n+\t\"math\"\n+\t\"testing\"\n+\n+\t\"github.com/jxsl13/goai/backend\"\n+\t\"github.com/jxsl13/goai/tensor\"\n+)\n+\n+func kanSIMDDiagnosticDigest(xs []float64) uint64 {\n+\th := uint64(14695981039346656037)\n+\tfor _, v := range xs {\n+\t\tb := math.Float64bits(v)\n+\t\tfor shift := 0; shift < 64; shift += 8 {\n+\t\t\th = (h ^ (b>>shift)&0xff) * 1099511628211\n+\t\t}\n+\t}\n+\treturn h\n+}\n+\n+// TestKANSIMDBaselineDiagnostic is temporary research instrumentation. It preserves\n+// production dispatch: every named primitive is executed through backend.Execute on\n+// backend.NewContext, and it additionally compares KAN's fused spline against the\n+// incumbent two-Einsum construction and against the same fused loop called serially.\n+func TestKANSIMDBaselineDiagnostic(t *testing.T) {\n+\tcases := []struct{ batch, in, out int }{{3, 5, 7}, {13, 8, 6}, {96, 24, 32}}\n+\tfor _, tc := range cases {\n+\t\tt.Run(\"fixture\", func(t *testing.T) {\n+\t\t\tl, err := NewKAN(tc.in, tc.out, 1)\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\t\t\tx := tensor.New(tensor.F64, tensor.Shape{tc.batch, tc.in})\n+\t\t\tfor i := range x.Storage().F64() {\n+\t\t\t\tx.Storage().F64()[i] = math.Sin(float64(i*11+5)) * 0.6\n+\t\t\t}\n+\t\t\tctx := backend.NewContext()\n+\t\t\tex := func(op backend.Op, attrs backend.Attrs, in ...*tensor.Tensor) *tensor.Tensor {\n+\t\t\t\to, err := backend.Execute(ctx, op, in, attrs)\n+\t\t\t\tif err != nil {\n+\t\t\t\t\tt.Fatal(err)\n+\t\t\t\t}\n+\t\t\t\treturn o[0]\n+\t\t\t}\n+\t\t\ts := ex(backend.OpSiLU, nil, x)\n+\t\t\tyBase := ex(backend.OpMatMul, nil, s, l.WBase)\n+\t\t\trefBackend, ok := backend.Get(backend.Ref)\n+\t\t\tif !ok {\n+\t\t\t\tt.Fatal(\"reference backend unavailable\")\n+\t\t\t}\n+\t\t\trefOut, err := backend.Execute(backend.NewContext().WithBackend(refBackend), backend.OpSiLU, []*tensor.Tensor{x}, nil)\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\t\t\tyBaseRefSiLU := ex(backend.OpMatMul, nil, refOut[0], l.WBase)\n+\t\t\tsScalarBaseline := tensor.New(tensor.F64, x.Shape())\n+\t\t\tfor i, v := range x.Storage().F64() {\n+\t\t\t\tsScalarBaseline.Storage().F64()[i] = v / (1 + math.Exp(-v))\n+\t\t\t}\n+\t\t\tyBaseScalarBaseline := ex(backend.OpMatMul, nil, sScalarBaseline, l.WBase)\n+\t\t\tbasis := l.buildBasis(x)\n+\t\t\tyFused := l.fusedSpline(basis)\n+\t\t\tspl := ex(backend.OpEinsum, backend.EinsumAttrs{Spec: \"bic,ijc->bij\"}, basis, l.Coef)\n+\t\t\tyGeneric := ex(backend.OpEinsum, backend.EinsumAttrs{Spec: \"bij,ij->bj\"}, spl, l.WScale)\n+\t\t\tySerial := tensor.New(tensor.F64, tensor.Shape{tc.batch, tc.out})\n+\t\t\tfusedSplineBand(ySerial.Storage().F64(), basis.Storage().F64(), l.Coef.Storage().F64(), l.WScale.Storage().F64(), 0, tc.batch, tc.in, tc.out, l.gridSize+l.splineOrder)\n+\t\t\tyFusedFinal := ex(backend.OpAdd, nil, yBase, yFused)\n+\t\t\tyRefSiLUFinal := ex(backend.OpAdd, nil, yBaseRefSiLU, yFused)\n+\t\t\tyScalarBaselineFinal := ex(backend.OpAdd, nil, yBaseScalarBaseline, yFused)\n+\t\t\tyGenericFinal := ex(backend.OpAdd, nil, yBase, yGeneric)\n+\t\t\tySerialFinal := ex(backend.OpAdd, nil, yBase, ySerial)\n+\t\t\tyForward, err := l.Forward(backend.NewContext(), x)\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\t\t\tt.Logf(\"%dx%dx%d dispatch=%s primitives=SiLU,MatMul,Einsum,Einsum,Add hybrids=silu:ref,rest:%s;silu:scalar-baseline,rest:%s x=%d wbase=%d wscale=%d coef=%d silu=%d silu-ref=%d silu-scalar-baseline=%d ybase=%d ybase-ref-silu=%d ybase-scalar-baseline=%d basis=%d spline-fused=%d spline-generic=%d spline-serial=%d final-fused=%d final-ref-silu=%d final-scalar-baseline=%d final-generic=%d final-serial=%d forward=%d\", tc.batch, tc.in, tc.out, ctx.Backend.Name(), ctx.Backend.Name(), ctx.Backend.Name(), kanSIMDDiagnosticDigest(x.Storage().F64()), kanSIMDDiagnosticDigest(l.WBase.Storage().F64()), kanSIMDDiagnosticDigest(l.WScale.Storage().F64()), kanSIMDDiagnosticDigest(l.Coef.Storage().F64()), kanSIMDDiagnosticDigest(s.Storage().F64()), kanSIMDDiagnosticDigest(refOut[0].Storage().F64()), kanSIMDDiagnosticDigest(sScalarBaseline.Storage().F64()), kanSIMDDiagnosticDigest(yBase.Storage().F64()), kanSIMDDiagnosticDigest(yBaseRefSiLU.Storage().F64()), kanSIMDDiagnosticDigest(yBaseScalarBaseline.Storage().F64()), kanSIMDDiagnosticDigest(basis.Storage().F64()), kanSIMDDiagnosticDigest(yFused.Storage().F64()), kanSIMDDiagnosticDigest(yGeneric.Storage().F64()), kanSIMDDiagnosticDigest(ySerial.Storage().F64()), kanSIMDDiagnosticDigest(yFusedFinal.Storage().F64()), kanSIMDDiagnosticDigest(yRefSiLUFinal.Storage().F64()), kanSIMDDiagnosticDigest(yScalarBaselineFinal.Storage().F64()), kanSIMDDiagnosticDigest(yGenericFinal.Storage().F64()), kanSIMDDiagnosticDigest(ySerialFinal.Storage().F64()), kanSIMDDiagnosticDigest(yForward.Storage().F64()))\n+\t\t})\n+\t}\n+}\n"
+  },
+  "kan_simd_baseline_diagnostic.add.patch.exit": {
+    "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "bytes": 2,
+    "content": "1\n"
+  },
+  "kan_simd_baseline_diagnostic.patch": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "kan_simd_baseline_diagnostic_test.go": {
+    "sha256": "284e0869f3c96c6188e7a1ab47ddc6156f00718bf28d57092631cb24c76f2fa9",
+    "bytes": 4493,
+    "content": "package nn\n\nimport (\n\t\"math\"\n\t\"testing\"\n\n\t\"github.com/jxsl13/goai/backend\"\n\t\"github.com/jxsl13/goai/tensor\"\n)\n\nfunc kanSIMDDiagnosticDigest(xs []float64) uint64 {\n\th := uint64(14695981039346656037)\n\tfor _, v := range xs {\n\t\tb := math.Float64bits(v)\n\t\tfor shift := 0; shift < 64; shift += 8 {\n\t\t\th = (h ^ (b>>shift)&0xff) * 1099511628211\n\t\t}\n\t}\n\treturn h\n}\n\n// TestKANSIMDBaselineDiagnostic is temporary research instrumentation. It preserves\n// production dispatch: every named primitive is executed through backend.Execute on\n// backend.NewContext, and it additionally compares KAN's fused spline against the\n// incumbent two-Einsum construction and against the same fused loop called serially.\nfunc TestKANSIMDBaselineDiagnostic(t *testing.T) {\n\tcases := []struct{ batch, in, out int }{{3, 5, 7}, {13, 8, 6}, {96, 24, 32}}\n\tfor _, tc := range cases {\n\t\tt.Run(\"fixture\", func(t *testing.T) {\n\t\t\tl, err := NewKAN(tc.in, tc.out, 1)\n\t\t\tif err != nil {\n\t\t\t\tt.Fatal(err)\n\t\t\t}\n\t\t\tx := tensor.New(tensor.F64, tensor.Shape{tc.batch, tc.in})\n\t\t\tfor i := range x.Storage().F64() {\n\t\t\t\tx.Storage().F64()[i] = math.Sin(float64(i*11+5)) * 0.6\n\t\t\t}\n\t\t\tctx := backend.NewContext()\n\t\t\tex := func(op backend.Op, attrs backend.Attrs, in ...*tensor.Tensor) *tensor.Tensor {\n\t\t\t\to, err := backend.Execute(ctx, op, in, attrs)\n\t\t\t\tif err != nil {\n\t\t\t\t\tt.Fatal(err)\n\t\t\t\t}\n\t\t\t\treturn o[0]\n\t\t\t}\n\t\t\ts := ex(backend.OpSiLU, nil, x)\n\t\t\tyBase := ex(backend.OpMatMul, nil, s, l.WBase)\n\t\t\trefBackend, ok := backend.Get(backend.Ref)\n\t\t\tif !ok {\n\t\t\t\tt.Fatal(\"reference backend unavailable\")\n\t\t\t}\n\t\t\trefOut, err := backend.Execute(backend.NewContext().WithBackend(refBackend), backend.OpSiLU, []*tensor.Tensor{x}, nil)\n\t\t\tif err != nil {\n\t\t\t\tt.Fatal(err)\n\t\t\t}\n\t\t\tyBaseRefSiLU := ex(backend.OpMatMul, nil, refOut[0], l.WBase)\n\t\t\tsScalarBaseline := tensor.New(tensor.F64, x.Shape())\n\t\t\tfor i, v := range x.Storage().F64() {\n\t\t\t\tsScalarBaseline.Storage().F64()[i] = v / (1 + math.Exp(-v))\n\t\t\t}\n\t\t\tyBaseScalarBaseline := ex(backend.OpMatMul, nil, sScalarBaseline, l.WBase)\n\t\t\tbasis := l.buildBasis(x)\n\t\t\tyFused := l.fusedSpline(basis)\n\t\t\tspl := ex(backend.OpEinsum, backend.EinsumAttrs{Spec: \"bic,ijc->bij\"}, basis, l.Coef)\n\t\t\tyGeneric := ex(backend.OpEinsum, backend.EinsumAttrs{Spec: \"bij,ij->bj\"}, spl, l.WScale)\n\t\t\tySerial := tensor.New(tensor.F64, tensor.Shape{tc.batch, tc.out})\n\t\t\tfusedSplineBand(ySerial.Storage().F64(), basis.Storage().F64(), l.Coef.Storage().F64(), l.WScale.Storage().F64(), 0, tc.batch, tc.in, tc.out, l.gridSize+l.splineOrder)\n\t\t\tyFusedFinal := ex(backend.OpAdd, nil, yBase, yFused)\n\t\t\tyRefSiLUFinal := ex(backend.OpAdd, nil, yBaseRefSiLU, yFused)\n\t\t\tyScalarBaselineFinal := ex(backend.OpAdd, nil, yBaseScalarBaseline, yFused)\n\t\t\tyGenericFinal := ex(backend.OpAdd, nil, yBase, yGeneric)\n\t\t\tySerialFinal := ex(backend.OpAdd, nil, yBase, ySerial)\n\t\t\tyForward, err := l.Forward(backend.NewContext(), x)\n\t\t\tif err != nil {\n\t\t\t\tt.Fatal(err)\n\t\t\t}\n\t\t\tt.Logf(\"%dx%dx%d dispatch=%s primitives=SiLU,MatMul,Einsum,Einsum,Add hybrids=silu:ref,rest:%s;silu:scalar-baseline,rest:%s x=%d wbase=%d wscale=%d coef=%d silu=%d silu-ref=%d silu-scalar-baseline=%d ybase=%d ybase-ref-silu=%d ybase-scalar-baseline=%d basis=%d spline-fused=%d spline-generic=%d spline-serial=%d final-fused=%d final-ref-silu=%d final-scalar-baseline=%d final-generic=%d final-serial=%d forward=%d\", tc.batch, tc.in, tc.out, ctx.Backend.Name(), ctx.Backend.Name(), ctx.Backend.Name(), kanSIMDDiagnosticDigest(x.Storage().F64()), kanSIMDDiagnosticDigest(l.WBase.Storage().F64()), kanSIMDDiagnosticDigest(l.WScale.Storage().F64()), kanSIMDDiagnosticDigest(l.Coef.Storage().F64()), kanSIMDDiagnosticDigest(s.Storage().F64()), kanSIMDDiagnosticDigest(refOut[0].Storage().F64()), kanSIMDDiagnosticDigest(sScalarBaseline.Storage().F64()), kanSIMDDiagnosticDigest(yBase.Storage().F64()), kanSIMDDiagnosticDigest(yBaseRefSiLU.Storage().F64()), kanSIMDDiagnosticDigest(yBaseScalarBaseline.Storage().F64()), kanSIMDDiagnosticDigest(basis.Storage().F64()), kanSIMDDiagnosticDigest(yFused.Storage().F64()), kanSIMDDiagnosticDigest(yGeneric.Storage().F64()), kanSIMDDiagnosticDigest(ySerial.Storage().F64()), kanSIMDDiagnosticDigest(yFusedFinal.Storage().F64()), kanSIMDDiagnosticDigest(yRefSiLUFinal.Storage().F64()), kanSIMDDiagnosticDigest(yScalarBaselineFinal.Storage().F64()), kanSIMDDiagnosticDigest(yGenericFinal.Storage().F64()), kanSIMDDiagnosticDigest(ySerialFinal.Storage().F64()), kanSIMDDiagnosticDigest(yForward.Storage().F64()))\n\t\t})\n\t}\n}\n"
+  },
+  "research-default-raw.log": {
+    "sha256": "f80f1e883213897f7d16a902181216a14486942676cebc6dfee9bbde246c9a78",
+    "bytes": 129,
+    "content": "=== RUN   TestKANForwardIsBitIdentical\n--- PASS: TestKANForwardIsBitIdentical (0.00s)\nPASS\nok  \tgithub.com/jxsl13/goai/nn\t0.393s\n"
+  },
+  "research-default.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "research-final-status-raw.log": {
+    "sha256": "ba051334ebc33f3162a4fd5be48615e03c8dac8ec7977e7c2752dbc1cf981841",
+    "bytes": 20,
+    "content": "## HEAD (no branch)\n"
+  },
+  "research-final-status.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "research-simd-raw.log": {
+    "sha256": "6a0cb216de3794e8e337a3daefabe29b7826851a9b0217816d118ca7dcb9845a",
+    "bytes": 226,
+    "content": "=== RUN   TestKANForwardIsBitIdentical\n    kan_bitidentity_test.go:51: 3x5x7 digest 17265271475585544907, want 5936029728971432568\n--- FAIL: TestKANForwardIsBitIdentical (0.00s)\nFAIL\nFAIL\tgithub.com/jxsl13/goai/nn\t0.401s\nFAIL\n"
+  },
+  "research-simd.exit": {
+    "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "bytes": 2,
+    "content": "1\n"
+  },
+  "revisions-raw.log": {
+    "sha256": "1bcfd204c4be4721afa0f73a6b1ead209a2d68711751987ce14ba7a094b91e57",
+    "bytes": 328,
+    "content": "d62dad152a9aba70475d7cfd2f5159a0f050657b\nc6afe9e4ba8b2a46c254953c921cf97ddf4f72c6\n6322ae6ac7afae1b4af33f5a16f947258437d2f6\ne4827df51309fc73e89b7f3d97dff367fc77d419\n6620e84b20de5b7708a517c9a438eb3480de9b2d\nf1d48ffe18f2edbf69392d9d910dfbcb93e8bc58\nfb3b4446d030d81df3f61bc3c86999cee152acb0\nfb3b4446d030d81df3f61bc3c86999cee152acb0\n"
+  },
+  "revisions.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  }
+}
