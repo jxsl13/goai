@@ -1,0 +1,353 @@
+# T-01M246GYK2F9N implementation transcript
+
+Worktree: `/private/tmp/goai-autograd-bce-implement-xWcpHr/repo`
+
+## Baseline
+
+Command:
+
+```text
+git status --short && git rev-parse HEAD && shasum -a 256 autograd/vjp_elementwise.go
+```
+
+Output (exit 0):
+
+```text
+1723796e2f426b28e69e0a39f113038a89adcc31
+07adbf223e44d862d5f9e3e38a743eff54def329280bb8b76aa0ffe3f9b62945  autograd/vjp_elementwise.go
+```
+
+The empty line before HEAD is the empty `git status --short` output.
+
+## Spectackle
+
+`spectackle call get '{"id":"T-01M246GYK2F9N","depth":0,"budget":16000}'` exited 0 and returned the task brief used for this work.
+
+`spectackle call lease '{"op":"claim","item":"T-01M246GYK2F9N","paths":["autograd/vjp_elementwise.go","autograd/vjp_bounds_internal_test.go"],"ttl":7200}'` exited 0:
+
+```text
+c . journal 1116 events since last compact
+ok claimed autograd/vjp_elementwise.go autograd/vjp_bounds_internal_test.go
+```
+
+## Literal Go environment prefix
+
+```text
+env PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0
+```
+
+## Pre-oracle mutation 1: reached one-ULP F32 tanh store
+
+Applied with `apply_patch`, adding the temporary `math` import and changing exactly the original F32 tanh store line from:
+
+```go
+ds[i] = float32(float64(gs[i]) * (1 - yv*yv))
+```
+
+to:
+
+```go
+ds[i] = math.Float32frombits(math.Float32bits(float32(float64(gs[i])*(1-yv*yv))) + 1)
+```
+
+This increments the raw finite F32 result by exactly one representable value in the exercised positive-result cases.
+
+Command:
+
+```text
+env PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go test ./autograd -run '^TestUnaryVJPF32Parity$' -count=1
+```
+
+Output (exit 0):
+
+```text
+ok  	github.com/jxsl13/goai/autograd	0.466s
+```
+
+Command:
+
+```text
+env PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go test ./autograd ./backend/cpu ./nn -short -count=1
+```
+
+Output (exit 0):
+
+```text
+ok  	github.com/jxsl13/goai/autograd	1.676s
+ok  	github.com/jxsl13/goai/backend/cpu	14.699s
+ok  	github.com/jxsl13/goai/nn	7.940s
+```
+
+Thus the compiling one-ULP corruption was green in all three actually run packages. To prove the same store was reached, the mutated store was temporarily replaced by a closure that consumes `yv` and `gs[i]` and panics. The first attempt retained the now-unused `math` import and exited 1 at compile time:
+
+```text
+# github.com/jxsl13/goai/autograd [github.com/jxsl13/goai/autograd.test]
+autograd/vjp_elementwise.go:4:2: "math" imported and not used
+FAIL	github.com/jxsl13/goai/autograd [build failed]
+FAIL
+```
+
+After removing that import with `apply_patch`, the same command exited 1 from the intended reached panic:
+
+```text
+--- FAIL: TestUnaryVJPF32Parity (0.00s)
+panic: T-01M246GYK2F9N reached F32 tanh store [recovered, repanicked]
+...
+github.com/jxsl13/goai/autograd.tanhVJP.func1(...)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/vjp_elementwise.go:171
+...
+FAIL	github.com/jxsl13/goai/autograd	0.474s
+FAIL
+```
+
+The original import block and store expression were then restored with `apply_patch`. The green corruption is evidence that the existing tolerance parity test reaches specialized tanh but does not enforce bit identity.
+
+## Pre-oracle mutation 2: typed ReLU zero-condition corruption
+
+Applied with `apply_patch`, changing each typed specialized branch's original condition exactly once from `if xs[i] > 0` to `if xs[i] >= 0`. This is the same condition corruption in F64 and F32, incorrectly passing `g` through at both signed zeros.
+
+Command:
+
+```text
+env PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go test ./autograd -run 'ReLU|Relu|GradCheckAllOps' -count=1
+```
+
+Output (exit 0):
+
+```text
+ok  	github.com/jxsl13/goai/autograd	0.520s
+```
+
+Command:
+
+```text
+env PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go test ./autograd ./backend/cpu ./nn -short -count=1
+```
+
+Output (exit 0):
+
+```text
+ok  	github.com/jxsl13/goai/autograd	1.746s
+ok  	github.com/jxsl13/goai/backend/cpu	15.274s
+ok  	github.com/jxsl13/goai/nn	8.179s
+```
+
+Thus the compiling zero-condition corruption was green in all three actually run packages. To prove each typed condition was reached independently, a temporary one-element positive-input test was added with `apply_patch`, and each branch condition in turn was temporarily replaced by a closure consuming `xs[i]` and panicking. The F64 command `go test ./autograd -run '^TestTemporaryReLUMutationReach/f64$' -count=1` exited 1 with:
+
+```text
+--- FAIL: TestTemporaryReLUMutationReach (0.00s)
+    --- FAIL: TestTemporaryReLUMutationReach/f64 (0.00s)
+panic: T-01M246GYK2F9N reached F64 ReLU condition [recovered, repanicked]
+...
+github.com/jxsl13/goai/autograd.reluVJP.func1(...)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/vjp_elementwise.go:123
+...
+FAIL	github.com/jxsl13/goai/autograd	0.333s
+FAIL
+```
+
+The equivalent F32 command exited 1 with:
+
+```text
+--- FAIL: TestTemporaryReLUMutationReach (0.00s)
+    --- FAIL: TestTemporaryReLUMutationReach/f32 (0.00s)
+panic: T-01M246GYK2F9N reached F32 ReLU condition [recovered, repanicked]
+...
+github.com/jxsl13/goai/autograd.reluVJP.func1(...)
+	/private/tmp/goai-autograd-bce-implement-xWcpHr/repo/autograd/vjp_elementwise.go:134
+...
+FAIL	github.com/jxsl13/goai/autograd	0.332s
+FAIL
+```
+
+The temporary test was deleted and both original conditions restored with `apply_patch`. Restoration check:
+
+```text
+07adbf223e44d862d5f9e3e38a743eff54def329280bb8b76aa0ffe3f9b62945  autograd/vjp_elementwise.go
+```
+
+`git status --short` was empty. The old suite therefore executes both typed ReLU code in broader workloads but lacks an exact signed-zero derivative assertion.
+
+## Original-source historical oracle
+
+Created `autograd/vjp_bounds_internal_test.go` with `apply_patch` while production source still had its baseline SHA-256. Its four `historicalBounds*` functions independently copy the original algorithms and are compared to the four production functions for raw F32/F64/F16 storage bits, shape/dtype, error type/message, panic type/message, unary callback visit order and argument bits, unchanged full input backing storage, and output/input non-aliasing. Cases cover zero length (including prefix backing), scalar, 1/3/7/8/9/31/32/33/2048/65537 elements, finite nonuniform values, signed zeros, smallest signed subnormals, infinities, multiple signed NaN payloads, independently varied prefix/offset/transpose layouts, mixed F32/F64 and F16 generic fallbacks, and typed short-y/short-g historical behavior including ReLU's conditional short-g reads.
+
+The same file defines the requested direct and tape benchmark matrices. Benchmark labels use uppercase dtype path components, e.g. `BenchmarkUnaryVJPBounds/ReLU/F32/N2048` and `BenchmarkUnaryVJPBoundsTape/ReLU/F32/N2048`. No benchmark timing command was run.
+
+First original-source oracle run exited 1 because the test incorrectly required short-y ReLU to panic even though ReLU deliberately ignores `out`; production and the historical copy agreed. Literal output:
+
+```text
+--- FAIL: TestUnaryVJPBoundsExact (0.12s)
+    --- FAIL: TestUnaryVJPBoundsExact/short/relu/f64/short-y (0.00s)
+        vjp_bounds_internal_test.go:462: short typed input did not preserve historical panic
+    --- FAIL: TestUnaryVJPBoundsExact/short/relu/f32/short-y (0.00s)
+        vjp_bounds_internal_test.go:462: short typed input did not preserve historical panic
+FAIL
+FAIL	github.com/jxsl13/goai/autograd	0.617s
+FAIL
+```
+
+The expectation was corrected with `apply_patch`: short-y ReLU must not panic, while its short-g positive case must. The rerun exited 0:
+
+```text
+ok  	github.com/jxsl13/goai/autograd	0.480s
+```
+
+## Post-oracle rejection of the same compiling mutants
+
+Reapplied the typed ReLU `>0` to `>=0` condition corruption with `apply_patch`. Exact F64 case command:
+
+```text
+env PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go test ./autograd -run '^TestUnaryVJPBoundsExact/sizes/relu/f64/n9$' -count=1
+```
+
+Exit 1; relevant output:
+
+```text
+--- FAIL: TestUnaryVJPBoundsExact/sizes/relu/f64/n9 (0.00s)
+production: ... bits:[]uint64{0xfff0000000000000, 0x7ff8000000001234, 0xfff8000000005678, ...}
+historical: ... bits:[]uint64{0x0, 0x0, 0xfff8000000005678, ...}
+FAIL	github.com/jxsl13/goai/autograd	0.363s
+```
+
+Exact F32 case used the analogous `/f32/n9` selector and exited 1:
+
+```text
+--- FAIL: TestUnaryVJPBoundsExact/sizes/relu/f32/n9 (0.00s)
+production: ... bits:[]uint64{0xff800000, 0x7fc01234, 0xffc05678, ...}
+historical: ... bits:[]uint64{0x0, 0x0, 0xffc05678, ...}
+FAIL	github.com/jxsl13/goai/autograd	0.549s
+```
+
+Restored both original ReLU conditions, then reapplied the exact F32 tanh raw-result `+1` one-ULP store corruption and its temporary `math` import. Command:
+
+```text
+env PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go test ./autograd -run '^TestUnaryVJPBoundsExact/sizes/tanh/f32/n9$' -count=1
+```
+
+Exit 1; relevant output:
+
+```text
+--- FAIL: TestUnaryVJPBoundsExact/sizes/tanh/f32/n9 (0.00s)
+production: ... bits:[]uint64{0xff800001, 0x7fc01235, 0xffc05679, 0xffc01235, 0x7fc05679, 0xffe00002, 0x2, 0x80000002, 0x7f800001}
+historical: ... bits:[]uint64{0xff800000, 0x7fc01234, 0xffc05678, 0xffc01234, 0x7fc05678, 0xffe00001, 0x1, 0x80000001, 0x7f800000}
+FAIL	github.com/jxsl13/goai/autograd	0.342s
+```
+
+The temporary import and arithmetic mutation were restored with `apply_patch`. After adding explicit zero-length prefix backing coverage and formatting both scoped files, the final original-source oracle command exited 0:
+
+```text
+ok  	github.com/jxsl13/goai/autograd	0.436s
+```
+
+Original-source checkpoint hashes/status:
+
+```text
+07adbf223e44d862d5f9e3e38a743eff54def329280bb8b76aa0ffe3f9b62945  autograd/vjp_elementwise.go
+b563796a8676af96e99d01dd6ac461dc704f2b0dd31b0f1d2ffc97108bc1d860  autograd/vjp_bounds_internal_test.go
+?? autograd/vjp_bounds_internal_test.go
+```
+
+There was no production diff at this checkpoint.
+
+## Corrective source-review checkpoint
+
+The earlier sections intentionally contain relevant excerpts (marked with `...`) rather than complete raw outputs; they remain as historical checkpoint evidence. Complete raw output from the corrective reruns is preserved separately:
+
+- `/private/tmp/goai-autograd-bce-implement-xWcpHr/reach-f64-original-suites.log`
+- `/private/tmp/goai-autograd-bce-implement-xWcpHr/reach-f32-original-suites.log`
+- `/private/tmp/goai-autograd-bce-implement-xWcpHr/finite-one-ulp-oracle.log`
+- `/private/tmp/goai-autograd-bce-implement-xWcpHr/original-source-oracle-final.log`
+
+Valid size, layout, mixed-dtype, and finite-normal cases now independently require: no error, no panic, exactly one output, output dtype equal to x dtype, output shape equal to x shape, and fresh backing length equal to `shape.Numel()`. Matching failures can no longer make a valid fixture pass. Short-input cases continue to compare historical panic type/message and explicitly assert the expected occurrence.
+
+The original-suite reach proof no longer uses any temporary test. With the new oracle excluded by `-skip '^TestUnaryVJPBounds'`, the F64 panic mutant was reached by pre-existing `TestCheckpointGradientsIdentical` and `TestSelectiveAttentionGradcheck`; the F32 panic mutant was reached by pre-existing `TestSmoothL1CoreVJPExactCompositeParity/f32-special` and `TestEndToEndClassificationF32`. Both commands exited 1 from the intended panic and their complete outputs are in the raw logs above. Production was restored to SHA-256 `07adbf223e44d862d5f9e3e38a743eff54def329280bb8b76aa0ffe3f9b62945` after each probe.
+
+The finite-normal tanh fixture uses `y={0.5,-0.25,0.75}` and `g={1,2,-3}`. Reapplying the F32 raw-result `+1` mutant changed exact finite normal result bits `3f400000/3ff00000/bfa80000` to `3f400001/3ff00001/bfa80001`; the fixture rejected it with exit 1. This avoids relying on the special-value Inf-to-NaN differences while preserving the separate special-value matrix.
+
+Final corrected original-source oracle checkpoint:
+
+```text
+ok  	github.com/jxsl13/goai/autograd	0.465s
+07adbf223e44d862d5f9e3e38a743eff54def329280bb8b76aa0ffe3f9b62945  autograd/vjp_elementwise.go
+bd26d0195b02e23aa1406f01f7df25fff5aa65ea81fea0c3bae9f31d3359648c  autograd/vjp_bounds_internal_test.go
+?? autograd/vjp_bounds_internal_test.go
+```
+
+## Guarded candidate and race rejection
+
+The candidate adds a one-time `n <= len(...)` guard to each of the eight typed branches, windows every participating slice with `[:n:n]`, ranges the proof-bounded destination in the hot path, and retains the exact original `for i := 0; i < n; i++` loop in the cold fallback. The reconstructed exact guarded candidate currently in the worktree has runtime SHA-256 `0084a57d6a6fb3dc41049c860b481035f090e492a0a79789f2430817a7d63cab`, test SHA-256 `bd26d0195b02e23aa1406f01f7df25fff5aa65ea81fea0c3bae9f31d3359648c`, and runtime diff size 82 insertions/20 deletions. It changes only the four authorized functions.
+
+Successful commands on the first guarded shape:
+
+```text
+env ... CGO_ENABLED=0 go test ./autograd -run '^TestUnaryVJPBounds' -count=1
+exit 0: ok  github.com/jxsl13/goai/autograd  0.582s
+
+env ... CGO_ENABLED=0 go test ./autograd -short -count=1
+exit 0: ok  github.com/jxsl13/goai/autograd  2.861s
+
+env ... CGO_ENABLED=0 GOEXPERIMENT=simd go test ./autograd -run '^TestUnaryVJPBounds' -count=1
+exit 0: ok  github.com/jxsl13/goai/autograd  0.437s
+```
+
+The full SIMD short command exited 1 only with the two independently pristine-reproduced failures identified by root:
+
+```text
+--- FAIL: TestSigmoidFocalCoreExactCompositeVJPParity (0.01s)
+    --- FAIL: TestSigmoidFocalCoreExactCompositeVJPParity/f64 (0.00s)
+        vjp_sigmoid_focal_test.go:87: element 0: got 3edc4cec2126b3dc want 3edc4cec2126b3db
+    --- FAIL: TestSigmoidFocalCoreExactCompositeVJPParity/f64#01 (0.00s)
+        vjp_sigmoid_focal_test.go:80: element 0: got 3fbe9ab13fe1dcd4 want 3fbe9ab13fe1dcd6
+--- FAIL: TestWKVOpMatchesHostWKV (0.00s)
+    wkv_test.go:49: diverges at [1 0]
+FAIL
+FAIL	github.com/jxsl13/goai/autograd	1.611s
+FAIL
+```
+
+Required CGO1 race exact command on the guarded candidate exited 1. The tool reported 408,312 output tokens and truncated the raw stream because every larger tanh/F32 case printed full bit arrays; the first complete discriminating failure was:
+
+```text
+--- FAIL: TestUnaryVJPBoundsExact/sizes/tanh/f32/n7 (0.00s)
+production bits: ff800000 7fc01234 ffc05678 7fe00001 7fc05678 ffe00001 00000001
+historical bits: ff800000 7fc01234 ffc05678 ffc01234 7fc05678 ffe00001 00000001
+```
+
+Only the element where both operands to the final multiplication are NaNs differs: the guarded hot loop selects/quietens the upstream signaling-NaN payload (`7fe00001`), while the historical loop preserves the negative intermediate NaN payload (`ffc01234`) under race instrumentation. Default and SIMD non-race builds were bit-identical.
+
+Diagnostic attempts, all applied/restored with `apply_patch` and none retained:
+
+1. Replaced hot `range ds` with original-form `i < n` loops. Race exact still exited 1 with the same 408,312-token tanh/F32 failure family.
+2. Hoisted `gv := float64(gs[i])` while keeping the original multiplication expression. Race exact still exited 1 with the same failure family.
+3. Temporarily forced only the tanh/F32 guard false so the exact cold historical loop ran. Targeted race n7 exited 0 (`ok ... 1.727s`), proving the duplicate hot arithmetic block, not slicing or the fixture, triggers the compiler-sensitive NaN selection.
+4. A commuted diagnostic expression was briefly applied but was not executed because root's pause instruction arrived; it was immediately restored. It is not evidence and is not part of the candidate.
+
+Per root instruction, production was then restored entirely to baseline with `apply_patch` and checked at SHA-256 `07adbf223e44d862d5f9e3e38a743eff54def329280bb8b76aa0ffe3f9b62945`. The frozen oracle's explicit original-runtime race command passed:
+
+```text
+env PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local GOEXPERIMENT= CGO_ENABLED=1 go test -race ./autograd -run '^TestUnaryVJPBounds' -count=1
+exit 0: ok  github.com/jxsl13/goai/autograd  3.510s
+```
+
+Complete baseline output is `/private/tmp/goai-autograd-bce-implement-xWcpHr/original-runtime-race.log`. Therefore the guarded candidate is correctness-rejected by the declared race gate; this is not an original-source oracle limitation. The exact guarded candidate was restored afterward and no further candidate variation was attempted pending root direction.
+
+## Final rejected-candidate handoff
+
+The exact preserved diff is `/private/tmp/goai-autograd-bce-implement-xWcpHr/candidate.diff`. Final isolated-worktree state:
+
+```text
+0084a57d6a6fb3dc41049c860b481035f090e492a0a79789f2430817a7d63cab  autograd/vjp_elementwise.go
+bd26d0195b02e23aa1406f01f7df25fff5aa65ea81fea0c3bae9f31d3359648c  autograd/vjp_bounds_internal_test.go
+ M autograd/vjp_elementwise.go
+?? autograd/vjp_bounds_internal_test.go
+```
+
+Baseline runtime SHA-256 is `07adbf223e44d862d5f9e3e38a743eff54def329280bb8b76aa0ffe3f9b62945`. No benchmark timing was run. No compiler BCE build/disassembly was run after the correctness rejection, so this report makes no claim that any hot loop eliminated bounds checks. The preserved candidate is unqualified and retained only for independent rejection verification. Root owns the narrower follow-up and all lifecycle/Git actions.
+
+Lease release command exited 0:
+
+```text
+c . journal 1116 events since last compact
+ok released
+```

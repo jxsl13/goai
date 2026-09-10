@@ -1,12 +1,35 @@
 # M2 autograd bounds-check experiment
 
-Status: **unqualified experiment; no performance result yet**.
+Status: **eight-loop runtime candidate rejected on race exactness; no speedup claim**.
 
 This follows the compiler-confirmed PS6093 application reported in
 [perfscan issue 904](https://github.com/jxsl13/perfscan/issues/904#issuecomment-5609787036).
 It does not repeat the older reference-backend bounds-check optimization.
 The old and candidate arms will share benchmark source and compiler settings.
 Removing a compiler check is a hypothesis, not proof of a useful speedup.
+
+## Rejected eight-loop candidate
+
+The candidate is preserved only as `eight-loop-candidate-rejected.diff`; it was
+never imported into this branch's production code. Its runtime SHA-256 is
+`0084a57d6a6fb3dc41049c860b481035f090e492a0a79789f2430817a7d63cab`.
+An independent old/new race check reproduced a candidate-induced F32 tanh
+NaN-payload mismatch in `TestUnaryVJPBoundsExact/sizes/tanh/f32/n7`:
+element 3 is `7fe00001` versus historical `ffc01234`. The original runtime
+passes the identical full race oracle. Non-race default and SIMD exact tests
+passed the candidate, so those builds alone would miss this contract violation.
+
+The frozen zero-bit-difference gate is not relaxed. The source author tried
+two loop/load-shape variations before the baseline discriminator; both failed.
+The report explicitly marks their truncated initial tool output and does not
+represent excerpts as complete logs. The final independent reproduction retains
+raw results separately. No post-change compiler-BCE inspection or timing was
+run: an incorrect candidate cannot qualify for promotion.
+
+The exact tests and independently verified measurement runner remain useful.
+A follow-up may narrow the experiment to unary, ReLU, and sigmoid while leaving
+both historical tanh loops untouched. Such a follow-up must be specified and
+verified anew under the same correctness and performance gates before timing.
 
 ## Source and scope
 
