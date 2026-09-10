@@ -218,6 +218,20 @@ to the executable test suite.
 Benchmark `MB/s` is based on nominal output bytes from `SetBytes`, not measured
 memory bandwidth. Qualification uses ns/op, B/op, and allocs/op.
 
+The subsequent `simd-baseline-diagnostic-*` artifacts measure the pre-existing
+focal and WKV discrepancies against their previously specified leaf/recurrence
+bounds. Maximum scaled errors were `2.7755575615628914e-17` for focal forward,
+`5.082197683525802e-21` for focal VJP, and `1.7347435098673699e-16` for WKV.
+There were no `1e-13` focal or `1e-10` WKV bound exceedances, or NaN/Inf/zero-sign
+discrepancies, in those fixtures. The focused exact fused-focal CPU/reference
+test passed. These observations support a separate ARM64-SIMD test-policy
+correction; no existing test or runtime was changed by the diagnostic.
+
+The independently reproduced bounds-rewrite exactness finding was reported in
+[perfscan issue 904](https://github.com/jxsl13/perfscan/issues/904#issuecomment-5610699329).
+It is a validation warning, not a new measured optimization or a withdrawal of
+the earlier reference-backend gains in that issue.
+
 For benchstat comparisons, aggregate the seven pairs rather than making
 seven one-sample tables. Pin old/new column order even in reversed campaigns:
 
