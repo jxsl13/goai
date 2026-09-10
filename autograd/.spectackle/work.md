@@ -48,6 +48,7 @@ kind: proposal
 state: draft
 created: 2026-09-10
 refs: R-01M249HFAVFQR8HNHQQVYZPEP6
+grilled: 2026-09-10 open=1
 targets: go:autograd_test.TestSigmoidFocalCoreExactCompositeVJPParity, go:autograd_test.TestWKVOpMatchesHostWKV
 
 GOAL: correct two inherited scalar-comparison tests for existing ARM64 SIMD numeric contracts without modifying runtime code or weakening exact unary VJP coverage. Baseline c6afe9e4 and foundation4ad981bf fail full SIMD autograd with the same focal/WKV discrepancies. Archived R-01M249HFAVFQR measured all fixture outputs before proposing changes: focal scaled abs/max(1,abs(want)) max forward2.7755575615628914e-17 and VJP5.082197683525802e-21; WKV abs/max(1e-6,abs(want)) max1.7347435098673699e-16. All are below the predeclared existing1e-13 and1e-10 bounds respectively; no nonfinite or signed-zero discrepancies. Fused F64 focal CPU/reference remains bit-exact; the active composite uses deliberately approximate ARM64 Softplus/gradient leaves. CPU WKV uses paired NEON approximate exp while nn.WKV is scalar. Evidence lives at internal/benchcompare/leadership/evidence/m2-autograd-bce-20260910/simd-baseline-diagnostic-{report,runs,hashes,source}.txt.
