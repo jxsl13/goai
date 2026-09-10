@@ -45,7 +45,7 @@ MACHINE-PRODUCED LIST, reproducible with internal/perfscan/tools/exactness_sweep
 
 ## R-01M25XNPFEEP58GC32DVNHVB9Q Preflight compile-time Apple ARM64 isolation of all six VJP bounds proofs
 kind: research
-state: draft
+state: active
 created: 2026-09-10
 grilled: 2026-09-10 open=0
 targets: go:autograd.unaryVJP, go:autograd.reluVJP, go:autograd.sigmoidVJP
