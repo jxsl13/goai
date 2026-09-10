@@ -32,10 +32,15 @@ func wkvInputs() []*tensor.Tensor {
 }
 
 // §T516: the dispatched OpWKV is the same stabilized recurrence as the nn.WKV
-// host utility — bit-identical outputs.
+// host utility. ARM64 SIMD uses the existing scalar-reference error bound;
+// other builds retain the exact numeric comparison.
 func TestWKVOpMatchesHostWKV(t *testing.T) {
 	ins := wkvInputs()
-	out, err := backend.Execute(backend.NewContext(), backend.OpWKV, ins, nil)
+	cpuBE, ok := backend.Get(backend.CPU)
+	if !ok {
+		t.Fatal("cpu backend not registered")
+	}
+	out, err := backend.Execute(backend.NewContext().WithBackend(cpuBE), backend.OpWKV, ins, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,10 +48,23 @@ func TestWKVOpMatchesHostWKV(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(out) != 1 {
+		t.Fatalf("WKV returned %d tensors, want 1", len(out))
+	}
+	requireScalarParityLayout(t, out[0], want)
+	if out[0].Dtype() != tensor.F64 {
+		t.Fatalf("WKV dtype: got %v, want F64", out[0].Dtype())
+	}
 	for i := range want.Numel() {
 		idx := tensor.Unravel(i, want.Shape())
-		if out[0].AtF64(idx...) != want.AtF64(idx...) {
-			t.Fatalf("diverges at %v", idx)
+		v, w := out[0].AtF64(idx...), want.AtF64(idx...)
+		if arm64SIMDScalarPolicy {
+			if !f64ScalarPolicyEqual(v, w, 1e-6, 1e-10) {
+				t.Fatalf("diverges at %v: got %.17g (%016x) want %.17g (%016x), scaled error %g",
+					idx, v, math.Float64bits(v), w, math.Float64bits(w), math.Abs(v-w)/math.Max(1e-6, math.Abs(w)))
+			}
+		} else if v != w {
+			t.Fatalf("diverges at %v: got %.17g want %.17g", idx, v, w)
 		}
 	}
 }
