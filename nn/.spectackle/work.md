@@ -50,7 +50,7 @@ BOUNDARIES: Fresh cheaper research agent in its own detached worktree. No commit
 
 ## P-01M25KRMYZEH599AP2131M1GD6 Qualify KAN exact output across scalar and SIMD CPU lanes
 kind: proposal
-state: draft
+state: active
 created: 2026-09-10
 refs: R-01M25JEGEJFDEVBR7B0YZKQ3MX
 grilled: 2026-09-10 open=0
