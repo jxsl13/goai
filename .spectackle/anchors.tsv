@@ -463,3 +463,7 @@ UNARY-BCE-PERF-001	go:autograd.unaryVJP	autograd/vjp_elementwise.go	18-50	a498b9
 UNARY-BCE-PERF-001	go:autograd.reluVJP	autograd/vjp_elementwise.go	112-148	60c82c25f3b736e6	854738ba127edcf2
 UNARY-BCE-PERF-001	go:autograd.tanhVJP	autograd/vjp_elementwise.go	155-176	d499c5b3fd45443b	854738ba127edcf2
 UNARY-BCE-PERF-001	go:autograd.sigmoidVJP	autograd/vjp_elementwise.go	195-216	629480a7cf6758d8	854738ba127edcf2
+ARM64-SIMD-FOCAL-COMPOSITE-001	go:autograd_test.TestSigmoidFocalCoreExactCompositeVJPParity	autograd/vjp_sigmoid_focal_test.go	57-94	7b18e9f3963dfc6d	efaaf34e3a89171a
+ARM64-SIMD-WKV-SCALAR-001	go:autograd_test.TestWKVOpMatchesHostWKV	autograd/wkv_test.go	36-52	8d9aca7b60d51cbb	fb5d9ea5844b88da
+ARM64-SIMD-PARITY-GUARDS-001	go:autograd_test.TestWKVOpMatchesHostWKV	autograd/wkv_test.go	36-52	8d9aca7b60d51cbb	ead325ceee121d7c
+ARM64-SIMD-PARITY-GUARDS-001	go:autograd_test.TestSigmoidFocalCoreExactCompositeVJPParity	autograd/vjp_sigmoid_focal_test.go	57-94	7b18e9f3963dfc6d	ead325ceee121d7c
