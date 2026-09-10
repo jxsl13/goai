@@ -65,6 +65,7 @@ state: draft
 created: 2026-09-10
 parent: P-01M24BYJB6EEP8VZDM9J7G238Q
 refs: R-01M249HFAVFQR8HNHQQVYZPEP6
+grilled: 2026-09-10 open=0
 targets: go:autograd_test.TestSigmoidFocalCoreExactCompositeVJPParity, go:autograd_test.TestWKVOpMatchesHostWKV
 
 GOAL: make the inherited ARM64 SIMD F64 focal/composite and WKV/host tests honor fixed existing numeric bounds while preserving all exact policies elsewhere. This is test-only repair, not a runtime optimization.
