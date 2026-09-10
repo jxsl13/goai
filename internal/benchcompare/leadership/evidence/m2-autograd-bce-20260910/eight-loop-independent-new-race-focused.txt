@@ -1,0 +1,8 @@
+--- FAIL: TestUnaryVJPBoundsExact (0.02s)
+    --- FAIL: TestUnaryVJPBoundsExact/sizes/tanh/f32/n7 (0.00s)
+        vjp_bounds_internal_test.go:402: production differs from historical oracle
+            production: autograd.boundsOutcome{outputs:[]autograd.boundsTensorImage{autograd.boundsTensorImage{dtype:0x1, shape:tensor.Shape{7}, bits:[]uint64{0xff800000, 0x7fc01234, 0xffc05678, 0x7fe00001, 0x7fc05678, 0xffe00001, 0x1}}}, err:"", panic:"", visits:[]autograd.boundsCallbackVisit(nil)}
+            historical: autograd.boundsOutcome{outputs:[]autograd.boundsTensorImage{autograd.boundsTensorImage{dtype:0x1, shape:tensor.Shape{7}, bits:[]uint64{0xff800000, 0x7fc01234, 0xffc05678, 0xffc01234, 0x7fc05678, 0xffe00001, 0x1}}}, err:"", panic:"", visits:[]autograd.boundsCallbackVisit(nil)}
+FAIL
+FAIL	github.com/jxsl13/goai/autograd	0.440s
+FAIL

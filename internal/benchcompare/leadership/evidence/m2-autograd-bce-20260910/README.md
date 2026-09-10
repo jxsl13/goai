@@ -26,6 +26,15 @@ represent excerpts as complete logs. The final independent reproduction retains
 raw results separately. No post-change compiler-BCE inspection or timing was
 run: an incorrect candidate cannot qualify for promotion.
 
+`eight-loop-independent-rejection.txt` records the fresh verifier's commands,
+exits, and source hashes. The passing original-race output and failing minimal
+n7 output are retained alongside it. The full 1,633,246-byte failing output is
+losslessly retained in `eight-loop-independent-new-race.full.txt.gz`; its
+decompressed SHA-256 is
+`716fa0337a558a8369a2cc9912431195ab5a6d150ee429ed8e9c73780e943a94`.
+The report discloses one initial invalid GOEXPERIMENT argument, which did not
+execute tests and is not counted as a detected numerical defect.
+
 The exact tests and independently verified measurement runner remain useful.
 A follow-up may narrow the experiment to unary, ReLU, and sigmoid while leaving
 both historical tanh loops untouched. Such a follow-up must be specified and
