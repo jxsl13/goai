@@ -1,0 +1,59 @@
+{
+  "run": 34476604943,
+  "head": "6bc7fa61bbd4dc2efb66eb12d38dc3ec1891ec69",
+  "method": "gh api --allow-escape-sequences repos/jxsl13/goai/actions/jobs/<jobID>/logs > <scratch>/<lane>.log",
+  "files": {
+    "macos-simd.log": {
+      "bytes": 23722,
+      "sha256": "7eb50da5ecab6af43094c5d879d82005fca14b7b5c4751b4ce222a3cbab5dbdf"
+    },
+    "ubuntu-default.log": {
+      "bytes": 537151,
+      "sha256": "1275a5498b7ec33039f902851f72cc23fa8941a9e9362d1c4636d6109f116073"
+    },
+    "ubuntu-simd.log": {
+      "bytes": 23939,
+      "sha256": "77fbf6e1c34b484099fd72d3488db43810892045d437ff3b0e0e2b186ff3eea3"
+    },
+    "windows-cgo-default.log": {
+      "bytes": 148679,
+      "sha256": "9c05e884227bd1843d35ff0c5059cc967540b1f1e6d19eb7d45979611a578eff"
+    },
+    "windows-default.log": {
+      "bytes": 540558,
+      "sha256": "43f286c4288d07cd2c7a9822f6521c0f0257a3f167e2bef6d87d19dfda33da73"
+    },
+    "windows-simd.log": {
+      "bytes": 25897,
+      "sha256": "33e394928957e428cb405c59ec18147df43477502215ca90c6698f5453047d94"
+    }
+  },
+  "jobs": {
+    "ubuntu-simd": 102869135286,
+    "windows-simd": 102869135217,
+    "macos-simd": 102869135205,
+    "windows-cgo-default": 102869135225,
+    "ubuntu-default": 102869135195,
+    "windows-default": 102869135218
+  },
+  "conclusions": {
+    "ubuntu-simd": "failure (all three unchanged KAN golden assertions)",
+    "windows-simd": "failure (same native AMD64 digests)",
+    "macos-simd": "failure (same ARM64 digests as root)",
+    "ubuntu-default": "success, CGO_ENABLED=0, full nn test rerun",
+    "windows-default": "success, CGO_ENABLED=0, full nn test rerun",
+    "windows-cgo-default": "success, full nn test rerun"
+  },
+  "arm64SIMD": [
+    "17265271475585544907",
+    "5035091549113534389",
+    "12048638696559957597"
+  ],
+  "amd64SIMD": [
+    "16662584054408946177",
+    "3106186755478235033",
+    "611919531391070369"
+  ],
+  "archive": "Each corresponding <lane>.log.gz is deterministic gzip -n of the complete raw log; hashes above refer to the decompressed original bytes. ANSI and CRLF are retained, not rendered or normalized.",
+  "qualification": "This is diagnostic evidence, not successful final-head CI. The overall run may remain in progress; all three SIMD job failures disqualify merge. No current golden was changed in this head."
+}

@@ -1,0 +1,227 @@
+{
+  "committed-changed-paths.txt": {
+    "sha256": "f20d33c702c3325b076de890b438fa8d7d487613373e047ff4bbea43229ae4eb",
+    "bytes": 424,
+    "content": ".github/workflows/ci.yml\n.spectackle/anchors.tsv\ninternal/benchcompare/leadership/evidence/m2-kan-simd-baseline-20260910/README.md\ninternal/benchcompare/leadership/evidence/m2-kan-simd-baseline-20260910/research-capture.json\ninternal/benchcompare/leadership/evidence/m2-kan-simd-baseline-20260910/root-qualification.json\nnn/.spectackle/journal.ndjson\nnn/.spectackle/spec.md\nnn/.spectackle/work.md\nnn/kan_bitidentity_test.go\n"
+  },
+  "committed-diff-check.txt": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "committed-go-changed-paths.txt": {
+    "sha256": "0d8655bad795a92fb7d5019c7fcbc7649d974e13df15e2c035c1164066ba92d6",
+    "bytes": 27,
+    "content": "nn/kan_bitidentity_test.go\n"
+  },
+  "committed-target-diff.txt": {
+    "sha256": "d9a7643ba1a0ec6bbb2df5a5ee4310168a65fd1dfb019c036c80cbaf1e00bfcc",
+    "bytes": 8325,
+    "content": "diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml\nindex f064b2f5..d376267d 100644\n--- a/.github/workflows/ci.yml\n+++ b/.github/workflows/ci.yml\n@@ -373,114 +373,115 @@ jobs:\n           # `go build` skips _test.go entirely, so llamagpu's vulkan-tagged test\n           # files were compiled by nothing — they could rot indefinitely while this\n           # lane stayed green. `go vet` does compile them. Verified non-vacuous by\n           # injecting a syntax error and confirming it is caught (unlike the cuda\n           # corpus, whose OS constraint makes the same check compile nothing — see\n           # the note in the cgo lane and ADR-0029).\n           go vet -tags vulkan ./llamagpu/\n       - name: run backend/vulkan tests — only if this change touches it AND an ICD is present (§T600)\n         shell: bash\n         run: |\n           BASE=\"${{ github.event.pull_request.base.sha || github.event.before }}\"\n           AFFECTED=$(go run ./internal/cichange -impact \"$BASE\" HEAD || echo all)\n           case \"$AFFECTED\" in\n             all|*backend/vulkan*) ;;\n             *) echo \"skip: change does not touch backend/vulkan (affected: $AFFECTED) — rc=0\"; exit 0;;\n           esac\n           if ! vulkaninfo --summary >/dev/null 2>&1; then\n             echo \"skip: no loadable Vulkan ICD on this runner — rc=0\"; exit 0\n           fi\n           if vulkaninfo --summary 2>/dev/null | grep -qiE \"llvmpipe|swiftshader\"; then\n             export GOAI_VULKAN_SOFTWARE_ICD=1  # software ICD: known-divergent tests self-skip with reasons (T603)\n           fi\n           # `|| rc=$?` keeps the un-piped exit code (V24) AND survives bash -e: a bare\n           # failing command would abort the script before the log excerpt ever prints —\n           # exactly on failure, when the excerpt matters most (B53).\n           rc=0\n           go test -tags vulkan -short -count=1 -timeout 15m -v ./backend/vulkan/ > vk.log 2>&1 || rc=$?\n           grep -E \"^(--- (PASS|FAIL|SKIP)|ok |FAIL)|skipped:\" vk.log | head -80 || true\n           exit $rc\n \n   # go.mod stays tidy (ollama pattern; zero-dep module today, this guards drift).\n   tidy:\n     name: go mod tidy\n     runs-on: ubuntu-latest\n     steps:\n       - uses: actions/checkout@v7\n       - uses: actions/setup-go@v6\n         with:\n           go-version: \"1.27.1\"\n           cache: false\n       - uses: ./.github/actions/go-build-cache\n         with:\n           lane: tidy\n       - name: go mod tidy must not change go.mod (dependency drift gate)\n         run: |\n           go mod tidy\n           git diff --exit-code go.mod\n \n   # §T604 capability matrix, simd axis: compile GOEXPERIMENT=simd on every\n   # runner and execute the SIMD primitive tests. amd64 exercises archsimd;\n   # arm64 exercises the native NEON leaves that are intentionally experiment-gated.\n   simd:\n     needs: changes\n     if: needs.changes.outputs.code == 'true'\n     name: simd / ${{ matrix.os }} (soft)\n     runs-on: ${{ matrix.os }}\n     continue-on-error: true\n     strategy:\n       fail-fast: false\n       matrix:\n         os: [ubuntu-latest, windows-latest, macos-latest]\n     steps:\n       - uses: actions/checkout@v7\n       - uses: actions/setup-go@v6\n         with:\n           go-version: \"1.27.1\"\n           cache: false\n       - uses: ./.github/actions/go-build-cache\n         with:\n           lane: simd-${{ matrix.os }}\n       - name: capability probe (§T601 — what does this runner offer?)\n         shell: bash\n         run: go run ./internal/capprobe\n       - name: compile and test with GOEXPERIMENT=simd\n         shell: bash\n         env:\n           CGO_ENABLED: \"0\"\n         run: |\n           GOEXPERIMENT=simd go build -tags=simd ./...\n           GOEXPERIMENT=simd go test -short -count=1 ./internal/simd\n+          GOEXPERIMENT=simd go test -short -count=1 -v -run '^TestKANForwardIsBitIdentical$' ./nn\n \n   # §T604 capability matrix, cgo axis on windows (mingw): the tagless cgo build\n   # must behave like everywhere else; tests run selectively via the runner.\n   test-windows-cgo:\n     needs: changes\n     if: needs.changes.outputs.code == 'true'\n     name: cgo / windows\n     runs-on: windows-latest\n     steps:\n       - uses: actions/checkout@v7\n         with:\n           fetch-depth: 0 # §T587\n       - uses: actions/setup-go@v6\n         with:\n           go-version: \"1.27.1\"\n           cache: false\n       - uses: ./.github/actions/go-build-cache\n         with:\n           lane: cgo-windows\n       - name: capability probe (§T601 — what does this runner offer?)\n         shell: bash\n         run: go run ./internal/capprobe\n       - name: compile everything with cgo enabled via go vet (mingw)\n         shell: bash\n         env:\n           CGO_ENABLED: \"1\"\n         run: go vet ./...\n       - name: test (transparent selective run, §T587)\n         shell: bash\n         env:\n           CGO_ENABLED: \"1\"\n         run: |\n           BASE=\"${{ github.event.pull_request.base.sha || github.event.before }}\"\n           go run ./internal/cichange -run \"$BASE\" HEAD -- -short -count=1 -timeout 20m\ndiff --git a/nn/kan_bitidentity_test.go b/nn/kan_bitidentity_test.go\nindex 48de1221..6338d7a9 100644\n--- a/nn/kan_bitidentity_test.go\n+++ b/nn/kan_bitidentity_test.go\n@@ -1,54 +1,65 @@\n package nn\n \n import (\n-\t\"github.com/jxsl13/goai/internal/archgold\"\n \t\"math\"\n+\t\"runtime\"\n \t\"testing\"\n \n \t\"github.com/jxsl13/goai/backend\"\n+\t\"github.com/jxsl13/goai/internal/archgold\"\n \t\"github.com/jxsl13/goai/tensor\"\n )\n \n // TestKANForwardIsBitIdentical freezes the layer's output. Banding the fused spline over the\n // batch claims to change no value — a band never splits a row, so each row's accumulation over\n // the input dimension keeps the same ascending order — and a KAN is a smooth approximator whose\n // outputs would absorb a reassociation without any test noticing.\n //\n // The batch sizes straddle the fan-out gate: the 3-row case runs serially in both arms, the\n // 96-row case bands, and 13 is deliberately not a multiple of the worker count so the last\n // band is short.\n func TestKANForwardIsBitIdentical(t *testing.T) {\n \tcases := []struct {\n+\t\tname           string\n \t\tbatch, in, out int\n \t\twant           uint64\n \t}{\n-\t\t{3, 5, 7, archgold.Pick(5936029728971432568, 14272068029666688409)},\n-\t\t{13, 8, 6, archgold.Pick(15159748691548848689, 6609257596807823200)},\n-\t\t{96, 24, 32, archgold.Pick(515177776064738749, 9025949438388873583)},\n+\t\t{\"3x5x7\", 3, 5, 7, archgold.Pick(5936029728971432568, 14272068029666688409)},\n+\t\t{\"13x8x6\", 13, 8, 6, archgold.Pick(15159748691548848689, 6609257596807823200)},\n+\t\t{\"96x24x32\", 96, 24, 32, archgold.Pick(515177776064738749, 9025949438388873583)},\n \t}\n+\tcpuBE, ok := backend.Get(backend.CPU)\n+\tif !ok {\n+\t\tt.Fatal(\"cpu backend not registered\")\n+\t}\n+\tt.Logf(\"compiler=%s os=%s arch=%s backend=cpu\", runtime.Version(), runtime.GOOS, runtime.GOARCH)\n+\n+\t// Independent subtests retain every fixture failure for feature and architecture qualification.\n \tfor _, c := range cases {\n-\t\tl, err := NewKAN(c.in, c.out, 1)\n-\t\tif err != nil {\n-\t\t\tt.Fatal(err)\n-\t\t}\n-\t\tx := tensor.New(tensor.F64, tensor.Shape{c.batch, c.in})\n-\t\txs := x.Storage().F64()\n-\t\tfor i := range xs {\n-\t\t\txs[i] = math.Sin(float64(i*11+5)) * 0.6\n-\t\t}\n-\t\ty, err := l.Forward(backend.NewContext(), x)\n-\t\tif err != nil {\n-\t\t\tt.Fatal(err)\n-\t\t}\n-\t\th := uint64(14695981039346656037)\n-\t\tfor _, v := range y.Storage().F64() {\n-\t\t\tb := math.Float64bits(v)\n-\t\t\tfor s := 0; s < 64; s += 8 {\n-\t\t\t\th = (h ^ (b>>s)&0xff) * 1099511628211\n+\t\tt.Run(c.name, func(t *testing.T) {\n+\t\t\tl, err := NewKAN(c.in, c.out, 1)\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\t\t\tx := tensor.New(tensor.F64, tensor.Shape{c.batch, c.in})\n+\t\t\txs := x.Storage().F64()\n+\t\t\tfor i := range xs {\n+\t\t\t\txs[i] = math.Sin(float64(i*11+5)) * 0.6\n+\t\t\t}\n+\t\t\ty, err := l.Forward(backend.NewContext().WithBackend(cpuBE), x)\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\t\t\th := uint64(14695981039346656037)\n+\t\t\tfor _, v := range y.Storage().F64() {\n+\t\t\t\tb := math.Float64bits(v)\n+\t\t\t\tfor s := 0; s < 64; s += 8 {\n+\t\t\t\t\th = (h ^ (b>>s)&0xff) * 1099511628211\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tif h != c.want {\n+\t\t\t\tt.Fatalf(\"%dx%dx%d digest %d, want %d\", c.batch, c.in, c.out, h, c.want)\n \t\t\t}\n-\t\t}\n-\t\tif h != c.want {\n-\t\t\tt.Fatalf(\"%dx%dx%d digest %d, want %d\", c.batch, c.in, c.out, h, c.want)\n-\t\t}\n+\t\t})\n \t}\n }\n"
+  },
+  "default-focused.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "default-focused.manifest": {
+    "sha256": "86c50d83fd8d707c491ea26f1d7dcae5e6fc1483e6c0fac1d4de15c64e08867f",
+    "bytes": 1109,
+    "content": "cwd=/private/tmp/goai-kan-native-ci-verify-OVhXde/repo\nPATH=/private/tmp/goai-go1271-j1cLvq/go/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/Applications/Wireshark.app/Contents/MacOS:/Applications/VMware Fusion.app/Contents/Public:/Users/john/.codex/tmp/arg0/codex-arg0NxCRpV:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/opt/homebrew/sbin:/Users/john/.cargo/bin:/Users/john/.local/bin:/opt/homebrew/bin:/Users/john/go/bin:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/Applications/ChatGPT.app/Contents/Resources\nGOCACHE=/private/tmp/gocache-goai\nGOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache\nGOTOOLCHAIN=local\nCGO_ENABLED=0\nGOEXPERIMENT=\nargv=go test ./nn -run \\^TestKANForwardIsBitIdentical\\$ -count=1 -v \n"
+  },
+  "default-focused.stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "default-focused.stdout": {
+    "sha256": "e31ac765d33949fc06239a44071a62f40d5c85a5cf91b34e5bd50523061570c4",
+    "bytes": 526,
+    "content": "=== RUN   TestKANForwardIsBitIdentical\n    kan_bitidentity_test.go:35: compiler=go1.27.1 os=darwin arch=arm64 backend=cpu\n=== RUN   TestKANForwardIsBitIdentical/3x5x7\n=== RUN   TestKANForwardIsBitIdentical/13x8x6\n=== RUN   TestKANForwardIsBitIdentical/96x24x32\n--- PASS: TestKANForwardIsBitIdentical (0.00s)\n    --- PASS: TestKANForwardIsBitIdentical/3x5x7 (0.00s)\n    --- PASS: TestKANForwardIsBitIdentical/13x8x6 (0.00s)\n    --- PASS: TestKANForwardIsBitIdentical/96x24x32 (0.00s)\nPASS\nok  \tgithub.com/jxsl13/goai/nn\t0.285s\n"
+  },
+  "default-nn-short.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "default-nn-short.manifest": {
+    "sha256": "8a0976a95d500dcf6c0b7aacfd2b13707bd92fc9aafa8f3fc6ad4f3bbea03134",
+    "bytes": 1075,
+    "content": "cwd=/private/tmp/goai-kan-native-ci-verify-OVhXde/repo\nPATH=/private/tmp/goai-go1271-j1cLvq/go/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/Applications/Wireshark.app/Contents/MacOS:/Applications/VMware Fusion.app/Contents/Public:/Users/john/.codex/tmp/arg0/codex-arg0NxCRpV:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/opt/homebrew/sbin:/Users/john/.cargo/bin:/Users/john/.local/bin:/opt/homebrew/bin:/Users/john/go/bin:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/Applications/ChatGPT.app/Contents/Resources\nGOCACHE=/private/tmp/gocache-goai\nGOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache\nGOTOOLCHAIN=local\nCGO_ENABLED=0\nGOEXPERIMENT=\nargv=go test ./nn -short -count=1 \n"
+  },
+  "default-nn-short.stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "default-nn-short.stdout": {
+    "sha256": "5da1b868548f57be2650e2071f3d9b7a7deb99c313141ef8ddc596669b4ffb23",
+    "bytes": 39,
+    "content": "ok  \tgithub.com/jxsl13/goai/nn\t11.501s\n"
+  },
+  "default-nn-vet.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "default-nn-vet.manifest": {
+    "sha256": "6fe6314ce07ba71ed2f93ec6b968f2785120b672e78677bed9d1ad708ceb722e",
+    "bytes": 1058,
+    "content": "cwd=/private/tmp/goai-kan-native-ci-verify-OVhXde/repo\nPATH=/private/tmp/goai-go1271-j1cLvq/go/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/Applications/Wireshark.app/Contents/MacOS:/Applications/VMware Fusion.app/Contents/Public:/Users/john/.codex/tmp/arg0/codex-arg0NxCRpV:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/opt/homebrew/sbin:/Users/john/.cargo/bin:/Users/john/.local/bin:/opt/homebrew/bin:/Users/john/go/bin:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/Applications/ChatGPT.app/Contents/Resources\nGOCACHE=/private/tmp/gocache-goai\nGOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache\nGOTOOLCHAIN=local\nCGO_ENABLED=0\nGOEXPERIMENT=\nargv=go vet ./nn \n"
+  },
+  "default-nn-vet.stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "default-nn-vet.stdout": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "final-test-worktree-diff.txt": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "git-status-after.txt": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "git-status-before.txt": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "mutation-default-focused.exit": {
+    "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "bytes": 2,
+    "content": "1\n"
+  },
+  "mutation-default-focused.manifest": {
+    "sha256": "86c50d83fd8d707c491ea26f1d7dcae5e6fc1483e6c0fac1d4de15c64e08867f",
+    "bytes": 1109,
+    "content": "cwd=/private/tmp/goai-kan-native-ci-verify-OVhXde/repo\nPATH=/private/tmp/goai-go1271-j1cLvq/go/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/Applications/Wireshark.app/Contents/MacOS:/Applications/VMware Fusion.app/Contents/Public:/Users/john/.codex/tmp/arg0/codex-arg0NxCRpV:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/opt/homebrew/sbin:/Users/john/.cargo/bin:/Users/john/.local/bin:/opt/homebrew/bin:/Users/john/go/bin:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/Applications/ChatGPT.app/Contents/Resources\nGOCACHE=/private/tmp/gocache-goai\nGOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache\nGOTOOLCHAIN=local\nCGO_ENABLED=0\nGOEXPERIMENT=\nargv=go test ./nn -run \\^TestKANForwardIsBitIdentical\\$ -count=1 -v \n"
+  },
+  "mutation-default-focused.stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "mutation-default-focused.stdout": {
+    "sha256": "b4e4251b60e098b9c84160ffa7a4e09eb93663fc491eeb69bfa3e24be60658dd",
+    "bytes": 808,
+    "content": "=== RUN   TestKANForwardIsBitIdentical\n    kan_bitidentity_test.go:35: compiler=go1.27.1 os=darwin arch=arm64 backend=cpu\n=== RUN   TestKANForwardIsBitIdentical/3x5x7\n    kan_bitidentity_test.go:62: 3x5x7 digest 1819970384799109649, want 5936029728971432568\n=== RUN   TestKANForwardIsBitIdentical/13x8x6\n    kan_bitidentity_test.go:62: 13x8x6 digest 9872212418694401532, want 15159748691548848689\n=== RUN   TestKANForwardIsBitIdentical/96x24x32\n    kan_bitidentity_test.go:62: 96x24x32 digest 3573825120929049464, want 515177776064738749\n--- FAIL: TestKANForwardIsBitIdentical (0.00s)\n    --- FAIL: TestKANForwardIsBitIdentical/3x5x7 (0.00s)\n    --- FAIL: TestKANForwardIsBitIdentical/13x8x6 (0.00s)\n    --- FAIL: TestKANForwardIsBitIdentical/96x24x32 (0.00s)\nFAIL\nFAIL\tgithub.com/jxsl13/goai/nn\t0.290s\nFAIL\n"
+  },
+  "restored-default-focused.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "restored-default-focused.manifest": {
+    "sha256": "86c50d83fd8d707c491ea26f1d7dcae5e6fc1483e6c0fac1d4de15c64e08867f",
+    "bytes": 1109,
+    "content": "cwd=/private/tmp/goai-kan-native-ci-verify-OVhXde/repo\nPATH=/private/tmp/goai-go1271-j1cLvq/go/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/Applications/Wireshark.app/Contents/MacOS:/Applications/VMware Fusion.app/Contents/Public:/Users/john/.codex/tmp/arg0/codex-arg0NxCRpV:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/opt/homebrew/sbin:/Users/john/.cargo/bin:/Users/john/.local/bin:/opt/homebrew/bin:/Users/john/go/bin:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/Applications/ChatGPT.app/Contents/Resources\nGOCACHE=/private/tmp/gocache-goai\nGOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache\nGOTOOLCHAIN=local\nCGO_ENABLED=0\nGOEXPERIMENT=\nargv=go test ./nn -run \\^TestKANForwardIsBitIdentical\\$ -count=1 -v \n"
+  },
+  "restored-default-focused.stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "restored-default-focused.stdout": {
+    "sha256": "8a29e4040ba11cec1d451c8bbae86a77d155365b3ac8442176d3d14f99303711",
+    "bytes": 526,
+    "content": "=== RUN   TestKANForwardIsBitIdentical\n    kan_bitidentity_test.go:35: compiler=go1.27.1 os=darwin arch=arm64 backend=cpu\n=== RUN   TestKANForwardIsBitIdentical/3x5x7\n=== RUN   TestKANForwardIsBitIdentical/13x8x6\n=== RUN   TestKANForwardIsBitIdentical/96x24x32\n--- PASS: TestKANForwardIsBitIdentical (0.00s)\n    --- PASS: TestKANForwardIsBitIdentical/3x5x7 (0.00s)\n    --- PASS: TestKANForwardIsBitIdentical/13x8x6 (0.00s)\n    --- PASS: TestKANForwardIsBitIdentical/96x24x32 (0.00s)\nPASS\nok  \tgithub.com/jxsl13/goai/nn\t0.296s\n"
+  },
+  "run-capture.sh": {
+    "sha256": "6d6171f3054f55e53367dbf43840c8c1249728b5907f539eb0b4afa0db782f59",
+    "bytes": 1840,
+    "content": "#!/bin/zsh\nset -u\n\nartifact_dir=/private/tmp/goai-kan-native-ci-verify-OVhXde/artifacts\nrepo=/private/tmp/goai-kan-native-ci-verify-OVhXde/repo\ntool_path=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH\ncache_dir=/private/tmp/gocache-goai\nmodcache_dir=/private/tmp/goai-go1271-j1cLvq/modcache\n\nrun_capture() {\n  local label=\"$1\"\n  local experiment=\"$2\"\n  shift 2\n  {\n    print -r -- \"cwd=$repo\"\n    print -r -- \"PATH=$tool_path\"\n    print -r -- \"GOCACHE=$cache_dir\"\n    print -r -- \"GOMODCACHE=$modcache_dir\"\n    print -r -- \"GOTOOLCHAIN=local\"\n    print -r -- \"CGO_ENABLED=0\"\n    print -r -- \"GOEXPERIMENT=$experiment\"\n    print -n -- \"argv=\"\n    printf '%q ' \"$@\"\n    print\n  } > \"$artifact_dir/$label.manifest\"\n  cd \"$repo\" || exit 70\n  PATH=\"$tool_path\" GOCACHE=\"$cache_dir\" GOMODCACHE=\"$modcache_dir\" GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=\"$experiment\" \"$@\" > \"$artifact_dir/$label.stdout\" 2> \"$artifact_dir/$label.stderr\"\n  local rc=$?\n  print -r -- \"$rc\" > \"$artifact_dir/$label.exit\"\n  return 0\n}\n\ncase \"${1:-}\" in\n  normal)\n    run_capture default-focused '' go test ./nn -run '^TestKANForwardIsBitIdentical$' -count=1 -v\n    run_capture simd-focused simd go test ./nn -run '^TestKANForwardIsBitIdentical$' -count=1 -v\n    run_capture default-nn-short '' go test ./nn -short -count=1\n    run_capture default-nn-vet '' go vet ./nn\n    run_capture simd-cpu-bitidentity simd go test ./backend/cpu -run '^TestVsiluF64Arm64(Accuracy|VectorTailBitIdentity|Edges)$' -count=1 -v\n    ;;\n  mutation)\n    run_capture mutation-default-focused '' go test ./nn -run '^TestKANForwardIsBitIdentical$' -count=1 -v\n    ;;\n  restored)\n    run_capture restored-default-focused '' go test ./nn -run '^TestKANForwardIsBitIdentical$' -count=1 -v\n    ;;\n  *)\n    print -u2 -r -- 'usage: run-capture.sh normal|mutation|restored'\n    exit 64\n    ;;\nesac\n"
+  },
+  "simd-cpu-bitidentity.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "simd-cpu-bitidentity.manifest": {
+    "sha256": "11f309b12925cd2d8293079f87d9a86497a6fba1a4414fc5cbf7fde178238ec1",
+    "bytes": 1153,
+    "content": "cwd=/private/tmp/goai-kan-native-ci-verify-OVhXde/repo\nPATH=/private/tmp/goai-go1271-j1cLvq/go/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/Applications/Wireshark.app/Contents/MacOS:/Applications/VMware Fusion.app/Contents/Public:/Users/john/.codex/tmp/arg0/codex-arg0NxCRpV:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/opt/homebrew/sbin:/Users/john/.cargo/bin:/Users/john/.local/bin:/opt/homebrew/bin:/Users/john/go/bin:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/Applications/ChatGPT.app/Contents/Resources\nGOCACHE=/private/tmp/gocache-goai\nGOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache\nGOTOOLCHAIN=local\nCGO_ENABLED=0\nGOEXPERIMENT=simd\nargv=go test ./backend/cpu -run \\^TestVsiluF64Arm64\\(Accuracy\\|VectorTailBitIdentity\\|Edges\\)\\$ -count=1 -v \n"
+  },
+  "simd-cpu-bitidentity.stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "simd-cpu-bitidentity.stdout": {
+    "sha256": "a5a81469f98b0bec7ca9a672c6712709192c33f75f6d4c922d64af5484ba88c9",
+    "bytes": 412,
+    "content": "=== RUN   TestVsiluF64Arm64Accuracy\n    vsilu_f64_arm64_test.go:27: ARM64 NEON F64 SiLU max relative error 3.048e-16 over 262145 values\n--- PASS: TestVsiluF64Arm64Accuracy (0.02s)\n=== RUN   TestVsiluF64Arm64VectorTailBitIdentity\n--- PASS: TestVsiluF64Arm64VectorTailBitIdentity (0.01s)\n=== RUN   TestVsiluF64Arm64Edges\n--- PASS: TestVsiluF64Arm64Edges (0.00s)\nPASS\nok  \tgithub.com/jxsl13/goai/backend/cpu\t0.319s\n"
+  },
+  "simd-focused.exit": {
+    "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "bytes": 2,
+    "content": "1\n"
+  },
+  "simd-focused.manifest": {
+    "sha256": "25d8b82809221fa5c016a5bdd0559096e2dc2778f054b3d545bdb807a83fa442",
+    "bytes": 1113,
+    "content": "cwd=/private/tmp/goai-kan-native-ci-verify-OVhXde/repo\nPATH=/private/tmp/goai-go1271-j1cLvq/go/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/Applications/Wireshark.app/Contents/MacOS:/Applications/VMware Fusion.app/Contents/Public:/Users/john/.codex/tmp/arg0/codex-arg0NxCRpV:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/opt/homebrew/sbin:/Users/john/.cargo/bin:/Users/john/.local/bin:/opt/homebrew/bin:/Users/john/go/bin:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/Applications/ChatGPT.app/Contents/Resources\nGOCACHE=/private/tmp/gocache-goai\nGOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache\nGOTOOLCHAIN=local\nCGO_ENABLED=0\nGOEXPERIMENT=simd\nargv=go test ./nn -run \\^TestKANForwardIsBitIdentical\\$ -count=1 -v \n"
+  },
+  "simd-focused.stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "simd-focused.stdout": {
+    "sha256": "5d4a7df56a79590980dee4420473f0b9b2a2204a64b3a00b79b6c50167d9f606",
+    "bytes": 817,
+    "content": "=== RUN   TestKANForwardIsBitIdentical\n    kan_bitidentity_test.go:35: compiler=go1.27.1-X:simd os=darwin arch=arm64 backend=cpu\n=== RUN   TestKANForwardIsBitIdentical/3x5x7\n    kan_bitidentity_test.go:61: 3x5x7 digest 17265271475585544907, want 5936029728971432568\n=== RUN   TestKANForwardIsBitIdentical/13x8x6\n    kan_bitidentity_test.go:61: 13x8x6 digest 5035091549113534389, want 15159748691548848689\n=== RUN   TestKANForwardIsBitIdentical/96x24x32\n    kan_bitidentity_test.go:61: 96x24x32 digest 12048638696559957597, want 515177776064738749\n--- FAIL: TestKANForwardIsBitIdentical (0.00s)\n    --- FAIL: TestKANForwardIsBitIdentical/3x5x7 (0.00s)\n    --- FAIL: TestKANForwardIsBitIdentical/13x8x6 (0.00s)\n    --- FAIL: TestKANForwardIsBitIdentical/96x24x32 (0.00s)\nFAIL\nFAIL\tgithub.com/jxsl13/goai/nn\t0.293s\nFAIL\n"
+  },
+  "source-hashes-after.sha256": {
+    "sha256": "e37d900e1a869f2f2af0612dd0775c18af323c1024d2b6ba8a91aa6d910fd64b",
+    "bytes": 739,
+    "content": "47d23359d195108b5d54e8d92f5ad9c3c911fa498346c60981ab3d1c35dafff7  nn/kan_bitidentity_test.go\nc346358d7ef4efef4db6e2f3dadc583a359522e0f435f52302251c42a28e9a03  nn/kan.go\n234e25273a7d9f23c4f7ba9a20fc9fa34b6fbba69c0e3ff232efee8167b7cd7f  backend/cpu/elementwise.go\n223fce7a96b2da3519d05e722485b6e43267d3216085703ff1e473a7aa0ce78c  backend/cpu/vexp_arm64.go\n852c16139e1a2020263911cbf466418bd73489662089a51712c66b18e54a7297  backend/cpu/vexp_amd64.go\n07adbf223e44d862d5f9e3e38a743eff54def329280bb8b76aa0ffe3f9b62945  autograd/vjp_elementwise.go\nbd26d0195b02e23aa1406f01f7df25fff5aa65ea81fea0c3bae9f31d3359648c  autograd/vjp_bounds_internal_test.go\n830ac8fc03e4213d443b6f742708d1c30250174dc0ede8ceb92034898f19530d  internal/archgold/archgold.go\n"
+  },
+  "source-hashes-before.sha256": {
+    "sha256": "e37d900e1a869f2f2af0612dd0775c18af323c1024d2b6ba8a91aa6d910fd64b",
+    "bytes": 739,
+    "content": "47d23359d195108b5d54e8d92f5ad9c3c911fa498346c60981ab3d1c35dafff7  nn/kan_bitidentity_test.go\nc346358d7ef4efef4db6e2f3dadc583a359522e0f435f52302251c42a28e9a03  nn/kan.go\n234e25273a7d9f23c4f7ba9a20fc9fa34b6fbba69c0e3ff232efee8167b7cd7f  backend/cpu/elementwise.go\n223fce7a96b2da3519d05e722485b6e43267d3216085703ff1e473a7aa0ce78c  backend/cpu/vexp_arm64.go\n852c16139e1a2020263911cbf466418bd73489662089a51712c66b18e54a7297  backend/cpu/vexp_amd64.go\n07adbf223e44d862d5f9e3e38a743eff54def329280bb8b76aa0ffe3f9b62945  autograd/vjp_elementwise.go\nbd26d0195b02e23aa1406f01f7df25fff5aa65ea81fea0c3bae9f31d3359648c  autograd/vjp_bounds_internal_test.go\n830ac8fc03e4213d443b6f742708d1c30250174dc0ede8ceb92034898f19530d  internal/archgold/archgold.go\n"
+  },
+  "static-fixtures-6bc7fa61bbd4dc2efb66eb12d38dc3ec1891ec69.txt": {
+    "sha256": "79dd76f9bb56f611d92be02ae775c62445c840c491dde1e10a7f59229e5422b0",
+    "bytes": 490,
+    "content": "27:\t\t{\"3x5x7\", 3, 5, 7, archgold.Pick(5936029728971432568, 14272068029666688409)},\n28:\t\t{\"13x8x6\", 13, 8, 6, archgold.Pick(15159748691548848689, 6609257596807823200)},\n29:\t\t{\"96x24x32\", 96, 24, 32, archgold.Pick(515177776064738749, 9025949438388873583)},\n40:\t\t\tl, err := NewKAN(c.in, c.out, 1)\n44:\t\t\tx := tensor.New(tensor.F64, tensor.Shape{c.batch, c.in})\n47:\t\t\t\txs[i] = math.Sin(float64(i*11+5)) * 0.6\n53:\t\t\th := uint64(14695981039346656037)\n57:\t\t\t\t\th = (h ^ (b>>s)&0xff) * 1099511628211\n"
+  },
+  "static-fixtures-e4827df51309fc73e89b7f3d97dff367fc77d419.txt": {
+    "sha256": "65470af2c07afc247ec105ad4ec1713a10310a234f6c835bcac5041a0c94359e",
+    "bytes": 454,
+    "content": "25:\t\t{3, 5, 7, archgold.Pick(5936029728971432568, 14272068029666688409)},\n26:\t\t{13, 8, 6, archgold.Pick(15159748691548848689, 6609257596807823200)},\n27:\t\t{96, 24, 32, archgold.Pick(515177776064738749, 9025949438388873583)},\n30:\t\tl, err := NewKAN(c.in, c.out, 1)\n34:\t\tx := tensor.New(tensor.F64, tensor.Shape{c.batch, c.in})\n37:\t\t\txs[i] = math.Sin(float64(i*11+5)) * 0.6\n43:\t\th := uint64(14695981039346656037)\n47:\t\t\t\th = (h ^ (b>>s)&0xff) * 1099511628211\n"
+  },
+  "structural-checks.txt": {
+    "sha256": "33f88b35f0a1bd8636a5f4f4c69568ffb3dc2053e49458406ee42d7fb430384a",
+    "bytes": 279,
+    "content": "named_subtest_count:\n       1\nparallel_occurrences:\nregistered_cpu:\n31:\tcpuBE, ok := backend.Get(backend.CPU)\n49:\t\t\ty, err := l.Forward(backend.NewContext().WithBackend(cpuBE), x)\ntargeted_ci_command_occurrences:\n       1\ncommit_workflow_delta_stat:\n1\t0\t.github/workflows/ci.yml\n"
+  },
+  "temporary-mutation-test-sha256": {
+    "sha256": "4bbdf5d706b81877689043560d1bffd009a937eacaf4975e17f65366f36a065a",
+    "bytes": 93,
+    "content": "0d50b37ff0abdf77c75a61cf6b8d5aa7b84f64bc53d232ac6ee79f2afa6d0f8f  nn/kan_bitidentity_test.go\n"
+  },
+  "temporary-mutation.diff": {
+    "sha256": "67f5684223f6d0dc1ea536ab06b4f7114094b3b5a86aaf2f4520050d492cf0a6",
+    "bytes": 466,
+    "content": "diff --git a/nn/kan_bitidentity_test.go b/nn/kan_bitidentity_test.go\nindex 6338d7a9..292ba5a2 100644\n--- a/nn/kan_bitidentity_test.go\n+++ b/nn/kan_bitidentity_test.go\n@@ -50,6 +50,7 @@ func TestKANForwardIsBitIdentical(t *testing.T) {\n \t\t\tif err != nil {\n \t\t\t\tt.Fatal(err)\n \t\t\t}\n+\t\t\ty.Storage().F64()[0] = math.Nextafter(y.Storage().F64()[0], math.Inf(1))\n \t\t\th := uint64(14695981039346656037)\n \t\t\tfor _, v := range y.Storage().F64() {\n \t\t\t\tb := math.Float64bits(v)\n"
+  },
+  "workflow-simd-lines.txt": {
+    "sha256": "516f30df17d209d31eb0a805c793aa7321d15f5e67943e77ed6cef815a60ee84",
+    "bytes": 232,
+    "content": "451:          GOEXPERIMENT=simd go build -tags=simd ./...\n452:          GOEXPERIMENT=simd go test -short -count=1 ./internal/simd\n453:          GOEXPERIMENT=simd go test -short -count=1 -v -run '^TestKANForwardIsBitIdentical$' ./nn\n"
+  },
+  "worktree-diff-check-after.txt": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  }
+}
