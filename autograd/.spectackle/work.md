@@ -68,6 +68,7 @@ kind: task
 state: draft
 created: 2026-09-10
 parent: P-01M25H86Z0FZRAK5B99V05DYM6
+grilled: 2026-09-10 open=0
 targets: go:autograd.unaryVJP, go:autograd.reluVJP, go:autograd.sigmoidVJP
 
 GOAL: implement exactly six typed unary/relu/sigmoid bounds-proof loops, prove original semantics under default/SIMD/race and prove optimized hot-loop BCE. Handoff for fresh independent verification and root-owned benchmarking; source success alone does not qualify or complete this task.
