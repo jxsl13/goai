@@ -40,23 +40,36 @@ the accuracy test reported 3.048e-16 against its existing 1e-13 bound over
 262145 values. This is not a proposed tolerance for the KAN digest.
 The similarly named `TestVsiluF64Accuracy` is AMD64-only.
 
-## AMD64 remains unqualified
+## Rosetta caution and native AMD64 follow-up
 
 The pinned Go executable is arm64-only; attempting to execute it directly as
 x86_64 failed and is retained. Cross-compiling AMD64 test binaries with the
 pinned SDK and running them under Rosetta succeeded, but the unchanged default
 run disagrees with two stored AMD64 goldens. The SIMD run also differs.
 
-These local AMD64 values must not be copied into official goldens. Native
-Linux/Windows default and SIMD evidence, and any necessary causal follow-up,
-remain required. `archgold.PickSIMD` already supports four exact lanes; this
-research does not authorize filling its arguments from unexplained failures.
+These local AMD64 values must not be copied into official goldens.
+The diagnostic commit `6bc7fa61bbd4dc2efb66eb12d38dc3ec1891ec69` subsequently
+ran all three unchanged fixtures on native CI (run 34476604943). Both Linux
+and Windows CGO=0 default jobs reran the full nn tests successfully. Their
+SIMD jobs independently reported the same three new digests:
+
+| Geometry | Existing native AMD64 default | Native AMD64 SIMD |
+| --- | --- | --- |
+| 3/5/7 | 14272068029666688409 | 16662584054408946177 |
+| 13/8/6 | 6609257596807823200 | 3106186755478235033 |
+| 96/24/32 | 9025949438388873583 | 611919531391070369 |
+
+The native macOS ARM64 SIMD job independently matches all three M2 values.
+These are baseline observations on unchanged production code, not new official
+goldens yet. A separately specified correction can use the existing
+`archgold.PickSIMD` only after retaining this provenance and its accuracy gates.
+The SIMD job failures remain real failures, even with job-level soft policy.
 
 Inspection of `.github/workflows/ci.yml` revealed that the existing SIMD lane
 builds all packages but executes only `internal/simd`. A green SIMD job therefore
 did not establish `nn` SIMD correctness. The separately specified diagnostic
-task exposes all three KAN fixtures independently and adds their execution to
-the existing SIMD matrix, preserving every current golden during data collection.
+task now exposes all three KAN fixtures independently and adds their execution
+to the existing SIMD matrix, preserving every current golden during data collection.
 
 ## Evidence and reproduction
 
@@ -98,6 +111,25 @@ once with `GOEXPERIMENT=''` and once with `GOEXPERIMENT=simd`.
 Restore the retained source only in an isolated research worktree for reproduction.
 
 ## Capture corrections
+
+The diagnostic implementation and fresh verifier captures are retained in
+`implementation-capture.json` (23 artifacts) and
+`independent-diagnostic-capture.json` (45 artifacts). Root verified every decoded
+artifact byte/hash against the original. Implementer runs precede the final
+import/range-binding cleanup; the fresh verifier and root reran the final source.
+The verifier also changed one actual output by one ULP with `math.Nextafter`:
+all three default digest assertions failed, then restoration passed and left
+a clean worktree. Its genuine mutation diff, separate stdout/stderr, exits,
+manifests, and runtime hashes are retained.
+
+`native-ci-manifest.json` maps six complete CI job logs to exact run/head/job IDs,
+byte counts, SHA-256, and conclusions. The corresponding `.log.gz` files are
+deterministic gzip of complete original logs, including ANSI sequences and
+CRLF where present. Root verified every decompressed hash. CLI `run view --log`
+refused access while other jobs were running; the completed-job REST endpoint
+was used instead. Direct file capture avoids truncated rendered tool output.
+The native run is diagnostic, not a successful merge gate: three SIMD jobs fail
+their unchanged KAN assertions; no job-level soft status waives those failures.
 
 The first researcher patch file is empty: ordinary `git diff` omitted the
 untracked diagnostic. It is explicitly invalid, not source evidence.

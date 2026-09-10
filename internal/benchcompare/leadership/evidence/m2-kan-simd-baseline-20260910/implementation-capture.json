@@ -1,0 +1,117 @@
+{
+  "default-focused.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "default-focused.log": {
+    "sha256": "14b99ed060699f4e9bcee769c2fc269f53828fc5da12795a8de53cfe0ac48141",
+    "bytes": 526,
+    "content": "=== RUN   TestKANForwardIsBitIdentical\n    kan_bitidentity_test.go:35: compiler=go1.27.1 os=darwin arch=arm64 backend=cpu\n=== RUN   TestKANForwardIsBitIdentical/3x5x7\n=== RUN   TestKANForwardIsBitIdentical/13x8x6\n=== RUN   TestKANForwardIsBitIdentical/96x24x32\n--- PASS: TestKANForwardIsBitIdentical (0.00s)\n    --- PASS: TestKANForwardIsBitIdentical/3x5x7 (0.00s)\n    --- PASS: TestKANForwardIsBitIdentical/13x8x6 (0.00s)\n    --- PASS: TestKANForwardIsBitIdentical/96x24x32 (0.00s)\nPASS\nok  \tgithub.com/jxsl13/goai/nn\t0.417s\n"
+  },
+  "default-nn-short.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "default-nn-short.log": {
+    "sha256": "6fc2c77bbefab2f01d7e8584f41e3b93c4e36123c116b9c5c4789dbc7d5671ad",
+    "bytes": 38,
+    "content": "ok  \tgithub.com/jxsl13/goai/nn\t8.471s\n"
+  },
+  "final-edit-sha256.txt": {
+    "sha256": "57392fbb0587e17375c16bc826381f95debb00a9e6a19038b927e4ffc3d2d225",
+    "bytes": 184,
+    "content": "47d23359d195108b5d54e8d92f5ad9c3c911fa498346c60981ab3d1c35dafff7  nn/kan_bitidentity_test.go\n3e7cd21cbd45308ece4cc13fa6b07b20769c3730efd791299c3e40d64dac48a9  .github/workflows/ci.yml\n"
+  },
+  "git-diff-check-final.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "git-diff-check-final.log": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "git-diff-check.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "git-diff-check.log": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "git-status-after.log": {
+    "sha256": "7a5e1b3f41ea4d8dccaf074cede651e52ff4822b532757c5c77050a5c6053bb4",
+    "bytes": 58,
+    "content": " M .github/workflows/ci.yml\n M nn/kan_bitidentity_test.go\n"
+  },
+  "git-status-before.log": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "git-status-final.log": {
+    "sha256": "7a5e1b3f41ea4d8dccaf074cede651e52ff4822b532757c5c77050a5c6053bb4",
+    "bytes": 58,
+    "content": " M .github/workflows/ci.yml\n M nn/kan_bitidentity_test.go\n"
+  },
+  "golden-constant-preservation.log": {
+    "sha256": "6f133d6d03fe77c422570da8ee6c1d3357754684d55573d10c302a11694d3f9f",
+    "bytes": 223,
+    "content": "5936029728971432568 HEAD=0 working=0\n14272068029666688409 HEAD=0 working=0\n15159748691548848689 HEAD=0 working=0\n6609257596807823200 HEAD=0 working=0\n515177776064738749 HEAD=0 working=0\n9025949438388873583 HEAD=0 working=0\n"
+  },
+  "manifest.txt": {
+    "sha256": "eeda347db13a827b6cf5fda32cde28e97aaeb5ede64d764308bfe45edfe94561",
+    "bytes": 2430,
+    "content": "Repository: /private/tmp/goai-kan-native-ci-implement-c2dmdF/repo\nBase: detached 168b23869ede861431eeb3ec362e0c6d0a1cb903\nEnvironment for every Go and Spectackle command:\nPATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH\nGOCACHE=/private/tmp/gocache-goai\nGOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache\nGOTOOLCHAIN=local\nCGO_ENABLED=0\n\nFormatting command:\ngofmt -w nn/kan_bitidentity_test.go\n\nVerification commands and captured direct stdout/stderr and exits:\nGOEXPERIMENT='' go test ./nn -run '^TestKANForwardIsBitIdentical$' -count=1 -v\nstdout/stderr: default-focused.log\nexit: default-focused.exit (0)\n\nGOEXPERIMENT=simd go test ./nn -run '^TestKANForwardIsBitIdentical$' -count=1 -v\nstdout/stderr: simd-focused.log\nexit: simd-focused.exit (1)\n\nGOEXPERIMENT='' go test ./nn -short -count=1\nstdout/stderr: default-nn-short.log\nexit: default-nn-short.exit (0)\n\nGOEXPERIMENT='' go vet ./nn\nstdout/stderr: vet-nn.log\nexit: vet-nn.exit (0)\n\nIntegrity commands and captured results:\nshasum -a 256 nn/kan.go backend/cpu/elementwise.go backend/cpu/vexp_arm64.go backend/cpu/vexp_amd64.go autograd/vjp_elementwise.go autograd/vjp_bounds_internal_test.go internal/archgold/archgold.go\nbefore: source-sha256-before.txt\nafter: source-sha256-after.txt\ncmp exit: source-sha256-unchanged.exit (0)\n\ngit diff --check\nstdout/stderr: git-diff-check.log\nexit: git-diff-check.exit (0)\n\nSource hashes, identical before and after:\nc346358d7ef4efef4db6e2f3dadc583a359522e0f435f52302251c42a28e9a03  nn/kan.go\n234e25273a7d9f23c4f7ba9a20fc9fa34b6fbba69c0e3ff232efee8167b7cd7f  backend/cpu/elementwise.go\n223fce7a96b2da3519d05e722485b6e43267d3216085703ff1e473a7aa0ce78c  backend/cpu/vexp_arm64.go\n852c16139e1a2020263911cbf466418bd73489662089a51712c66b18e54a7297  backend/cpu/vexp_amd64.go\n07adbf223e44d862d5f9e3e38a743eff54def329280bb8b76aa0ffe3f9b62945  autograd/vjp_elementwise.go\nbd26d0195b02e23aa1406f01f7df25fff5aa65ea81fea0c3bae9f31d3359648c  autograd/vjp_bounds_internal_test.go\n830ac8fc03e4213d443b6f742708d1c30250174dc0ede8ceb92034898f19530d  internal/archgold/archgold.go\n\nFinal edited-file hashes after non-semantic import/range cleanup (no Go commands rerun):\n47d23359d195108b5d54e8d92f5ad9c3c911fa498346c60981ab3d1c35dafff7  nn/kan_bitidentity_test.go\n3e7cd21cbd45308ece4cc13fa6b07b20769c3730efd791299c3e40d64dac48a9  .github/workflows/ci.yml\nFinal diff: source-diff-final.patch\nFinal git diff --check exit: git-diff-check-final.exit (0)\n"
+  },
+  "simd-focused.exit": {
+    "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "bytes": 2,
+    "content": "1\n"
+  },
+  "simd-focused.log": {
+    "sha256": "57a762c368d235740c95e1d1bf8b2c1b73093954d4294dffc412297b9bffd571",
+    "bytes": 817,
+    "content": "=== RUN   TestKANForwardIsBitIdentical\n    kan_bitidentity_test.go:35: compiler=go1.27.1-X:simd os=darwin arch=arm64 backend=cpu\n=== RUN   TestKANForwardIsBitIdentical/3x5x7\n    kan_bitidentity_test.go:62: 3x5x7 digest 17265271475585544907, want 5936029728971432568\n=== RUN   TestKANForwardIsBitIdentical/13x8x6\n    kan_bitidentity_test.go:62: 13x8x6 digest 5035091549113534389, want 15159748691548848689\n=== RUN   TestKANForwardIsBitIdentical/96x24x32\n    kan_bitidentity_test.go:62: 96x24x32 digest 12048638696559957597, want 515177776064738749\n--- FAIL: TestKANForwardIsBitIdentical (0.00s)\n    --- FAIL: TestKANForwardIsBitIdentical/3x5x7 (0.00s)\n    --- FAIL: TestKANForwardIsBitIdentical/13x8x6 (0.00s)\n    --- FAIL: TestKANForwardIsBitIdentical/96x24x32 (0.00s)\nFAIL\nFAIL\tgithub.com/jxsl13/goai/nn\t0.424s\nFAIL\n"
+  },
+  "source-diff-final.patch": {
+    "sha256": "2ff1f734b728c256974b0413c5cd69cb02f04f224fad5226f14aeb235e70e4b6",
+    "bytes": 3315,
+    "content": "diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml\nindex f064b2f5..d376267d 100644\n--- a/.github/workflows/ci.yml\n+++ b/.github/workflows/ci.yml\n@@ -450,6 +450,7 @@ jobs:\n         run: |\n           GOEXPERIMENT=simd go build -tags=simd ./...\n           GOEXPERIMENT=simd go test -short -count=1 ./internal/simd\n+          GOEXPERIMENT=simd go test -short -count=1 -v -run '^TestKANForwardIsBitIdentical$' ./nn\n \n   # §T604 capability matrix, cgo axis on windows (mingw): the tagless cgo build\n   # must behave like everywhere else; tests run selectively via the runner.\ndiff --git a/nn/kan_bitidentity_test.go b/nn/kan_bitidentity_test.go\nindex 48de1221..6338d7a9 100644\n--- a/nn/kan_bitidentity_test.go\n+++ b/nn/kan_bitidentity_test.go\n@@ -1,11 +1,12 @@\n package nn\n \n import (\n-\t\"github.com/jxsl13/goai/internal/archgold\"\n \t\"math\"\n+\t\"runtime\"\n \t\"testing\"\n \n \t\"github.com/jxsl13/goai/backend\"\n+\t\"github.com/jxsl13/goai/internal/archgold\"\n \t\"github.com/jxsl13/goai/tensor\"\n )\n \n@@ -19,36 +20,46 @@ import (\n // band is short.\n func TestKANForwardIsBitIdentical(t *testing.T) {\n \tcases := []struct {\n+\t\tname           string\n \t\tbatch, in, out int\n \t\twant           uint64\n \t}{\n-\t\t{3, 5, 7, archgold.Pick(5936029728971432568, 14272068029666688409)},\n-\t\t{13, 8, 6, archgold.Pick(15159748691548848689, 6609257596807823200)},\n-\t\t{96, 24, 32, archgold.Pick(515177776064738749, 9025949438388873583)},\n+\t\t{\"3x5x7\", 3, 5, 7, archgold.Pick(5936029728971432568, 14272068029666688409)},\n+\t\t{\"13x8x6\", 13, 8, 6, archgold.Pick(15159748691548848689, 6609257596807823200)},\n+\t\t{\"96x24x32\", 96, 24, 32, archgold.Pick(515177776064738749, 9025949438388873583)},\n \t}\n+\tcpuBE, ok := backend.Get(backend.CPU)\n+\tif !ok {\n+\t\tt.Fatal(\"cpu backend not registered\")\n+\t}\n+\tt.Logf(\"compiler=%s os=%s arch=%s backend=cpu\", runtime.Version(), runtime.GOOS, runtime.GOARCH)\n+\n+\t// Independent subtests retain every fixture failure for feature and architecture qualification.\n \tfor _, c := range cases {\n-\t\tl, err := NewKAN(c.in, c.out, 1)\n-\t\tif err != nil {\n-\t\t\tt.Fatal(err)\n-\t\t}\n-\t\tx := tensor.New(tensor.F64, tensor.Shape{c.batch, c.in})\n-\t\txs := x.Storage().F64()\n-\t\tfor i := range xs {\n-\t\t\txs[i] = math.Sin(float64(i*11+5)) * 0.6\n-\t\t}\n-\t\ty, err := l.Forward(backend.NewContext(), x)\n-\t\tif err != nil {\n-\t\t\tt.Fatal(err)\n-\t\t}\n-\t\th := uint64(14695981039346656037)\n-\t\tfor _, v := range y.Storage().F64() {\n-\t\t\tb := math.Float64bits(v)\n-\t\t\tfor s := 0; s < 64; s += 8 {\n-\t\t\t\th = (h ^ (b>>s)&0xff) * 1099511628211\n+\t\tt.Run(c.name, func(t *testing.T) {\n+\t\t\tl, err := NewKAN(c.in, c.out, 1)\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\t\t\tx := tensor.New(tensor.F64, tensor.Shape{c.batch, c.in})\n+\t\t\txs := x.Storage().F64()\n+\t\t\tfor i := range xs {\n+\t\t\t\txs[i] = math.Sin(float64(i*11+5)) * 0.6\n+\t\t\t}\n+\t\t\ty, err := l.Forward(backend.NewContext().WithBackend(cpuBE), x)\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\t\t\th := uint64(14695981039346656037)\n+\t\t\tfor _, v := range y.Storage().F64() {\n+\t\t\t\tb := math.Float64bits(v)\n+\t\t\t\tfor s := 0; s < 64; s += 8 {\n+\t\t\t\t\th = (h ^ (b>>s)&0xff) * 1099511628211\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tif h != c.want {\n+\t\t\t\tt.Fatalf(\"%dx%dx%d digest %d, want %d\", c.batch, c.in, c.out, h, c.want)\n \t\t\t}\n-\t\t}\n-\t\tif h != c.want {\n-\t\t\tt.Fatalf(\"%dx%dx%d digest %d, want %d\", c.batch, c.in, c.out, h, c.want)\n-\t\t}\n+\t\t})\n \t}\n }\n"
+  },
+  "source-diff.patch": {
+    "sha256": "9d074fa53503ccc0ea22a9a3294b314df4881fe9278d75d4a354ea1b9a6ad06a",
+    "bytes": 3236,
+    "content": "diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml\nindex f064b2f5..d376267d 100644\n--- a/.github/workflows/ci.yml\n+++ b/.github/workflows/ci.yml\n@@ -450,6 +450,7 @@ jobs:\n         run: |\n           GOEXPERIMENT=simd go build -tags=simd ./...\n           GOEXPERIMENT=simd go test -short -count=1 ./internal/simd\n+          GOEXPERIMENT=simd go test -short -count=1 -v -run '^TestKANForwardIsBitIdentical$' ./nn\n \n   # §T604 capability matrix, cgo axis on windows (mingw): the tagless cgo build\n   # must behave like everywhere else; tests run selectively via the runner.\ndiff --git a/nn/kan_bitidentity_test.go b/nn/kan_bitidentity_test.go\nindex 48de1221..ab05ab7f 100644\n--- a/nn/kan_bitidentity_test.go\n+++ b/nn/kan_bitidentity_test.go\n@@ -3,6 +3,7 @@ package nn\n import (\n \t\"github.com/jxsl13/goai/internal/archgold\"\n \t\"math\"\n+\t\"runtime\"\n \t\"testing\"\n \n \t\"github.com/jxsl13/goai/backend\"\n@@ -19,36 +20,47 @@ import (\n // band is short.\n func TestKANForwardIsBitIdentical(t *testing.T) {\n \tcases := []struct {\n+\t\tname           string\n \t\tbatch, in, out int\n \t\twant           uint64\n \t}{\n-\t\t{3, 5, 7, archgold.Pick(5936029728971432568, 14272068029666688409)},\n-\t\t{13, 8, 6, archgold.Pick(15159748691548848689, 6609257596807823200)},\n-\t\t{96, 24, 32, archgold.Pick(515177776064738749, 9025949438388873583)},\n+\t\t{\"3x5x7\", 3, 5, 7, archgold.Pick(5936029728971432568, 14272068029666688409)},\n+\t\t{\"13x8x6\", 13, 8, 6, archgold.Pick(15159748691548848689, 6609257596807823200)},\n+\t\t{\"96x24x32\", 96, 24, 32, archgold.Pick(515177776064738749, 9025949438388873583)},\n \t}\n+\tcpuBE, ok := backend.Get(backend.CPU)\n+\tif !ok {\n+\t\tt.Fatal(\"cpu backend not registered\")\n+\t}\n+\tt.Logf(\"compiler=%s os=%s arch=%s backend=cpu\", runtime.Version(), runtime.GOOS, runtime.GOARCH)\n+\n+\t// Independent subtests retain every fixture failure for feature and architecture qualification.\n \tfor _, c := range cases {\n-\t\tl, err := NewKAN(c.in, c.out, 1)\n-\t\tif err != nil {\n-\t\t\tt.Fatal(err)\n-\t\t}\n-\t\tx := tensor.New(tensor.F64, tensor.Shape{c.batch, c.in})\n-\t\txs := x.Storage().F64()\n-\t\tfor i := range xs {\n-\t\t\txs[i] = math.Sin(float64(i*11+5)) * 0.6\n-\t\t}\n-\t\ty, err := l.Forward(backend.NewContext(), x)\n-\t\tif err != nil {\n-\t\t\tt.Fatal(err)\n-\t\t}\n-\t\th := uint64(14695981039346656037)\n-\t\tfor _, v := range y.Storage().F64() {\n-\t\t\tb := math.Float64bits(v)\n-\t\t\tfor s := 0; s < 64; s += 8 {\n-\t\t\t\th = (h ^ (b>>s)&0xff) * 1099511628211\n+\t\tc := c\n+\t\tt.Run(c.name, func(t *testing.T) {\n+\t\t\tl, err := NewKAN(c.in, c.out, 1)\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\t\t\tx := tensor.New(tensor.F64, tensor.Shape{c.batch, c.in})\n+\t\t\txs := x.Storage().F64()\n+\t\t\tfor i := range xs {\n+\t\t\t\txs[i] = math.Sin(float64(i*11+5)) * 0.6\n+\t\t\t}\n+\t\t\ty, err := l.Forward(backend.NewContext().WithBackend(cpuBE), x)\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\t\t\th := uint64(14695981039346656037)\n+\t\t\tfor _, v := range y.Storage().F64() {\n+\t\t\t\tb := math.Float64bits(v)\n+\t\t\t\tfor s := 0; s < 64; s += 8 {\n+\t\t\t\t\th = (h ^ (b>>s)&0xff) * 1099511628211\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tif h != c.want {\n+\t\t\t\tt.Fatalf(\"%dx%dx%d digest %d, want %d\", c.batch, c.in, c.out, h, c.want)\n \t\t\t}\n-\t\t}\n-\t\tif h != c.want {\n-\t\t\tt.Fatalf(\"%dx%dx%d digest %d, want %d\", c.batch, c.in, c.out, h, c.want)\n-\t\t}\n+\t\t})\n \t}\n }\n"
+  },
+  "source-sha256-after.txt": {
+    "sha256": "a5506914a2457b12e275dd20a4558e90a3c4a26311b205023fa023e07f455138",
+    "bytes": 646,
+    "content": "c346358d7ef4efef4db6e2f3dadc583a359522e0f435f52302251c42a28e9a03  nn/kan.go\n234e25273a7d9f23c4f7ba9a20fc9fa34b6fbba69c0e3ff232efee8167b7cd7f  backend/cpu/elementwise.go\n223fce7a96b2da3519d05e722485b6e43267d3216085703ff1e473a7aa0ce78c  backend/cpu/vexp_arm64.go\n852c16139e1a2020263911cbf466418bd73489662089a51712c66b18e54a7297  backend/cpu/vexp_amd64.go\n07adbf223e44d862d5f9e3e38a743eff54def329280bb8b76aa0ffe3f9b62945  autograd/vjp_elementwise.go\nbd26d0195b02e23aa1406f01f7df25fff5aa65ea81fea0c3bae9f31d3359648c  autograd/vjp_bounds_internal_test.go\n830ac8fc03e4213d443b6f742708d1c30250174dc0ede8ceb92034898f19530d  internal/archgold/archgold.go\n"
+  },
+  "source-sha256-before.txt": {
+    "sha256": "a5506914a2457b12e275dd20a4558e90a3c4a26311b205023fa023e07f455138",
+    "bytes": 646,
+    "content": "c346358d7ef4efef4db6e2f3dadc583a359522e0f435f52302251c42a28e9a03  nn/kan.go\n234e25273a7d9f23c4f7ba9a20fc9fa34b6fbba69c0e3ff232efee8167b7cd7f  backend/cpu/elementwise.go\n223fce7a96b2da3519d05e722485b6e43267d3216085703ff1e473a7aa0ce78c  backend/cpu/vexp_arm64.go\n852c16139e1a2020263911cbf466418bd73489662089a51712c66b18e54a7297  backend/cpu/vexp_amd64.go\n07adbf223e44d862d5f9e3e38a743eff54def329280bb8b76aa0ffe3f9b62945  autograd/vjp_elementwise.go\nbd26d0195b02e23aa1406f01f7df25fff5aa65ea81fea0c3bae9f31d3359648c  autograd/vjp_bounds_internal_test.go\n830ac8fc03e4213d443b6f742708d1c30250174dc0ede8ceb92034898f19530d  internal/archgold/archgold.go\n"
+  },
+  "source-sha256-unchanged.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "vet-nn.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "vet-nn.log": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  }
+}
