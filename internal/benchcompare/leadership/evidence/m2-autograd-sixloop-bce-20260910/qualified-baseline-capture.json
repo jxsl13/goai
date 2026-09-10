@@ -1,0 +1,217 @@
+{
+  "01-three-package-default.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "01-three-package-default.manifest": {
+    "sha256": "fa3a5e9469e031154bf0e712e018ffc2366f566afbef211f39bb72c4e744e0df",
+    "bytes": 1188,
+    "content": "cwd=/private/tmp/goai-sixloop-qualified-baseline-bYOE5L/repo\nargv=/private/tmp/goai-go1271-j1cLvq/go/bin/go test ./autograd ./backend/cpu ./nn -short -count=1\nPATH=/private/tmp/goai-go1271-j1cLvq/go/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/Applications/Wireshark.app/Contents/MacOS:/Applications/VMware Fusion.app/Contents/Public:/Users/john/.codex/tmp/arg0/codex-arg0NxCRpV:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/opt/homebrew/sbin:/Users/john/.cargo/bin:/Users/john/.local/bin:/opt/homebrew/bin:/Users/john/go/bin:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/Applications/ChatGPT.app/Contents/Resources\nGOCACHE=/private/tmp/gocache-goai\nGOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache\nGOTOOLCHAIN=local\nGOEXPERIMENT=\nCGO_ENABLED=0\ngo_version=go version go1.27.1 darwin/arm64\n"
+  },
+  "01-three-package-default.stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "01-three-package-default.stdout": {
+    "sha256": "b7ca0b2217d4ba87c397f16d5fa7e46a06b72eb6acc5f335e1a9c296b0fc9dca",
+    "bytes": 130,
+    "content": "ok  \tgithub.com/jxsl13/goai/autograd\t2.179s\nok  \tgithub.com/jxsl13/goai/backend/cpu\t14.889s\nok  \tgithub.com/jxsl13/goai/nn\t7.883s\n"
+  },
+  "02-three-package-simd.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "02-three-package-simd.manifest": {
+    "sha256": "ec36107c7050cb1e64038c363bf3de024df23cc2be1fd83819dbcd254d6b1360",
+    "bytes": 1192,
+    "content": "cwd=/private/tmp/goai-sixloop-qualified-baseline-bYOE5L/repo\nargv=/private/tmp/goai-go1271-j1cLvq/go/bin/go test ./autograd ./backend/cpu ./nn -short -count=1\nPATH=/private/tmp/goai-go1271-j1cLvq/go/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/Applications/Wireshark.app/Contents/MacOS:/Applications/VMware Fusion.app/Contents/Public:/Users/john/.codex/tmp/arg0/codex-arg0NxCRpV:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/opt/homebrew/sbin:/Users/john/.cargo/bin:/Users/john/.local/bin:/opt/homebrew/bin:/Users/john/go/bin:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/Applications/ChatGPT.app/Contents/Resources\nGOCACHE=/private/tmp/gocache-goai\nGOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache\nGOTOOLCHAIN=local\nGOEXPERIMENT=simd\nCGO_ENABLED=0\ngo_version=go version go1.27.1 darwin/arm64\n"
+  },
+  "02-three-package-simd.stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "02-three-package-simd.stdout": {
+    "sha256": "5686a351b1960498fe6650baa1046eef4ec681146574023de927a375c0ca515d",
+    "bytes": 130,
+    "content": "ok  \tgithub.com/jxsl13/goai/autograd\t2.277s\nok  \tgithub.com/jxsl13/goai/backend/cpu\t14.496s\nok  \tgithub.com/jxsl13/goai/nn\t7.345s\n"
+  },
+  "03-vjp-race-default.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "03-vjp-race-default.manifest": {
+    "sha256": "30444b11562893e3e8150c962ea788cca5e309b23cab7fe42840fadcbc7461f2",
+    "bytes": 1199,
+    "content": "cwd=/private/tmp/goai-sixloop-qualified-baseline-bYOE5L/repo\nargv=/private/tmp/goai-go1271-j1cLvq/go/bin/go test -race ./autograd -run ^TestUnaryVJPBoundsExact$ -count=1\nPATH=/private/tmp/goai-go1271-j1cLvq/go/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/Applications/Wireshark.app/Contents/MacOS:/Applications/VMware Fusion.app/Contents/Public:/Users/john/.codex/tmp/arg0/codex-arg0NxCRpV:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/opt/homebrew/sbin:/Users/john/.cargo/bin:/Users/john/.local/bin:/opt/homebrew/bin:/Users/john/go/bin:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/Applications/ChatGPT.app/Contents/Resources\nGOCACHE=/private/tmp/gocache-goai\nGOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache\nGOTOOLCHAIN=local\nGOEXPERIMENT=\nCGO_ENABLED=1\ngo_version=go version go1.27.1 darwin/arm64\n"
+  },
+  "03-vjp-race-default.stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "03-vjp-race-default.stdout": {
+    "sha256": "5904c804ddfed5b04902922dace7ec52ae43a40de8bce2bef28e1fe200c2cc78",
+    "bytes": 44,
+    "content": "ok  \tgithub.com/jxsl13/goai/autograd\t3.244s\n"
+  },
+  "04-build-default-autograd.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "04-build-default-autograd.manifest": {
+    "sha256": "70a9b12df1a12aacea3e45e63ec7ca69f4017d62a39f1c9df93470208721c0ff",
+    "bytes": 1242,
+    "content": "cwd=/private/tmp/goai-sixloop-qualified-baseline-bYOE5L/repo\nargv=/private/tmp/goai-go1271-j1cLvq/go/bin/go test -c -o /private/tmp/goai-sixloop-qualified-baseline-bYOE5L/binaries/default-autograd.test ./autograd\nPATH=/private/tmp/goai-go1271-j1cLvq/go/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/Applications/Wireshark.app/Contents/MacOS:/Applications/VMware Fusion.app/Contents/Public:/Users/john/.codex/tmp/arg0/codex-arg0NxCRpV:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/opt/homebrew/sbin:/Users/john/.cargo/bin:/Users/john/.local/bin:/opt/homebrew/bin:/Users/john/go/bin:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/Applications/ChatGPT.app/Contents/Resources\nGOCACHE=/private/tmp/gocache-goai\nGOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache\nGOTOOLCHAIN=local\nGOEXPERIMENT=\nCGO_ENABLED=0\ngo_version=go version go1.27.1 darwin/arm64\n"
+  },
+  "04-build-default-autograd.stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "04-build-default-autograd.stdout": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "05-build-simd-autograd.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "05-build-simd-autograd.manifest": {
+    "sha256": "e7658912b7682c606683555cfafcf25154a770b968a44213c6e9ba7c6061cd5d",
+    "bytes": 1243,
+    "content": "cwd=/private/tmp/goai-sixloop-qualified-baseline-bYOE5L/repo\nargv=/private/tmp/goai-go1271-j1cLvq/go/bin/go test -c -o /private/tmp/goai-sixloop-qualified-baseline-bYOE5L/binaries/simd-autograd.test ./autograd\nPATH=/private/tmp/goai-go1271-j1cLvq/go/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/Applications/Wireshark.app/Contents/MacOS:/Applications/VMware Fusion.app/Contents/Public:/Users/john/.codex/tmp/arg0/codex-arg0NxCRpV:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/opt/homebrew/sbin:/Users/john/.cargo/bin:/Users/john/.local/bin:/opt/homebrew/bin:/Users/john/go/bin:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/Applications/ChatGPT.app/Contents/Resources\nGOCACHE=/private/tmp/gocache-goai\nGOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache\nGOTOOLCHAIN=local\nGOEXPERIMENT=simd\nCGO_ENABLED=0\ngo_version=go version go1.27.1 darwin/arm64\n"
+  },
+  "05-build-simd-autograd.stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "05-build-simd-autograd.stdout": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "06-build-default-nn.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "06-build-default-nn.manifest": {
+    "sha256": "825666018d276d9ed76815f7eb348b431f41a0874f26e0c47923e494feb33c98",
+    "bytes": 1230,
+    "content": "cwd=/private/tmp/goai-sixloop-qualified-baseline-bYOE5L/repo\nargv=/private/tmp/goai-go1271-j1cLvq/go/bin/go test -c -o /private/tmp/goai-sixloop-qualified-baseline-bYOE5L/binaries/default-nn.test ./nn\nPATH=/private/tmp/goai-go1271-j1cLvq/go/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/Applications/Wireshark.app/Contents/MacOS:/Applications/VMware Fusion.app/Contents/Public:/Users/john/.codex/tmp/arg0/codex-arg0NxCRpV:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/opt/homebrew/sbin:/Users/john/.cargo/bin:/Users/john/.local/bin:/opt/homebrew/bin:/Users/john/go/bin:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/Applications/ChatGPT.app/Contents/Resources\nGOCACHE=/private/tmp/gocache-goai\nGOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache\nGOTOOLCHAIN=local\nGOEXPERIMENT=\nCGO_ENABLED=0\ngo_version=go version go1.27.1 darwin/arm64\n"
+  },
+  "06-build-default-nn.stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "06-build-default-nn.stdout": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "07-build-simd-nn.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "07-build-simd-nn.manifest": {
+    "sha256": "2c002ef5a170ae980034ea7bead15f8dd5d5e5d58733b047272866f94af4785d",
+    "bytes": 1231,
+    "content": "cwd=/private/tmp/goai-sixloop-qualified-baseline-bYOE5L/repo\nargv=/private/tmp/goai-go1271-j1cLvq/go/bin/go test -c -o /private/tmp/goai-sixloop-qualified-baseline-bYOE5L/binaries/simd-nn.test ./nn\nPATH=/private/tmp/goai-go1271-j1cLvq/go/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/Applications/Wireshark.app/Contents/MacOS:/Applications/VMware Fusion.app/Contents/Public:/Users/john/.codex/tmp/arg0/codex-arg0NxCRpV:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/opt/homebrew/sbin:/Users/john/.cargo/bin:/Users/john/.local/bin:/opt/homebrew/bin:/Users/john/go/bin:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/Applications/ChatGPT.app/Contents/Resources\nGOCACHE=/private/tmp/gocache-goai\nGOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache\nGOTOOLCHAIN=local\nGOEXPERIMENT=simd\nCGO_ENABLED=0\ngo_version=go version go1.27.1 darwin/arm64\n"
+  },
+  "07-build-simd-nn.stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "07-build-simd-nn.stdout": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "08-build-env-default.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "08-build-env-default.manifest": {
+    "sha256": "ed78b331fbf2abc6490ed3c00d8995f856a2a7eb3eabf4399e37b211ec4d7edd",
+    "bytes": 1222,
+    "content": "cwd=/private/tmp/goai-sixloop-qualified-baseline-bYOE5L/repo\nargv=/private/tmp/goai-go1271-j1cLvq/go/bin/go env -json GOVERSION GOEXPERIMENT GOARCH GOARM64 GOOS GOFLAGS CGO_ENABLED GOTOOLCHAIN\nPATH=/private/tmp/goai-go1271-j1cLvq/go/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/Applications/Wireshark.app/Contents/MacOS:/Applications/VMware Fusion.app/Contents/Public:/Users/john/.codex/tmp/arg0/codex-arg0NxCRpV:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/opt/homebrew/sbin:/Users/john/.cargo/bin:/Users/john/.local/bin:/opt/homebrew/bin:/Users/john/go/bin:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/Applications/ChatGPT.app/Contents/Resources\nGOCACHE=/private/tmp/gocache-goai\nGOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache\nGOTOOLCHAIN=local\nGOEXPERIMENT=\nCGO_ENABLED=0\ngo_version=go version go1.27.1 darwin/arm64\n"
+  },
+  "08-build-env-default.stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "08-build-env-default.stdout": {
+    "sha256": "987ca439bb44a49199c406ca42f9486a0c3a4e86bad91c8e7ee8f6fee63d0286",
+    "bytes": 171,
+    "content": "{\n\t\"CGO_ENABLED\": \"0\",\n\t\"GOARCH\": \"arm64\",\n\t\"GOARM64\": \"v8.0\",\n\t\"GOEXPERIMENT\": \"\",\n\t\"GOFLAGS\": \"\",\n\t\"GOOS\": \"darwin\",\n\t\"GOTOOLCHAIN\": \"local\",\n\t\"GOVERSION\": \"go1.27.1\"\n}\n"
+  },
+  "09-build-env-simd.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "09-build-env-simd.manifest": {
+    "sha256": "811cd806ab7170cd4e17ffaab9bf95dc8f5c481912c0433848c625e922636000",
+    "bytes": 1226,
+    "content": "cwd=/private/tmp/goai-sixloop-qualified-baseline-bYOE5L/repo\nargv=/private/tmp/goai-go1271-j1cLvq/go/bin/go env -json GOVERSION GOEXPERIMENT GOARCH GOARM64 GOOS GOFLAGS CGO_ENABLED GOTOOLCHAIN\nPATH=/private/tmp/goai-go1271-j1cLvq/go/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/Applications/Wireshark.app/Contents/MacOS:/Applications/VMware Fusion.app/Contents/Public:/Users/john/.codex/tmp/arg0/codex-arg0NxCRpV:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/opt/homebrew/sbin:/Users/john/.cargo/bin:/Users/john/.local/bin:/opt/homebrew/bin:/Users/john/go/bin:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/Applications/ChatGPT.app/Contents/Resources\nGOCACHE=/private/tmp/gocache-goai\nGOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache\nGOTOOLCHAIN=local\nGOEXPERIMENT=simd\nCGO_ENABLED=0\ngo_version=go version go1.27.1 darwin/arm64\n"
+  },
+  "09-build-env-simd.stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "09-build-env-simd.stdout": {
+    "sha256": "d888f7162c0944447388cf7672e5bb31b6fd2f34577630af17dbed3f21296df7",
+    "bytes": 175,
+    "content": "{\n\t\"CGO_ENABLED\": \"0\",\n\t\"GOARCH\": \"arm64\",\n\t\"GOARM64\": \"v8.0\",\n\t\"GOEXPERIMENT\": \"simd\",\n\t\"GOFLAGS\": \"\",\n\t\"GOOS\": \"darwin\",\n\t\"GOTOOLCHAIN\": \"local\",\n\t\"GOVERSION\": \"go1.27.1\"\n}\n"
+  },
+  "10-binary-build-settings.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2,
+    "content": "0\n"
+  },
+  "10-binary-build-settings.manifest": {
+    "sha256": "494f740dc05289780f008056daa3f53b6ae98a2ef7d2d178d4c98451b3f92abf",
+    "bytes": 1462,
+    "content": "cwd=/private/tmp/goai-sixloop-qualified-baseline-bYOE5L/repo\nargv=/private/tmp/goai-go1271-j1cLvq/go/bin/go version -m /private/tmp/goai-sixloop-qualified-baseline-bYOE5L/binaries/default-autograd.test /private/tmp/goai-sixloop-qualified-baseline-bYOE5L/binaries/simd-autograd.test /private/tmp/goai-sixloop-qualified-baseline-bYOE5L/binaries/default-nn.test /private/tmp/goai-sixloop-qualified-baseline-bYOE5L/binaries/simd-nn.test\nPATH=/private/tmp/goai-go1271-j1cLvq/go/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/Applications/Wireshark.app/Contents/MacOS:/Applications/VMware Fusion.app/Contents/Public:/Users/john/.codex/tmp/arg0/codex-arg0NxCRpV:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/opt/homebrew/sbin:/Users/john/.cargo/bin:/Users/john/.local/bin:/opt/homebrew/bin:/Users/john/go/bin:/Users/john/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/Applications/ChatGPT.app/Contents/Resources\nGOCACHE=/private/tmp/gocache-goai\nGOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache\nGOTOOLCHAIN=local\nGOEXPERIMENT=\nCGO_ENABLED=0\ngo_version=go version go1.27.1 darwin/arm64\n"
+  },
+  "10-binary-build-settings.stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "content": ""
+  },
+  "10-binary-build-settings.stdout": {
+    "sha256": "8415f457f15650747a42c4d57e52571960c61f5652cf0cebb21142724b4cd2f0",
+    "bytes": 1214,
+    "content": "/private/tmp/goai-sixloop-qualified-baseline-bYOE5L/binaries/default-autograd.test: go1.27.1\n\tpath\tgithub.com/jxsl13/goai/autograd.test\n\tmod\tgithub.com/jxsl13/goai\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=arm64\n\tbuild\tGOOS=darwin\n\tbuild\tGOARM64=v8.0\n/private/tmp/goai-sixloop-qualified-baseline-bYOE5L/binaries/simd-autograd.test: go1.27.1-X:simd\n\tpath\tgithub.com/jxsl13/goai/autograd.test\n\tmod\tgithub.com/jxsl13/goai\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=arm64\n\tbuild\tGOEXPERIMENT=simd\n\tbuild\tGOOS=darwin\n\tbuild\tGOARM64=v8.0\n/private/tmp/goai-sixloop-qualified-baseline-bYOE5L/binaries/default-nn.test: go1.27.1\n\tpath\tgithub.com/jxsl13/goai/nn.test\n\tmod\tgithub.com/jxsl13/goai\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=arm64\n\tbuild\tGOOS=darwin\n\tbuild\tGOARM64=v8.0\n/private/tmp/goai-sixloop-qualified-baseline-bYOE5L/binaries/simd-nn.test: go1.27.1-X:simd\n\tpath\tgithub.com/jxsl13/goai/nn.test\n\tmod\tgithub.com/jxsl13/goai\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=arm64\n\tbuild\tGOEXPERIMENT=simd\n\tbuild\tGOOS=darwin\n\tbuild\tGOARM64=v8.0\n"
+  },
+  "binary-hashes.json": {
+    "sha256": "8df4d547a37a1dcc07f0da702b41e1d060d3bb7f569871133cb5d362c91fed87",
+    "bytes": 365,
+    "content": "{\n  \"default-autograd.test\": \"b7a675dc0b44f810a027d01d16c1b0693644e58e3d1008372f526517d0129494\",\n  \"simd-autograd.test\": \"373bf4cbe69b30a2649d350e38bb105680294067ad50d33d850ece0e49e3113b\",\n  \"default-nn.test\": \"5c6d310c51db01f1f0ecc2dc10296afce10457d631b91d8449bcdb4de69294e2\",\n  \"simd-nn.test\": \"c98e6a248116eb09d6a4bd3bdd555a6e3d8da05ddd5e1f0ace5e9c5fb566754c\"\n}\n"
+  },
+  "run.sh": {
+    "sha256": "8b6b9be24b96312127ce1c9a54ad00cfce4a385a0318dd54a2b6c20a3f587617",
+    "bytes": 1891,
+    "content": "#!/bin/zsh\nset -u\nROOT=/private/tmp/goai-sixloop-qualified-baseline-bYOE5L/repo\nOUT=/private/tmp/goai-sixloop-qualified-baseline-bYOE5L/artifacts\nGO_BIN=/private/tmp/goai-go1271-j1cLvq/go/bin/go\nexport PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH\nexport GOCACHE=/private/tmp/gocache-goai\nexport GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache\nexport GOTOOLCHAIN=local\ncd \"$ROOT\"\nrun() {\n  local name=\"$1\"\n  local experiment=\"$2\"\n  local cgo=\"$3\"\n  shift 3\n  {\n    print -r -- \"cwd=$PWD\"\n    print -r -- \"argv=$GO_BIN $*\"\n    print -r -- \"PATH=$PATH\"\n    print -r -- \"GOCACHE=$GOCACHE\"\n    print -r -- \"GOMODCACHE=$GOMODCACHE\"\n    print -r -- \"GOTOOLCHAIN=$GOTOOLCHAIN\"\n    print -r -- \"GOEXPERIMENT=$experiment\"\n    print -r -- \"CGO_ENABLED=$cgo\"\n    print -r -- \"go_version=$($GO_BIN version)\"\n  } > \"$OUT/$name.manifest\"\n  GOEXPERIMENT=\"$experiment\" CGO_ENABLED=\"$cgo\" \"$GO_BIN\" \"$@\" > \"$OUT/$name.stdout\" 2> \"$OUT/$name.stderr\"\n  local rc=$?\n  print -r -- \"$rc\" > \"$OUT/$name.exit\"\n  return $rc\n}\nstate() {\n  local name=\"$1\"\n  {\n    print -r -- \"cwd=$PWD\"\n    git rev-parse HEAD\n    git status --short\n    shasum -a 256 nn/kan_bitidentity_test.go .github/workflows/ci.yml nn/kan.go internal/archgold/archgold.go autograd/vjp_bounds_internal_test.go\n    git show 81bfae535480e144495dc54fcf93ae4b66171745:nn/kan_bitidentity_test.go | shasum -a 256\n    git show 81bfae535480e144495dc54fcf93ae4b66171745:nn/kan.go | shasum -a 256\n    git show 81bfae535480e144495dc54fcf93ae4b66171745:internal/archgold/archgold.go | shasum -a 256\n    git show 81bfae535480e144495dc54fcf93ae4b66171745:autograd/vjp_bounds_internal_test.go | shasum -a 256\n    git diff --check 81bfae535480e144495dc54fcf93ae4b66171745..HEAD\n    git diff 81bfae535480e144495dc54fcf93ae4b66171745..HEAD\n  } > \"$OUT/$name.stdout\" 2> \"$OUT/$name.stderr\"\n  local rc=$?\n  print -r -- \"$rc\" > \"$OUT/$name.exit\"\n  return $rc\n}\n"
+  },
+  "source-provenance.json": {
+    "sha256": "94b24a6a61988875f6230f5b0bde512e364efb12f38c2c5262c03866a4ac9a84",
+    "bytes": 1942,
+    "content": "{\n  \"head\": \"e14a704ec6fa8befb19fdb5cdd2603875b772408\",\n  \"task\": \"T-01M25HANWFF8F\",\n  \"scope\": \"Read-only corrected source qualification, before any six-loop runtime edit. Source-qualified correction3530758 passed native16jobs; lifecycle/evidence head e14 adds no Go/module source changes.\",\n  \"sourceSnapshot\": {\n    \"chunk_id\": \"af9ddb\",\n    \"wall_time_seconds\": 0.355396167,\n    \"exit_code\": 0,\n    \"original_token_count\": 106,\n    \"output\": \"e14a704ec6fa8befb19fdb5cdd2603875b772408\\n07adbf223e44d862d5f9e3e38a743eff54def329280bb8b76aa0ffe3f9b62945  autograd/vjp_elementwise.go\\nbd26d0195b02e23aa1406f01f7df25fff5aa65ea81fea0c3bae9f31d3359648c  autograd/vjp_bounds_internal_test.go\\n03b9565cc76737bafc500617ca0e392d0994c3c1f6dcae1269e445ac0518fe92  nn/kan_bitidentity_test.go\\n234e25273a7d9f23c4f7ba9a20fc9fa34b6fbba69c0e3ff232efee8167b7cd7f  backend/cpu/elementwise.go\\n\"\n  },\n  \"commands\": [\n    {\n      \"label\": \"01-three-package-default\",\n      \"GOEXPERIMENT\": \"\",\n      \"CGO_ENABLED\": \"0\",\n      \"argv\": [\n        \"go\",\n        \"test\",\n        \"./autograd\",\n        \"./backend/cpu\",\n        \"./nn\",\n        \"-short\",\n        \"-count=1\"\n      ]\n    },\n    {\n      \"label\": \"02-three-package-simd\",\n      \"GOEXPERIMENT\": \"simd\",\n      \"CGO_ENABLED\": \"0\",\n      \"argv\": [\n        \"go\",\n        \"test\",\n        \"./autograd\",\n        \"./backend/cpu\",\n        \"./nn\",\n        \"-short\",\n        \"-count=1\"\n      ]\n    },\n    {\n      \"label\": \"03-vjp-race-default\",\n      \"GOEXPERIMENT\": \"\",\n      \"CGO_ENABLED\": \"1\",\n      \"argv\": [\n        \"go\",\n        \"test\",\n        \"-race\",\n        \"./autograd\",\n        \"-run\",\n        \"^TestUnaryVJPBoundsExact$\",\n        \"-count=1\"\n      ]\n    }\n  ],\n  \"note\": \"All three commands exit0 with direct complete stdout/stderr/exits/manifests. run.sh state helper is unused; sourceSnapshot records actual head and frozen hashes. No runtime edit, compiler-BCE inspection, benchmark or speedup claim.\"\n}\n"
+  }
+}
