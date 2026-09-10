@@ -45,7 +45,7 @@ MACHINE-PRODUCED LIST, reproducible with internal/perfscan/tools/exactness_sweep
 
 ## P-01M24BYJB6EEP8VZDM9J7G238Q Align ARM64 SIMD scalar parity tests with established numeric contracts
 kind: proposal
-state: draft
+state: active
 created: 2026-09-10
 refs: R-01M249HFAVFQR8HNHQQVYZPEP6
 grilled: 2026-09-10 open=1
