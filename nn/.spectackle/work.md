@@ -31,7 +31,7 @@ PERFSCAN RULE REQUIRED, and it has wide reach here: interface-sourced RNG in a p
 
 ## R-01M25JEGEJFDEVBR7B0YZKQ3MX Diagnose inherited ARM64 SIMD KAN whole-layer digest mismatch
 kind: research
-state: draft
+state: active
 created: 2026-09-10
 grilled: 2026-09-10 open=0
 targets: go:nn.TestKANForwardIsBitIdentical, go:nn.KANLayer.Forward, go:archgold.PickSIMD
