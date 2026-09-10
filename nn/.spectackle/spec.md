@@ -99,3 +99,8 @@ Rationale: The architectural seam is justified only by large end-to-end optimize
 WHEN diagnosing a KAN whole-layer digest mismatch under GOEXPERIMENT=simd, the diagnostic SHALL preserve production code and official goldens, reproduce unchanged-source outputs in both default and SIMD builds, and isolate dispatch differences before proposing a feature-specific exact baseline.
 
 Rationale: An inherited SIMD baseline failure must not be hidden by a performance candidate or converted to a new golden without independent evidence.
+
+## KAN-FEATURE-CI-DIGEST-001 {applies: go:nn.TestKANForwardIsBitIdentical}
+WHEN qualifying the KAN scalar and SIMD CPU baseline, the exact-output test and CI SHALL execute all 3 fixtures independently on CPU, preserve exact digest assertions, and require native AMD64 default and SIMD evidence before changing their goldens.
+
+Rationale: The previous SIMD CI lane compiled nn but executed only internal/simd; Rosetta default results also differ from stored AMD64 values.
