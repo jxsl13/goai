@@ -21,8 +21,11 @@ and pinned Go 1.27.1 in both measurement arms. The prepared baseline is
 `e14a704ec6fa8befb19fdb5cdd2603875b772408`, whose source-qualified correction
 is merge-committed into the parent as
 `5b121d068a36dd9dfd63e2262e75f026643e362a`. Its final child CI passed all
-16 jobs and 175 executed steps. Parent main-target CI and main integration
-remain pending; candidate runtime editing waits for that integration.
+16 jobs and 175 executed steps. Parent main-target CI 34483003557 also passed
+all 16 jobs and 175 executed steps, and PR #1256 merged into main as
+`814876f179be22ec71144b2124e47ea5df052390`. The prepared baseline and current
+branch have identical Go/module/CI sources. Candidate runtime editing can now
+resume under the unchanged task and its baseline amendment.
 
 Root reran default and SIMD short suites for autograd, backend/cpu, and nn,
 plus the default CGO-enabled strict VJP race oracle. All passed. Four normal-
