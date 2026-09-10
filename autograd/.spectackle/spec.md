@@ -44,3 +44,6 @@ WHEN ARM64 SIMD F64 focal tests compare active composite forward or VJP, the com
 
 ## ARM64-SIMD-WKV-SCALAR-001 {applies: go:autograd_test.TestWKVOpMatchesHostWKV}
 WHEN ARM64 SIMD WKV tests compare CPU output with scalar host output, the comparator SHALL bound abs(got-want)/max(1e-6,abs(want)) by1e-10 without changing same-SIMD state exactness or other-build policies.
+
+## ARM64-SIMD-PARITY-GUARDS-001 {applies: go:autograd_test.TestWKVOpMatchesHostWKV,go:autograd_test.TestSigmoidFocalCoreExactCompositeVJPParity}
+WHEN ARM64 SIMD scalar parity tests compare tensors, the tests SHALL check dtype, shape, count, CPU execution and detached targets; reject mismatched nonfinite bits and opposite zero signs; preserve the strict unary VJP oracle.
