@@ -70,7 +70,7 @@ DELIVERY: extend existing separate diagnostic draft PR1256 with proper staged sp
 
 ## T-01M25KTC4EEXKBXZPXCWYEFQAJ Expose all KAN exact fixtures in native SIMD CI
 kind: task
-state: draft
+state: active
 created: 2026-09-10
 refs: P-01M25KRMYZEH599AP2131M1GD6, R-01M25JEGEJFDEVBR7B0YZKQ3MX
 grilled: 2026-09-10 open=0
