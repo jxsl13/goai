@@ -75,6 +75,8 @@ Evidence publication is part of the same task and within the implementer's decla
 
 Preserve the existing CI -benchtime=1x benchmark smoke executions: they are mandatory build/correctness checks and may run with the native test matrix, but their timings cannot qualify this candidate. The timing checkpoint prohibits local pilot/full performance measurements and profiling before native correctness and independent verification; it does not authorize deleting or blocking existing CI smoke checks.
 
+Each new native job must upload its separate per-mode raw test stdout/stderr and metadata files through an always-run actions/upload-artifact@v7 step, with an OS-unique artifact name and missing expected files treated as a failure. Metadata includes go version/active environment/compiler identity, checked-out Git commit and runtime/oracle Git blob identities. Printing logs is for inspection, not the sole evidence store: full files preserve long failing numerical lines that the job UI may truncate. Root downloads these artifacts from each original/candidate run and binds their contents/hashes to the final evidence manifest.
+
 ## T-01M26474J0EDXBCHDKB9PH1C03 Implement and qualify native-gated Apple ARM64 VJP bounds loops
 kind: task
 state: draft
