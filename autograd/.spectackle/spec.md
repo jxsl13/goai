@@ -52,3 +52,8 @@ WHEN ARM64 SIMD F64 scalar parity tests compare tensors, the tests SHALL check d
 
 ## SIXLOOP-BCE-TANH-FROZEN-001 {applies: go:autograd.tanhVJP}
 WHEN the six-loop unary bounds-proof experiment changes vjp_elementwise.go, the candidate SHALL preserve tanhVJP byte-for-byte against0d7c62fe and retain TestUnaryVJPBoundsExact unchanged, including race-enabled NaN payload checks.
+
+## SIXLOOP-QUALIFIED-BASELINE-001 {applies: go:autograd.reluVJP}
+WHEN measuring the six-loop VJP candidate, the both comparison arms SHALL use Go 1.27.1 and identical test sources containing the native-qualified KAN feature goldens from 5b121d06, while preserving TestUnaryVJPBoundsExact and tanhVJP.
+
+Rationale: This operational baseline amendment supplements the frozen task history at0d7c62fe. The KAN correction changes only tests/CI and is independently qualified in both CPU feature modes and native CI; no production operation, strict VJP oracle or performance gate changes. Root reran corrected source e14a704e: both default/SIMD autograd+cpu+nn short suites and default CGO1 strict VJP race pass, with explicit environment/raw captures. Both old/new timing arms must use this same corrected test source; runtime editing remains held until parent PR1256 reaches main. Six-loop source and tanh byte-exact constraints remain binding.
