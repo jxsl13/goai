@@ -47,6 +47,7 @@ MACHINE-PRODUCED LIST, reproducible with internal/perfscan/tools/exactness_sweep
 kind: proposal
 state: draft
 created: 2026-09-10
+grilled: 2026-09-10 open=0
 targets: go:autograd.unaryVJP, go:autograd.reluVJP, go:autograd.sigmoidVJP
 
 GOAL: qualify the remaining six typed bounds-proof loops in unaryVJP, reluVJP and sigmoidVJP on M2, preserving every existing correctness/performance gate. The prior eight-loop experiment was rejected before timing: Go1.27.1 ARM64 race instrumentation changed F32 tanh NaN sign/payload (7fe00001 versus historical ffc01234). This is a new experiment, not reactivation or tolerance relaxation. Both tanhVJP loops and its entire function remain byte-identical to baseline; the historical raw-bit oracle remains frozen.
