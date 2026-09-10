@@ -38,3 +38,6 @@ WHEN bounds proofs change, the typed unary VJPs SHALL preserve 0 bit differences
 
 ## UNARY-BCE-PERF-001 {applies: go:autograd.unaryVJP,go:autograd.reluVJP,go:autograd.tanhVJP,go:autograd.sigmoidVJP}
 WHEN three alternating seven-pair M2 Go1.27.1 campaigns qualify unary bounds elimination, the promotion gate SHALL require at least 1.05x direct ReLU and 1.03x taped ReLU medians with p<0.05, and retain 0 allocation increases or reproducible control time regressions above3percent.
+
+## ARM64-SIMD-FOCAL-COMPOSITE-001 {applies: go:autograd_test.TestSigmoidFocalCoreExactCompositeVJPParity}
+WHEN ARM64 SIMD F64 focal tests compare active composite forward or VJP, the comparator SHALL bound abs(got-want)/max(1,abs(want)) by1e-13 without changing fused CPU/reference exactness or other-build policies.
