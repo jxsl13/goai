@@ -61,7 +61,7 @@ ACCEPTANCE: original baseline failures already independently reproduced and meas
 
 ## T-01M24C1S91FWXVP3519MA9NQG2 Correct ARM64 SIMD focal and WKV scalar-parity test policies
 kind: task
-state: draft
+state: active
 created: 2026-09-10
 parent: P-01M24BYJB6EEP8VZDM9J7G238Q
 refs: R-01M249HFAVFQR8HNHQQVYZPEP6
