@@ -41,3 +41,6 @@ WHEN three alternating seven-pair M2 Go1.27.1 campaigns qualify unary bounds eli
 
 ## ARM64-SIMD-FOCAL-COMPOSITE-001 {applies: go:autograd_test.TestSigmoidFocalCoreExactCompositeVJPParity}
 WHEN ARM64 SIMD F64 focal tests compare active composite forward or VJP, the comparator SHALL bound abs(got-want)/max(1,abs(want)) by1e-13 without changing fused CPU/reference exactness or other-build policies.
+
+## ARM64-SIMD-WKV-SCALAR-001 {applies: go:autograd_test.TestWKVOpMatchesHostWKV}
+WHEN ARM64 SIMD WKV tests compare CPU output with scalar host output, the comparator SHALL bound abs(got-want)/max(1e-6,abs(want)) by1e-10 without changing same-SIMD state exactness or other-build policies.
