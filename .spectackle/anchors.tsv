@@ -476,3 +476,4 @@ SIXLOOP-QUALIFIED-BASELINE-002	go:autograd.TestUnaryVJPBoundsExact	autograd/vjp_
 VJP-ARCH-CODEGEN-001	go:autograd.unaryVJP	autograd/vjp_elementwise.go	18-50	a498b9083fb431b4	fca74884aa9eed2b
 VJP-ARCH-CODEGEN-001	go:autograd.reluVJP	autograd/vjp_elementwise.go	112-148	60c82c25f3b736e6	fca74884aa9eed2b
 VJP-ARCH-CODEGEN-001	go:autograd.sigmoidVJP	autograd/vjp_elementwise.go	195-216	629480a7cf6758d8	fca74884aa9eed2b
+VJP-NATIVE-CI-001	go:autograd.TestUnaryVJPBoundsExact	autograd/vjp_bounds_internal_test.go	379-524	cfa1c39357aa3207	78966bde7a2e7430
