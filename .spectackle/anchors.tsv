@@ -470,3 +470,6 @@ ARM64-SIMD-PARITY-GUARDS-001	go:autograd_test.TestSigmoidFocalCoreExactComposite
 KAN-SIMD-BASELINE-DIAGNOSIS-001	go:nn.TestKANForwardIsBitIdentical	nn/kan_bitidentity_test.go	21-66	7feb5debd8ee9f56	f819ff27f468cc6f
 KAN-SIMD-BASELINE-DIAGNOSIS-001	go:nn.KANLayer.Forward	nn/kan.go	181-228	42f7a1580f191b98	f819ff27f468cc6f
 KAN-FEATURE-CI-DIGEST-001	go:nn.TestKANForwardIsBitIdentical	nn/kan_bitidentity_test.go	21-66	7feb5debd8ee9f56	9100d5fb1aad10db
+SIXLOOP-BCE-TANH-FROZEN-001	go:autograd.tanhVJP	autograd/vjp_elementwise.go	155-176	d499c5b3fd45443b	2eebd3316a6bcf76
+SIXLOOP-QUALIFIED-BASELINE-001	go:autograd.reluVJP	autograd/vjp_elementwise.go	112-148	60c82c25f3b736e6	16f74be226ee5ec6
+SIXLOOP-QUALIFIED-BASELINE-002	go:autograd.TestUnaryVJPBoundsExact	autograd/vjp_bounds_internal_test.go	379-524	cfa1c39357aa3207	5d16937b8d95faf6

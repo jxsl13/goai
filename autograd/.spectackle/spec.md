@@ -49,3 +49,16 @@ WHEN ARM64 SIMD WKV tests compare CPU output with scalar host output, the compar
 
 ## ARM64-SIMD-PARITY-GUARDS-001 {applies: go:autograd_test.TestWKVOpMatchesHostWKV,go:autograd_test.TestSigmoidFocalCoreExactCompositeVJPParity}
 WHEN ARM64 SIMD F64 scalar parity tests compare tensors, the tests SHALL check dtype, shape, count, CPU execution and detached targets; reject mismatched nonfinite bits and opposite zero signs; preserve TestUnaryVJPBoundsExact.
+
+## SIXLOOP-BCE-TANH-FROZEN-001 {applies: go:autograd.tanhVJP}
+WHEN the six-loop unary bounds-proof experiment changes vjp_elementwise.go, the candidate SHALL preserve tanhVJP byte-for-byte against0d7c62fe and retain TestUnaryVJPBoundsExact unchanged, including race-enabled NaN payload checks.
+
+## SIXLOOP-QUALIFIED-BASELINE-001 {applies: go:autograd.reluVJP}
+WHEN measuring the six-loop VJP candidate, the benchmark comparison SHALL use Go 1.27.1 and identical test sources from the qualified KAN baseline 5b121d06 in both arms, while preserving TestUnaryVJPBoundsExact and tanhVJP.
+
+Rationale: This operational baseline amendment supplements the frozen task history at0d7c62fe. The KAN correction changes only tests/CI and is independently qualified in both CPU feature modes and native CI; no production operation, strict VJP oracle or performance gate changes. Root reran corrected source e14a704e: both default/SIMD autograd+cpu+nn short suites and default CGO1 strict VJP race pass, with explicit environment/raw captures. Both old/new timing arms must use this same corrected test source; runtime editing remains held until parent PR1256 reaches main. Six-loop source and tanh byte-exact constraints remain binding.
+
+## SIXLOOP-QUALIFIED-BASELINE-002 {applies: go:autograd.TestUnaryVJPBoundsExact}
+WHEN floating-point VJP loop control changes, the bounds-proof qualification gate SHALL preserve TestUnaryVJPBoundsExact on native ARM64 and AMD64 in default, SIMD, and race builds before paired performance timing.
+
+Rationale: The six-loop candidate9969389c passed M2 default/SIMD/race and removed all six intended hot-loop indexed checks, yet native AMD64 Linux/Windows CI34488246180 changed sigmoidF64 NaN payload bits in17 strict-oracle cases. Same source expressions and a local exactness pass do not prove portable raw-bit behavior. The frozen oracle and quality threshold remain unchanged; future architecture-aware candidates need active-build native evidence before timing. This is a library contract violation, not a claim of a Go compiler defect.

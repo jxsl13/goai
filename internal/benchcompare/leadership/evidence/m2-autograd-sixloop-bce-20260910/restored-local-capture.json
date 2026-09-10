@@ -1,0 +1,145 @@
+{
+  "source_directory": "/private/tmp/goai-sixloop-measure-yOJPjv/artifacts",
+  "artifacts": [
+    {
+      "name": "restored-default-build.exit",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "encoding": "gzip+base64",
+      "data": "H4sIAAAAAAAAAzPgAgASzUp+AgAAAA=="
+    },
+    {
+      "name": "restored-default-build.manifest",
+      "bytes": 1130,
+      "sha256": "d0dcf0ee4a01392e123860b02287055e412305b57ac2244f52db1b96a5cdaace",
+      "encoding": "gzip+base64",
+      "data": "H4sIAAAAAAAAA61TzXKbMBC+8xR+Adgkl3Y8w4EQYnvGNoxNW/fUEWKLFQNSVwLbb18BcRoT39IL2v349n+XH3MfFImWGQRTKSgkE2714LLGyIJY7mpxKqVU2n1Mtl9nayBU0mFUtFNnMvloWsj7hy/37ss9X7Z/LASZqO1juVkjyty+Hnie5yRBOr8R+Zb5FBpNUErOykHdnrXBCkI6K4Mn1BAo1XPeyL3wpuleGr4tI6CmBi4rjylVoqeRNyTM2eODv9z+y/Hk6SFKJqXRhpgaZ/FJT//DR28iaoNUX7JShwKwbqEoZXbBliIjRueuTSX+C36BU9yBjdRjHUVwZoSsNfwQhHrP6NDlBqG0gWqjYcV4vB1Rv6+OjHDy3GirXtOTJrO8KXzTSBpe5L4Gr6+pn7rdpLuhRLcTTRphsRiRGd/jK8c2y4jKjnxQ7f5UtoQLDDkqrHOsubCUbvNki0QixylIZWAvK8wIj6+7cB2ELtv2Hn437ysHY+It28/k/ZuVZcb4YdTmcM/MLEmvG7xBLRviqJ1ZHAbhPBrfVZ+I292XZazip5ukD8dXybw3tDZpHC/DebBY+30/LJJs4t1PP7cLwo1Vn5fBbOtbIdol0Waxitap74Sz+Fe0Dh6X0ZN/5/wFxStI3GoEAAA="
+    },
+    {
+      "name": "restored-default-build.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "encoding": "gzip+base64",
+      "data": "H4sIAAAAAAAAAwMAAAAAAAAAAAA="
+    },
+    {
+      "name": "restored-default-build.stdout",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "encoding": "gzip+base64",
+      "data": "H4sIAAAAAAAAAwMAAAAAAAAAAAA="
+    },
+    {
+      "name": "restored-default-race.exit",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "encoding": "gzip+base64",
+      "data": "H4sIAAAAAAAAAzPgAgASzUp+AgAAAA=="
+    },
+    {
+      "name": "restored-default-race.manifest",
+      "bytes": 1190,
+      "sha256": "9f2e555988c16331b80065c596056ca981add41134bb149e865a81086e06aff2",
+      "encoding": "gzip+base64",
+      "data": "H4sIAAAAAAAAA61TS3ObMBC++1f40CuozqUdz3AghNju2IaxSerOZNoRYosVg6RKAtv/vguENCa+pRd29+Pbh/bBjplHlOY1tUBsqUguKXfKG4dWVuaaZo7hp0JKZZzbePt1tiYalBxRndfT0Xj83jWXk5svE+d5wpb1H4RIygUK5FowFoWjKQOULulTtGAlUDz9TJD0IKg+P36Lb2UlMhOeKLNPnxoSQ8B6k1HsJ/MrVV9LPSWV0aSQjBaduT0bCyUJ9FlZOIEhvlIt55XcKq+WabXuW1NNsFDCZOlSpQpwDbBKc3t2WRcvw38ZnFzTZUmltMZqqoZVfDDS/4jRunBhQYu+KnXICYia5IVMe2zJU43jaNpUwL/kPZzAjmCmFmsonFHLpTDkO9dg9lQfmtpIIDGRsIasKIu2A+rj6kg1jO8rg+YlPa5S5E3JgwFtyLPcC+K2b2qnjlv4uXui06g2CSFfDMiU7eGFg82yvMSRdybuT4lP6GGSgQKRgWAcKc3Wyhq05hlMiVSW7GUJqYbjyy5cJtH9tr2F38z7IsCQeM33I3X/pkWRUnYYtDnYUzuLk8sGb8DISjMwo1kU+ME8HN5VW4jT3BcyVtHdVdK74ytl1jqiTxJFy2DuL9Ze2w9E4k20++FluCDMonm/9GdbD5VwF4ebxSpcJ94omEW/wrV/uwzv8OD/AueFDf+mBAAA"
+    },
+    {
+      "name": "restored-default-race.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "encoding": "gzip+base64",
+      "data": "H4sIAAAAAAAAAwMAAAAAAAAAAAA="
+    },
+    {
+      "name": "restored-default-race.stdout",
+      "bytes": 44,
+      "sha256": "18912521a55cefd142588a3ecb1e90b7ba18bf23d09b483bce5c9e7051250837",
+      "encoding": "gzip+base64",
+      "data": "H4sIAAAAAAAAA8vPVlDgTM8syShN0kvOz9XPqijOMTTWT89PzNRPLC3JTy9KTOE01jMyMSvmAgC/PrekLAAAAA=="
+    },
+    {
+      "name": "restored-default-short.exit",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "encoding": "gzip+base64",
+      "data": "H4sIAAAAAAAAAzPgAgASzUp+AgAAAA=="
+    },
+    {
+      "name": "restored-default-short.manifest",
+      "bytes": 1177,
+      "sha256": "472e3996a3f6def8f1f7f9218fa1f5f65195ad971127c8c341359df87b524775",
+      "encoding": "gzip+base64",
+      "data": "H4sIAAAAAAAAA61TwXKbMBC98xX+Adg4l3Y8w4EQYnvGNoxNW/fUEWILikFSJYHjv6+AkMbEt/Qi7e683X1avaXn3AepWEsMgqklFIIwt753SWNEoUjuavZSCSG1+5Acvi53oFAKh6iiXTiz2cfUQszvv8zd5zndtH9sCDLG7WWxBrWxlwdj6d7JCD0hz4HKpvc5t5erS6E6sEtFw40/d5IgXd0geqvbAhqtoBKUVIN7uGiDNYTqIg2+oIZAyh7zBu6NN0/31nC2RIFqOFBRe0TKCj2NtFHMXDw61LPURY4vnh66ZEIYbRSRUxafrPQ/avQpjBtUfGQlTwUgb6GoRDbGNixTRF26MVX4r/kYTvEItlMf6yCMEsME1/CDKdQlUaeOG4TCNuJGw5bQ+DCBft+eicLZU6Otew1PmsziFvBNo9LwLEoOXv+m/tet8O6GJ7qdadIIi/UETGiJrxg7LMNq++WDa/VT2yeMYchRWu0hp8xCOqGKFpViOS5ASAOlqDFTeH7VwnUTNartffjdf18VmAJv5X6G929SVd0mTcYclsQsk/R6wHvUolEUtbOMwyBcRdO96om43X5ZxDZ+vAn6sHy1yPtEm5PG8SZcBeud38/DRpJ9fPzp51Yg1Fj3aRMsD741omMS7dfbaJf6TriMf0W74GETPfp3zl8/A3T7mQQAAA=="
+    },
+    {
+      "name": "restored-default-short.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "encoding": "gzip+base64",
+      "data": "H4sIAAAAAAAAAwMAAAAAAAAAAAA="
+    },
+    {
+      "name": "restored-default-short.stdout",
+      "bytes": 131,
+      "sha256": "bc17547972f5134327fa1ec7b72e8ddeb15210be30f84488d7f6d4d9a45e8377",
+      "encoding": "gzip+base64",
+      "data": "H4sIAAAAAAAAA33KwQ2AIAwAwDdMwQTUYpA4TgWDiFIjkDi+G3Dv46yUiKkdfdOebzi/euEMkSkB9cbxpSCMds5UyYO7kc97CeCfLnDRFt34lyJw0rjaKn+V0Ra+gwAAAA=="
+    },
+    {
+      "name": "restored-simd-build.exit",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "encoding": "gzip+base64",
+      "data": "H4sIAAAAAAAAAzPgAgASzUp+AgAAAA=="
+    },
+    {
+      "name": "restored-simd-build.manifest",
+      "bytes": 1134,
+      "sha256": "850b535f3d694bfc3f339a83e7a9bc2ef950df3912138478631ab6fb5ed39cc6",
+      "encoding": "gzip+base64",
+      "data": "H4sIAAAAAAAAA61TzXKbMBC+8xR+Adgkl3Y8w4EQYnvGNoxNW/fUEWKLFQNSVwLbb18BcRoT39IL2v349n+XH3MfFImWGQRTKSgkE2714LLGyIJY7mpxKqVU2n1Mtl9nayBU0mFUtFNnMvloWsj7hy/37ss9X7Z/LASZqO1juVkjyty+Hnie5yRBOr8R+Zb5FBpNUErOykHdnrXBCkI6K4Mn1BAo1XPeyL3wpuleGr4tI6CmBi4rjylVoqeRNyTM2eODv9z+y/Hk6SFKJqXRhpgaZ/FJT//DR28iaoNUX7JShwKwbqEoZXbBliIjRueuTSX+C36BU9yBjdRjHUVwZoSsNfwQhHrP6NDlBqG0gWqjYcV4vB1Rv6+OjHDy3GirXtOTJrO8KXzTSBpe5L4Gr6+pn7rdpLuhRLcTTRphsRiRGd/jK8c2y4jKjnxQ7f5UtoQLDDkqrHOsubCUbvNki0QixylIZWAvK8wIj6+7cB2ELtv2Hn437ysHY+It28/k/ZuVZcb4YdTmcM/MLEmvG7xBLRviqJ1ZHAbhPBrfVZ+I292XZazip5ukD8dXybw3tDZpHC/DebBY+30/LJJs4t1PP7cLwo1Vn5fBbOtbIdol0Waxitapr0WVO+Es/hWtg8dl9OTfOX8BDvGgmG4EAAA="
+    },
+    {
+      "name": "restored-simd-build.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "encoding": "gzip+base64",
+      "data": "H4sIAAAAAAAAAwMAAAAAAAAAAAA="
+    },
+    {
+      "name": "restored-simd-build.stdout",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "encoding": "gzip+base64",
+      "data": "H4sIAAAAAAAAAwMAAAAAAAAAAAA="
+    },
+    {
+      "name": "restored-simd-short.exit",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "encoding": "gzip+base64",
+      "data": "H4sIAAAAAAAAAzPgAgASzUp+AgAAAA=="
+    },
+    {
+      "name": "restored-simd-short.manifest",
+      "bytes": 1181,
+      "sha256": "7bf117906a96f14defad2fc94a34c63a1a6fa500579555ae872939a1a9a0ca6f",
+      "encoding": "gzip+base64",
+      "data": "H4sIAAAAAAAAA61TwXKbMBC98xX+Adg4l3Y8w4EQYnvGNoxNW/fUEWILikFSJYHjv6+AkMbEt/Qi7e683X1avaXn3AepWEsMgqklFIIwt753SWNEoUjuavZSCSG1+5Acvi53oFAKh6iiXTiz2cfUQszvv8zd5zndtH9sCDLG7WWxBrWxlwdj6d7JCD0hz4HKpvc5t5erS6E6sEtFw40/d5IgXd0geqvbAhqtoBKUVIN7uGiDNYTqIg2+oIZAyh7zBu6NN0/31nC2RIFqOFBRe0TKCj2NtFHMXDw61LPURY4vnh66ZEIYbRSRUxafrPQ/avQpjBtUfGQlTwUgb6GoRDbGNixTRF26MVX4r/kYTvEItlMf6yCMEsME1/CDKdQlUaeOG4TCNuJGw5bQ+DCBft+eicLZU6Otew1PmsziFvBNo9LwLEoOXv+m/tet8O6GJ7qdadIIi/UETGiJrxg7LMNq++WDa/VT2yeMYchRWu0hp8xCOqGKFpViOS5ASAOlqDFTeH7VwnUTNartffjdf18VmAJv5X6G929SVd0mTcYclsQsk/R6wHvUolEUtbOMwyBcRdO96om43X5ZxDZ+vAn6sHy1yPtEm5PG8SZcBeud38/DRpJ9fPzp51Yg1Fj3aRMsD741omMS7dfbaJf6mtW5Ey7jX9EueNhEj/6d8xcB3NyRnQQAAA=="
+    },
+    {
+      "name": "restored-simd-short.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "encoding": "gzip+base64",
+      "data": "H4sIAAAAAAAAAwMAAAAAAAAAAAA="
+    },
+    {
+      "name": "restored-simd-short.stdout",
+      "bytes": 130,
+      "sha256": "c2b775a825d79ef1822ccbab1b3380fa1ff64330ae1a78509711b808008b0510",
+      "encoding": "gzip+base64",
+      "data": "H4sIAAAAAAAAA8vPVlDgTM8syShN0kvOz9XPqijOMTTWT89PzNRPLC3JTy9KTOE00jMyMS3mysejNikxOTs1L0U/uaCU09BUz5KQ+rw8Tks9Y2OzYi4AsBHOLoIAAAA="
+    }
+  ]
+}
