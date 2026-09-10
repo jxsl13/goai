@@ -1,0 +1,9 @@
+*** Begin Patch
+*** Update File: /private/tmp/goai-m2-simd-parity-policy-fOBDq3/repo/autograd/vjp_sigmoid_focal_test.go
+@@
+-				requireSigmoidFocalParity(t, fusedLoss[0], controlLoss)
++				if dt == tensor.F64 && arm64SIMDScalarPolicy {
++					fusedLoss[0].Storage().F64()[0] += 1
++				}
++				requireSigmoidFocalParity(t, fusedLoss[0], controlLoss)
+*** End Patch
