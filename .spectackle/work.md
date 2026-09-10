@@ -3972,6 +3972,7 @@ kind: task
 state: draft
 created: 2026-09-10
 refs: P-01M25KRMYZEH599AP2131M1GD6, R-01M25JEGEJFDEVBR7B0YZKQ3MX
+grilled: 2026-09-10 open=0
 targets: go:nn.TestKANForwardIsBitIdentical, go:archgold.PickSIMD
 
 GOAL: correct only KAN test goldens for the existing scalar/SIMD CPU feature policy, using independently qualified native baselines, and enforce the existing SiLU quality gates in CI. No production operation or tolerance changes and no performance claim.
