@@ -451,6 +451,7 @@ jobs:
           GOEXPERIMENT=simd go build -tags=simd ./...
           GOEXPERIMENT=simd go test -short -count=1 ./internal/simd
           GOEXPERIMENT=simd go test -short -count=1 -v -run '^TestKANForwardIsBitIdentical$' ./nn
+          GOEXPERIMENT=simd go test -short -count=1 -v -run '^Test(VsiluF64(Accuracy|Arm64(Accuracy|VectorTailBitIdentity|Edges))|ExpF64polyMatchesVector)$' ./backend/cpu
 
   # §T604 capability matrix, cgo axis on windows (mingw): the tagless cgo build
   # must behave like everywhere else; tests run selectively via the runner.
