@@ -53,6 +53,7 @@ kind: proposal
 state: draft
 created: 2026-09-10
 refs: R-01M25JEGEJFDEVBR7B0YZKQ3MX
+grilled: 2026-09-10 open=0
 targets: go:nn.TestKANForwardIsBitIdentical
 
 GOAL: make the existing KAN whole-layer frozen-output guard correct for the already-supported CPU scalar and SIMD build-feature lanes without changing production arithmetic or tolerances. Research R-01M25JEGEJFDE reproduces an inherited arm64 SIMD mismatch and isolates SiLU; its exact source-artifact audit is still pending and is a hard prerequisite to assigning final golden values. No new runtime speedup is claimed.
