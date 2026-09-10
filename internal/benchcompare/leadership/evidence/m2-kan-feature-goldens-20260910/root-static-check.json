@@ -1,0 +1,17 @@
+{
+  "initialEncodingMismatchedAttempt": {
+    "chunk_id": "795746",
+    "wall_time_seconds": 0.000006,
+    "exit_code": 1,
+    "original_token_count": 6,
+    "output": "unexpected test delta\n"
+  },
+  "correctedBinaryComparison": {
+    "chunk_id": "bcc9d0",
+    "wall_time_seconds": 0.010736791,
+    "exit_code": 0,
+    "original_token_count": 206,
+    "output": "{\n  \"base\": \"81bfae535480e144495dc54fcf93ae4b66171745\",\n  \"test_delta\": \"exactly comment plus three PickSIMD substitutions; every original byte otherwise unchanged\",\n  \"ci_delta\": \"exactly one appended accuracy command\",\n  \"runtime_unchanged\": {\n    \"nn/kan.go\": \"c346358d7ef4efef4db6e2f3dadc583a359522e0f435f52302251c42a28e9a03\",\n    \"backend/cpu/elementwise.go\": \"234e25273a7d9f23c4f7ba9a20fc9fa34b6fbba69c0e3ff232efee8167b7cd7f\",\n    \"autograd/vjp_elementwise.go\": \"07adbf223e44d862d5f9e3e38a743eff54def329280bb8b76aa0ffe3f9b62945\",\n    \"autograd/vjp_bounds_internal_test.go\": \"bd26d0195b02e23aa1406f01f7df25fff5aa65ea81fea0c3bae9f31d3359648c\"\n  },\n  \"test_sha256\": \"03b9565cc76737bafc500617ca0e392d0994c3c1f6dcae1269e445ac0518fe92\",\n  \"ci_sha256\": \"a2f436db4e5bb2358c72ee7245255b83ebd42646e1fdbb51c9359926cb5ada84\"\n}\n"
+  },
+  "note": "Initial Ruby comparison mixed UTF-8 git output with binary file strings and reported an unexpected delta. Explicit .b byte comparison corrected the checker without changing any source; exact intended test and CI deltas and frozen runtime/oracle bytes then passed."
+}

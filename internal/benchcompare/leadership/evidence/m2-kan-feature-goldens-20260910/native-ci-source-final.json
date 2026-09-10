@@ -1,0 +1,1633 @@
+{
+  "conclusion": "success",
+  "databaseId": 34479783082,
+  "headSha": "3530758fd01961064dad0d21366531d0964c2df3",
+  "jobs": [
+    {
+      "completedAt": "2026-09-10T12:58:55Z",
+      "conclusion": "success",
+      "databaseId": 102879378602,
+      "name": "select affected packages (cichange)",
+      "startedAt": "2026-09-10T12:58:28Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T12:58:30Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T12:58:29Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:58:37Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+          "startedAt": "2026-09-10T12:58:30Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:58:47Z",
+          "conclusion": "success",
+          "name": "Run actions/setup-go@v6",
+          "number": 3,
+          "startedAt": "2026-09-10T12:58:37Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:58:50Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/go-build-cache",
+          "number": 4,
+          "startedAt": "2026-09-10T12:58:47Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:58:50Z",
+          "conclusion": "success",
+          "name": "go mod download (a no-op today — zero-dependency module, §T582)",
+          "number": 5,
+          "startedAt": "2026-09-10T12:58:50Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:58:50Z",
+          "conclusion": "success",
+          "name": "compute the affected package set from this push's diff",
+          "number": 6,
+          "startedAt": "2026-09-10T12:58:50Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:58:52Z",
+          "conclusion": "success",
+          "name": "Post Run ./.github/actions/go-build-cache",
+          "number": 10,
+          "startedAt": "2026-09-10T12:58:50Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:58:52Z",
+          "conclusion": "success",
+          "name": "Post Run actions/setup-go@v6",
+          "number": 11,
+          "startedAt": "2026-09-10T12:58:52Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:58:52Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 12,
+          "startedAt": "2026-09-10T12:58:52Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:58:52Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 13,
+          "startedAt": "2026-09-10T12:58:52Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/jxsl13/goai/actions/runs/34479783082/job/102879378602"
+    },
+    {
+      "completedAt": "2026-09-10T12:58:44Z",
+      "conclusion": "success",
+      "databaseId": 102879378946,
+      "name": "go mod tidy",
+      "startedAt": "2026-09-10T12:58:27Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T12:58:29Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T12:58:27Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:58:31Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+          "startedAt": "2026-09-10T12:58:29Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:58:39Z",
+          "conclusion": "success",
+          "name": "Run actions/setup-go@v6",
+          "number": 3,
+          "startedAt": "2026-09-10T12:58:31Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:58:40Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/go-build-cache",
+          "number": 4,
+          "startedAt": "2026-09-10T12:58:39Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:58:40Z",
+          "conclusion": "success",
+          "name": "go mod tidy must not change go.mod (dependency drift gate)",
+          "number": 5,
+          "startedAt": "2026-09-10T12:58:40Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:58:41Z",
+          "conclusion": "success",
+          "name": "Post Run ./.github/actions/go-build-cache",
+          "number": 8,
+          "startedAt": "2026-09-10T12:58:40Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:58:41Z",
+          "conclusion": "success",
+          "name": "Post Run actions/setup-go@v6",
+          "number": 9,
+          "startedAt": "2026-09-10T12:58:41Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:58:42Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 10,
+          "startedAt": "2026-09-10T12:58:41Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:58:42Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 11,
+          "startedAt": "2026-09-10T12:58:42Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/jxsl13/goai/actions/runs/34479783082/job/102879378946"
+    },
+    {
+      "completedAt": "2026-09-10T13:01:03Z",
+      "conclusion": "success",
+      "databaseId": 102879557769,
+      "name": "cgo+metal / macos",
+      "startedAt": "2026-09-10T12:59:01Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T12:59:02Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T12:59:01Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:08Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+          "startedAt": "2026-09-10T12:59:02Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:19Z",
+          "conclusion": "success",
+          "name": "Run actions/setup-go@v6",
+          "number": 3,
+          "startedAt": "2026-09-10T12:59:08Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:23Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/go-build-cache",
+          "number": 4,
+          "startedAt": "2026-09-10T12:59:19Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:23Z",
+          "conclusion": "success",
+          "name": "capability probe (§T601 — what does this runner offer?)",
+          "number": 5,
+          "startedAt": "2026-09-10T12:59:23Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:26Z",
+          "conclusion": "success",
+          "name": "compile everything incl. the Metal cgo backend via go vet",
+          "number": 6,
+          "startedAt": "2026-09-10T12:59:23Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:00:54Z",
+          "conclusion": "success",
+          "name": "test (transparent selective run, §T587)",
+          "number": 7,
+          "startedAt": "2026-09-10T12:59:26Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:00:58Z",
+          "conclusion": "success",
+          "name": "Post Run ./.github/actions/go-build-cache",
+          "number": 12,
+          "startedAt": "2026-09-10T13:00:54Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:00:58Z",
+          "conclusion": "success",
+          "name": "Post Run actions/setup-go@v6",
+          "number": 13,
+          "startedAt": "2026-09-10T13:00:58Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:00:58Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 14,
+          "startedAt": "2026-09-10T13:00:58Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:00:59Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 15,
+          "startedAt": "2026-09-10T13:00:58Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/jxsl13/goai/actions/runs/34479783082/job/102879557769"
+    },
+    {
+      "completedAt": "2026-09-10T13:02:10Z",
+      "conclusion": "success",
+      "databaseId": 102879557873,
+      "name": "simd / macos-latest (soft)",
+      "startedAt": "2026-09-10T13:01:09Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T13:01:11Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T13:01:10Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:15Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+          "startedAt": "2026-09-10T13:01:11Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:45Z",
+          "conclusion": "success",
+          "name": "Run actions/setup-go@v6",
+          "number": 3,
+          "startedAt": "2026-09-10T13:01:15Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:48Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/go-build-cache",
+          "number": 4,
+          "startedAt": "2026-09-10T13:01:45Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:49Z",
+          "conclusion": "success",
+          "name": "capability probe (§T601 — what does this runner offer?)",
+          "number": 5,
+          "startedAt": "2026-09-10T13:01:48Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:02:02Z",
+          "conclusion": "success",
+          "name": "compile and test with GOEXPERIMENT=simd",
+          "number": 6,
+          "startedAt": "2026-09-10T13:01:49Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:02:05Z",
+          "conclusion": "success",
+          "name": "Post Run ./.github/actions/go-build-cache",
+          "number": 10,
+          "startedAt": "2026-09-10T13:02:02Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:02:05Z",
+          "conclusion": "success",
+          "name": "Post Run actions/setup-go@v6",
+          "number": 11,
+          "startedAt": "2026-09-10T13:02:05Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:02:06Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 12,
+          "startedAt": "2026-09-10T13:02:05Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:02:07Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 13,
+          "startedAt": "2026-09-10T13:02:06Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/jxsl13/goai/actions/runs/34479783082/job/102879557873"
+    },
+    {
+      "completedAt": "2026-09-10T12:59:53Z",
+      "conclusion": "success",
+      "databaseId": 102879557875,
+      "name": "cuda compile+link / ubuntu",
+      "startedAt": "2026-09-10T12:58:58Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T12:59:00Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T12:58:59Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:06Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+          "startedAt": "2026-09-10T12:59:00Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:14Z",
+          "conclusion": "success",
+          "name": "Run actions/setup-go@v6",
+          "number": 3,
+          "startedAt": "2026-09-10T12:59:06Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:15Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/go-build-cache",
+          "number": 4,
+          "startedAt": "2026-09-10T12:59:14Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:48Z",
+          "conclusion": "success",
+          "name": "install the CUDA dev subset (headers + link libs; no driver, no GPU)",
+          "number": 5,
+          "startedAt": "2026-09-10T12:59:15Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:50Z",
+          "conclusion": "success",
+          "name": "compile+link the cuda-tagged tree (typecheck, then link the test binaries)",
+          "number": 6,
+          "startedAt": "2026-09-10T12:59:48Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:51Z",
+          "conclusion": "success",
+          "name": "Post Run ./.github/actions/go-build-cache",
+          "number": 10,
+          "startedAt": "2026-09-10T12:59:50Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:51Z",
+          "conclusion": "success",
+          "name": "Post Run actions/setup-go@v6",
+          "number": 11,
+          "startedAt": "2026-09-10T12:59:51Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:51Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 12,
+          "startedAt": "2026-09-10T12:59:51Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:51Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 13,
+          "startedAt": "2026-09-10T12:59:51Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/jxsl13/goai/actions/runs/34479783082/job/102879557875"
+    },
+    {
+      "completedAt": "2026-09-10T13:00:35Z",
+      "conclusion": "success",
+      "databaseId": 102879557905,
+      "name": "perfscan / ubuntu",
+      "startedAt": "2026-09-10T12:58:59Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T12:59:01Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T12:59:00Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:08Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+          "startedAt": "2026-09-10T12:59:01Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:18Z",
+          "conclusion": "success",
+          "name": "Run actions/setup-go@v6",
+          "number": 3,
+          "startedAt": "2026-09-10T12:59:08Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:21Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/go-build-cache",
+          "number": 4,
+          "startedAt": "2026-09-10T12:59:18Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:38Z",
+          "conclusion": "success",
+          "name": "verify external integration, registry difference, and compatibility fixtures",
+          "number": 5,
+          "startedAt": "2026-09-10T12:59:21Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:00:23Z",
+          "conclusion": "success",
+          "name": "scan the complete production Go tree with external perfscan",
+          "number": 6,
+          "startedAt": "2026-09-10T12:59:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:00:29Z",
+          "conclusion": "success",
+          "name": "scan the 53 not-yet-ported compatibility checks",
+          "number": 7,
+          "startedAt": "2026-09-10T13:00:23Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:00:32Z",
+          "conclusion": "success",
+          "name": "Post Run ./.github/actions/go-build-cache",
+          "number": 12,
+          "startedAt": "2026-09-10T13:00:29Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:00:32Z",
+          "conclusion": "success",
+          "name": "Post Run actions/setup-go@v6",
+          "number": 13,
+          "startedAt": "2026-09-10T13:00:32Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:00:32Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 14,
+          "startedAt": "2026-09-10T13:00:32Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:00:32Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 15,
+          "startedAt": "2026-09-10T13:00:32Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/jxsl13/goai/actions/runs/34479783082/job/102879557905"
+    },
+    {
+      "completedAt": "2026-09-10T13:03:52Z",
+      "conclusion": "success",
+      "databaseId": 102879557910,
+      "name": "pure-go / ubuntu-latest",
+      "startedAt": "2026-09-10T12:58:58Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T12:59:00Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T12:58:59Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:07Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+          "startedAt": "2026-09-10T12:59:00Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:16Z",
+          "conclusion": "success",
+          "name": "Run actions/setup-go@v6",
+          "number": 3,
+          "startedAt": "2026-09-10T12:59:07Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:19Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/go-build-cache",
+          "number": 4,
+          "startedAt": "2026-09-10T12:59:16Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:23Z",
+          "conclusion": "success",
+          "name": "compile EVERYTHING incl. tests via go vet (full-tree soundness backstop, §V23)",
+          "number": 5,
+          "startedAt": "2026-09-10T12:59:19Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:00:29Z",
+          "conclusion": "success",
+          "name": "run tests for the affected packages only (transparent selective runner, §T587)",
+          "number": 6,
+          "startedAt": "2026-09-10T12:59:23Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:03:45Z",
+          "conclusion": "success",
+          "name": "smoke-run every benchmark once (they must at least build+run, §V5)",
+          "number": 7,
+          "startedAt": "2026-09-10T13:00:29Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:03:49Z",
+          "conclusion": "success",
+          "name": "Post Run ./.github/actions/go-build-cache",
+          "number": 12,
+          "startedAt": "2026-09-10T13:03:45Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:03:49Z",
+          "conclusion": "success",
+          "name": "Post Run actions/setup-go@v6",
+          "number": 13,
+          "startedAt": "2026-09-10T13:03:49Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:03:49Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 14,
+          "startedAt": "2026-09-10T13:03:49Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:03:49Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 15,
+          "startedAt": "2026-09-10T13:03:49Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/jxsl13/goai/actions/runs/34479783082/job/102879557910"
+    },
+    {
+      "completedAt": "2026-09-10T13:01:41Z",
+      "conclusion": "success",
+      "databaseId": 102879557912,
+      "name": "simd / windows-latest (soft)",
+      "startedAt": "2026-09-10T13:00:37Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T13:00:39Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T13:00:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:00:47Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+          "startedAt": "2026-09-10T13:00:39Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:07Z",
+          "conclusion": "success",
+          "name": "Run actions/setup-go@v6",
+          "number": 3,
+          "startedAt": "2026-09-10T13:00:47Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:13Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/go-build-cache",
+          "number": 4,
+          "startedAt": "2026-09-10T13:01:07Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:13Z",
+          "conclusion": "success",
+          "name": "capability probe (§T601 — what does this runner offer?)",
+          "number": 5,
+          "startedAt": "2026-09-10T13:01:13Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:33Z",
+          "conclusion": "success",
+          "name": "compile and test with GOEXPERIMENT=simd",
+          "number": 6,
+          "startedAt": "2026-09-10T13:01:13Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:36Z",
+          "conclusion": "success",
+          "name": "Post Run ./.github/actions/go-build-cache",
+          "number": 10,
+          "startedAt": "2026-09-10T13:01:33Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:36Z",
+          "conclusion": "success",
+          "name": "Post Run actions/setup-go@v6",
+          "number": 11,
+          "startedAt": "2026-09-10T13:01:36Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:39Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 12,
+          "startedAt": "2026-09-10T13:01:36Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:39Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 13,
+          "startedAt": "2026-09-10T13:01:39Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/jxsl13/goai/actions/runs/34479783082/job/102879557912"
+    },
+    {
+      "completedAt": "2026-09-10T13:10:00Z",
+      "conclusion": "success",
+      "databaseId": 102879557924,
+      "name": "cgo+race / ubuntu",
+      "startedAt": "2026-09-10T12:58:58Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T12:58:59Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T12:58:59Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:06Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+          "startedAt": "2026-09-10T12:58:59Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:13Z",
+          "conclusion": "success",
+          "name": "Run actions/setup-go@v6",
+          "number": 3,
+          "startedAt": "2026-09-10T12:59:06Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:17Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/go-build-cache",
+          "number": 4,
+          "startedAt": "2026-09-10T12:59:13Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:18Z",
+          "conclusion": "success",
+          "name": "gofmt check (unformatted code fails the build)",
+          "number": 5,
+          "startedAt": "2026-09-10T12:59:17Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:24Z",
+          "conclusion": "success",
+          "name": "numpy venv for the .npy/.npz cross-checks (best-effort, never fatal)",
+          "number": 6,
+          "startedAt": "2026-09-10T12:59:18Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:28Z",
+          "conclusion": "success",
+          "name": "compile everything incl. tests via go vet (§V23)",
+          "number": 7,
+          "startedAt": "2026-09-10T12:59:24Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:08:15Z",
+          "conclusion": "success",
+          "name": "race-detector tests for the affected packages (§T587)",
+          "number": 8,
+          "startedAt": "2026-09-10T12:59:28Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:09:54Z",
+          "conclusion": "success",
+          "name": "coverage over the affected packages (summary line in the job page)",
+          "number": 9,
+          "startedAt": "2026-09-10T13:08:15Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:09:55Z",
+          "conclusion": "success",
+          "name": "Run actions/upload-artifact@v7",
+          "number": 10,
+          "startedAt": "2026-09-10T13:09:54Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:09:58Z",
+          "conclusion": "success",
+          "name": "Post Run ./.github/actions/go-build-cache",
+          "number": 18,
+          "startedAt": "2026-09-10T13:09:55Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:09:58Z",
+          "conclusion": "success",
+          "name": "Post Run actions/setup-go@v6",
+          "number": 19,
+          "startedAt": "2026-09-10T13:09:58Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:09:58Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 20,
+          "startedAt": "2026-09-10T13:09:58Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:09:59Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 21,
+          "startedAt": "2026-09-10T13:09:58Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/jxsl13/goai/actions/runs/34479783082/job/102879557924"
+    },
+    {
+      "completedAt": "2026-09-10T13:05:16Z",
+      "conclusion": "success",
+      "databaseId": 102879557932,
+      "name": "pure-go / windows-latest",
+      "startedAt": "2026-09-10T12:58:58Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T12:59:00Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T12:58:59Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:11Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+          "startedAt": "2026-09-10T12:59:00Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:33Z",
+          "conclusion": "success",
+          "name": "Run actions/setup-go@v6",
+          "number": 3,
+          "startedAt": "2026-09-10T12:59:11Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:46Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/go-build-cache",
+          "number": 4,
+          "startedAt": "2026-09-10T12:59:33Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:55Z",
+          "conclusion": "success",
+          "name": "compile EVERYTHING incl. tests via go vet (full-tree soundness backstop, §V23)",
+          "number": 5,
+          "startedAt": "2026-09-10T12:59:46Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:38Z",
+          "conclusion": "success",
+          "name": "run tests for the affected packages only (transparent selective runner, §T587)",
+          "number": 6,
+          "startedAt": "2026-09-10T12:59:55Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:05:06Z",
+          "conclusion": "success",
+          "name": "smoke-run every benchmark once (they must at least build+run, §V5)",
+          "number": 7,
+          "startedAt": "2026-09-10T13:01:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:05:11Z",
+          "conclusion": "success",
+          "name": "Post Run ./.github/actions/go-build-cache",
+          "number": 12,
+          "startedAt": "2026-09-10T13:05:06Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:05:11Z",
+          "conclusion": "success",
+          "name": "Post Run actions/setup-go@v6",
+          "number": 13,
+          "startedAt": "2026-09-10T13:05:11Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:05:13Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 14,
+          "startedAt": "2026-09-10T13:05:11Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:05:14Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 15,
+          "startedAt": "2026-09-10T13:05:13Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/jxsl13/goai/actions/runs/34479783082/job/102879557932"
+    },
+    {
+      "completedAt": "2026-09-10T13:06:34Z",
+      "conclusion": "success",
+      "databaseId": 102879557953,
+      "name": "pure-go / macos-latest",
+      "startedAt": "2026-09-10T13:03:01Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T13:03:03Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T13:03:01Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:03:08Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+          "startedAt": "2026-09-10T13:03:03Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:03:20Z",
+          "conclusion": "success",
+          "name": "Run actions/setup-go@v6",
+          "number": 3,
+          "startedAt": "2026-09-10T13:03:08Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:03:25Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/go-build-cache",
+          "number": 4,
+          "startedAt": "2026-09-10T13:03:20Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:03:29Z",
+          "conclusion": "success",
+          "name": "compile EVERYTHING incl. tests via go vet (full-tree soundness backstop, §V23)",
+          "number": 5,
+          "startedAt": "2026-09-10T13:03:25Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:04:13Z",
+          "conclusion": "success",
+          "name": "run tests for the affected packages only (transparent selective runner, §T587)",
+          "number": 6,
+          "startedAt": "2026-09-10T13:03:29Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:06:25Z",
+          "conclusion": "success",
+          "name": "smoke-run every benchmark once (they must at least build+run, §V5)",
+          "number": 7,
+          "startedAt": "2026-09-10T13:04:13Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:06:29Z",
+          "conclusion": "success",
+          "name": "Post Run ./.github/actions/go-build-cache",
+          "number": 12,
+          "startedAt": "2026-09-10T13:06:25Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:06:29Z",
+          "conclusion": "success",
+          "name": "Post Run actions/setup-go@v6",
+          "number": 13,
+          "startedAt": "2026-09-10T13:06:29Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:06:29Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 14,
+          "startedAt": "2026-09-10T13:06:29Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:06:31Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 15,
+          "startedAt": "2026-09-10T13:06:29Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/jxsl13/goai/actions/runs/34479783082/job/102879557953"
+    },
+    {
+      "completedAt": "2026-09-10T13:00:54Z",
+      "conclusion": "success",
+      "databaseId": 102879557959,
+      "name": "vulkan / ubuntu-latest",
+      "startedAt": "2026-09-10T12:58:58Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T12:58:59Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T12:58:59Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:06Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+          "startedAt": "2026-09-10T12:59:00Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:15Z",
+          "conclusion": "success",
+          "name": "Run actions/setup-go@v6",
+          "number": 3,
+          "startedAt": "2026-09-10T12:59:06Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:16Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/go-build-cache",
+          "number": 4,
+          "startedAt": "2026-09-10T12:59:15Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:26Z",
+          "conclusion": "success",
+          "name": "install ICD (linux — Mesa lavapipe)",
+          "number": 5,
+          "startedAt": "2026-09-10T12:59:16Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:26Z",
+          "conclusion": "skipped",
+          "name": "install ICD (macos — MoltenVK)",
+          "number": 6,
+          "startedAt": "2026-09-10T12:59:26Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:26Z",
+          "conclusion": "skipped",
+          "name": "install ICD (windows — LunarG runtime, best effort)",
+          "number": 7,
+          "startedAt": "2026-09-10T12:59:26Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:29Z",
+          "conclusion": "success",
+          "name": "capability probe (§T601 — what does this runner offer?)",
+          "number": 8,
+          "startedAt": "2026-09-10T12:59:26Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T12:59:32Z",
+          "conclusion": "success",
+          "name": "compile the vulkan-tagged tree",
+          "number": 9,
+          "startedAt": "2026-09-10T12:59:29Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:00:50Z",
+          "conclusion": "success",
+          "name": "run backend/vulkan tests — only if this change touches it AND an ICD is present (§T600)",
+          "number": 10,
+          "startedAt": "2026-09-10T12:59:32Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:00:51Z",
+          "conclusion": "success",
+          "name": "Post Run ./.github/actions/go-build-cache",
+          "number": 18,
+          "startedAt": "2026-09-10T13:00:50Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:00:51Z",
+          "conclusion": "success",
+          "name": "Post Run actions/setup-go@v6",
+          "number": 19,
+          "startedAt": "2026-09-10T13:00:51Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:00:52Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 20,
+          "startedAt": "2026-09-10T13:00:51Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:00:52Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 21,
+          "startedAt": "2026-09-10T13:00:52Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/jxsl13/goai/actions/runs/34479783082/job/102879557959"
+    },
+    {
+      "completedAt": "2026-09-10T13:03:17Z",
+      "conclusion": "success",
+      "databaseId": 102879557995,
+      "name": "cgo / windows",
+      "startedAt": "2026-09-10T13:00:55Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T13:00:57Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T13:00:56Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:08Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+          "startedAt": "2026-09-10T13:00:57Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:26Z",
+          "conclusion": "success",
+          "name": "Run actions/setup-go@v6",
+          "number": 3,
+          "startedAt": "2026-09-10T13:01:08Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:37Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/go-build-cache",
+          "number": 4,
+          "startedAt": "2026-09-10T13:01:26Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:37Z",
+          "conclusion": "success",
+          "name": "capability probe (§T601 — what does this runner offer?)",
+          "number": 5,
+          "startedAt": "2026-09-10T13:01:37Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:43Z",
+          "conclusion": "success",
+          "name": "compile everything with cgo enabled via go vet (mingw)",
+          "number": 6,
+          "startedAt": "2026-09-10T13:01:37Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:03:08Z",
+          "conclusion": "success",
+          "name": "test (transparent selective run, §T587)",
+          "number": 7,
+          "startedAt": "2026-09-10T13:01:43Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:03:12Z",
+          "conclusion": "success",
+          "name": "Post Run ./.github/actions/go-build-cache",
+          "number": 12,
+          "startedAt": "2026-09-10T13:03:08Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:03:13Z",
+          "conclusion": "success",
+          "name": "Post Run actions/setup-go@v6",
+          "number": 13,
+          "startedAt": "2026-09-10T13:03:12Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:03:15Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 14,
+          "startedAt": "2026-09-10T13:03:13Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:03:15Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 15,
+          "startedAt": "2026-09-10T13:03:15Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/jxsl13/goai/actions/runs/34479783082/job/102879557995"
+    },
+    {
+      "completedAt": "2026-09-10T13:02:16Z",
+      "conclusion": "success",
+      "databaseId": 102879558059,
+      "name": "simd / ubuntu-latest (soft)",
+      "startedAt": "2026-09-10T13:01:43Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T13:01:44Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T13:01:44Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:46Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+          "startedAt": "2026-09-10T13:01:44Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:55Z",
+          "conclusion": "success",
+          "name": "Run actions/setup-go@v6",
+          "number": 3,
+          "startedAt": "2026-09-10T13:01:46Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:57Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/go-build-cache",
+          "number": 4,
+          "startedAt": "2026-09-10T13:01:55Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:57Z",
+          "conclusion": "success",
+          "name": "capability probe (§T601 — what does this runner offer?)",
+          "number": 5,
+          "startedAt": "2026-09-10T13:01:57Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:02:11Z",
+          "conclusion": "success",
+          "name": "compile and test with GOEXPERIMENT=simd",
+          "number": 6,
+          "startedAt": "2026-09-10T13:01:57Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:02:13Z",
+          "conclusion": "success",
+          "name": "Post Run ./.github/actions/go-build-cache",
+          "number": 10,
+          "startedAt": "2026-09-10T13:02:11Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:02:13Z",
+          "conclusion": "success",
+          "name": "Post Run actions/setup-go@v6",
+          "number": 11,
+          "startedAt": "2026-09-10T13:02:13Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:02:14Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 12,
+          "startedAt": "2026-09-10T13:02:13Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:02:14Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 13,
+          "startedAt": "2026-09-10T13:02:14Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/jxsl13/goai/actions/runs/34479783082/job/102879558059"
+    },
+    {
+      "completedAt": "2026-09-10T13:02:55Z",
+      "conclusion": "success",
+      "databaseId": 102879558109,
+      "name": "vulkan / macos-latest",
+      "startedAt": "2026-09-10T13:02:15Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T13:02:16Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T13:02:15Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:02:23Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+          "startedAt": "2026-09-10T13:02:16Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:02:36Z",
+          "conclusion": "success",
+          "name": "Run actions/setup-go@v6",
+          "number": 3,
+          "startedAt": "2026-09-10T13:02:23Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:02:38Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/go-build-cache",
+          "number": 4,
+          "startedAt": "2026-09-10T13:02:36Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:02:38Z",
+          "conclusion": "skipped",
+          "name": "install ICD (linux — Mesa lavapipe)",
+          "number": 5,
+          "startedAt": "2026-09-10T13:02:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:02:42Z",
+          "conclusion": "success",
+          "name": "install ICD (macos — MoltenVK)",
+          "number": 6,
+          "startedAt": "2026-09-10T13:02:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:02:42Z",
+          "conclusion": "skipped",
+          "name": "install ICD (windows — LunarG runtime, best effort)",
+          "number": 7,
+          "startedAt": "2026-09-10T13:02:42Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:02:43Z",
+          "conclusion": "success",
+          "name": "capability probe (§T601 — what does this runner offer?)",
+          "number": 8,
+          "startedAt": "2026-09-10T13:02:42Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:02:46Z",
+          "conclusion": "success",
+          "name": "compile the vulkan-tagged tree",
+          "number": 9,
+          "startedAt": "2026-09-10T13:02:43Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:02:47Z",
+          "conclusion": "success",
+          "name": "run backend/vulkan tests — only if this change touches it AND an ICD is present (§T600)",
+          "number": 10,
+          "startedAt": "2026-09-10T13:02:46Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:02:49Z",
+          "conclusion": "success",
+          "name": "Post Run ./.github/actions/go-build-cache",
+          "number": 18,
+          "startedAt": "2026-09-10T13:02:47Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:02:50Z",
+          "conclusion": "success",
+          "name": "Post Run actions/setup-go@v6",
+          "number": 19,
+          "startedAt": "2026-09-10T13:02:49Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:02:52Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 20,
+          "startedAt": "2026-09-10T13:02:50Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:02:53Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 21,
+          "startedAt": "2026-09-10T13:02:52Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/jxsl13/goai/actions/runs/34479783082/job/102879558109"
+    },
+    {
+      "completedAt": "2026-09-10T13:01:46Z",
+      "conclusion": "success",
+      "databaseId": 102879558207,
+      "name": "vulkan / windows-latest",
+      "startedAt": "2026-09-10T12:59:58Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-10T13:00:00Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-10T12:59:59Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:00:19Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+          "startedAt": "2026-09-10T13:00:00Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:00:41Z",
+          "conclusion": "success",
+          "name": "Run actions/setup-go@v6",
+          "number": 3,
+          "startedAt": "2026-09-10T13:00:19Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:00:46Z",
+          "conclusion": "success",
+          "name": "Run ./.github/actions/go-build-cache",
+          "number": 4,
+          "startedAt": "2026-09-10T13:00:41Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:00:46Z",
+          "conclusion": "skipped",
+          "name": "install ICD (linux — Mesa lavapipe)",
+          "number": 5,
+          "startedAt": "2026-09-10T13:00:46Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:00:46Z",
+          "conclusion": "skipped",
+          "name": "install ICD (macos — MoltenVK)",
+          "number": 6,
+          "startedAt": "2026-09-10T13:00:46Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:33Z",
+          "conclusion": "success",
+          "name": "install ICD (windows — LunarG runtime, best effort)",
+          "number": 7,
+          "startedAt": "2026-09-10T13:00:46Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:33Z",
+          "conclusion": "success",
+          "name": "capability probe (§T601 — what does this runner offer?)",
+          "number": 8,
+          "startedAt": "2026-09-10T13:01:33Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:38Z",
+          "conclusion": "success",
+          "name": "compile the vulkan-tagged tree",
+          "number": 9,
+          "startedAt": "2026-09-10T13:01:33Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:38Z",
+          "conclusion": "success",
+          "name": "run backend/vulkan tests — only if this change touches it AND an ICD is present (§T600)",
+          "number": 10,
+          "startedAt": "2026-09-10T13:01:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:41Z",
+          "conclusion": "success",
+          "name": "Post Run ./.github/actions/go-build-cache",
+          "number": 18,
+          "startedAt": "2026-09-10T13:01:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:41Z",
+          "conclusion": "success",
+          "name": "Post Run actions/setup-go@v6",
+          "number": 19,
+          "startedAt": "2026-09-10T13:01:41Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:44Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 20,
+          "startedAt": "2026-09-10T13:01:41Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-10T13:01:44Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 21,
+          "startedAt": "2026-09-10T13:01:44Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/jxsl13/goai/actions/runs/34479783082/job/102879558207"
+    }
+  ],
+  "status": "completed",
+  "url": "https://github.com/jxsl13/goai/actions/runs/34479783082"
+}
