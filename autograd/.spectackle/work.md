@@ -79,7 +79,7 @@ Each new native job must upload its separate per-mode raw test stdout/stderr and
 
 ## T-01M26474J0EDXBCHDKB9PH1C03 Implement and qualify native-gated Apple ARM64 VJP bounds loops
 kind: task
-state: draft
+state: active
 created: 2026-09-10
 parent: P-01M2643W3SF7Q8V4ESYVQ2YZD9
 refs: R-01M25XNPFEEP58GC32DVNHVB9Q
