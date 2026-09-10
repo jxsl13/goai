@@ -473,3 +473,6 @@ KAN-FEATURE-CI-DIGEST-001	go:nn.TestKANForwardIsBitIdentical	nn/kan_bitidentity_
 SIXLOOP-BCE-TANH-FROZEN-001	go:autograd.tanhVJP	autograd/vjp_elementwise.go	155-176	d499c5b3fd45443b	2eebd3316a6bcf76
 SIXLOOP-QUALIFIED-BASELINE-001	go:autograd.reluVJP	autograd/vjp_elementwise.go	112-148	60c82c25f3b736e6	16f74be226ee5ec6
 SIXLOOP-QUALIFIED-BASELINE-002	go:autograd.TestUnaryVJPBoundsExact	autograd/vjp_bounds_internal_test.go	379-524	cfa1c39357aa3207	5d16937b8d95faf6
+VJP-ARCH-CODEGEN-001	go:autograd.unaryVJP	autograd/vjp_elementwise.go	18-50	a498b9083fb431b4	fca74884aa9eed2b
+VJP-ARCH-CODEGEN-001	go:autograd.reluVJP	autograd/vjp_elementwise.go	112-148	60c82c25f3b736e6	fca74884aa9eed2b
+VJP-ARCH-CODEGEN-001	go:autograd.sigmoidVJP	autograd/vjp_elementwise.go	195-216	629480a7cf6758d8	fca74884aa9eed2b

@@ -4,6 +4,15 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### research -- preflight Apple ARM64 VJP bounds isolation (R-01M25XNPFEEP5, 2026-09-10)
+
+A compile-time architecture guard retains all six intended M2 VJP hot loops
+while compiler/object audits preserve the original Linux/Windows AMD64 code.
+Independent native M2 correctness checks pass. This
+[preflight evidence](internal/benchcompare/leadership/evidence/m2-vjp-arch-preflight-20260910/README.md)
+records proposal eligibility only: no runtime change, native AMD64 candidate
+qualification, benchmark, or performance gain is shipped.
+
 ### build -- pin the Go 1.27.1 patch toolchain (T-01M234MSKYE6D, 2026-09-09)
 
 The module floor, installation requirement, and all ten CI toolchain

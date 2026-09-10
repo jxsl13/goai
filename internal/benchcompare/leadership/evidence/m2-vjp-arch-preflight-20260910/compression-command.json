@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "/opt/homebrew/bin/zstd",
+    "-T1",
+    "-19",
+    "--long=27",
+    "--check",
+    "-o",
+    "/private/tmp/goai-vjp-arch-publication-VYh1xG/evidence.tar.zst"
+  ],
+  "cwd": "/private/tmp/goai-m2-vjp-arch-preflight-7LCbgX/repo",
+  "zstd_sha256": "aff8169fb421bb925fb16c44a7e0143fa2c7a941dc45cce76b15062a2ce54917"
+}
