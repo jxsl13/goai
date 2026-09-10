@@ -1,13 +1,9 @@
 package autograd
 
 import (
-	"runtime"
-
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
 )
-
-const darwinARM64VJPBounds = runtime.GOOS == "darwin" && runtime.GOARCH == "arm64"
 
 // Elementwise VJPs (§T14). Implemented as direct scalar loops over (x, y, g) —
 // exact, dtype-agnostic, and free of op-composition overhead. x = forward input,
@@ -30,15 +26,8 @@ func unaryVJP(f func(x, y, g float64) float64) VJP {
 			if yc.Dtype() == tensor.F64 && gc.Dtype() == tensor.F64 {
 				xs, ys, gs := xc.Storage().F64(), yc.Storage().F64(), gc.Storage().F64()
 				ds := gin.Storage().F64()
-				if darwinARM64VJPBounds && n >= 0 && n <= len(xs) && n <= len(ys) && n <= len(gs) && n <= len(ds) {
-					xs, ys, gs, ds = xs[:n:n], ys[:n:n], gs[:n:n], ds[:n:n]
-					for i := range ds {
-						ds[i] = f(xs[i], ys[i], gs[i])
-					}
-				} else {
-					for i := 0; i < n; i++ {
-						ds[i] = f(xs[i], ys[i], gs[i])
-					}
+				for i := 0; i < n; i++ {
+					ds[i] = f(xs[i], ys[i], gs[i])
 				}
 				return []*tensor.Tensor{gin}, nil
 			}
@@ -46,15 +35,8 @@ func unaryVJP(f func(x, y, g float64) float64) VJP {
 			if yc.Dtype() == tensor.F32 && gc.Dtype() == tensor.F32 {
 				xs, ys, gs := xc.Storage().F32(), yc.Storage().F32(), gc.Storage().F32()
 				ds := gin.Storage().F32()
-				if darwinARM64VJPBounds && n >= 0 && n <= len(xs) && n <= len(ys) && n <= len(gs) && n <= len(ds) {
-					xs, ys, gs, ds = xs[:n:n], ys[:n:n], gs[:n:n], ds[:n:n]
-					for i := range ds {
-						ds[i] = float32(f(float64(xs[i]), float64(ys[i]), float64(gs[i])))
-					}
-				} else {
-					for i := 0; i < n; i++ {
-						ds[i] = float32(f(float64(xs[i]), float64(ys[i]), float64(gs[i])))
-					}
+				for i := 0; i < n; i++ {
+					ds[i] = float32(f(float64(xs[i]), float64(ys[i]), float64(gs[i])))
 				}
 				return []*tensor.Tensor{gin}, nil
 			}
@@ -137,18 +119,9 @@ func reluVJP(_ *backend.Context, in, out []*tensor.Tensor, attrs backend.Attrs, 
 		if gc.Dtype() == tensor.F64 {
 			xs, gs := xc.Storage().F64(), gc.Storage().F64()
 			ds := gin.Storage().F64()
-			if darwinARM64VJPBounds && n >= 0 && n <= len(xs) && n <= len(gs) && n <= len(ds) {
-				xs, gs, ds = xs[:n:n], gs[:n:n], ds[:n:n]
-				for i := range ds {
-					if xs[i] > 0 {
-						ds[i] = gs[i]
-					}
-				}
-			} else {
-				for i := 0; i < n; i++ {
-					if xs[i] > 0 {
-						ds[i] = gs[i]
-					}
+			for i := 0; i < n; i++ {
+				if xs[i] > 0 {
+					ds[i] = gs[i]
 				}
 			}
 			return []*tensor.Tensor{gin}, nil
@@ -157,18 +130,9 @@ func reluVJP(_ *backend.Context, in, out []*tensor.Tensor, attrs backend.Attrs, 
 		if gc.Dtype() == tensor.F32 {
 			xs, gs := xc.Storage().F32(), gc.Storage().F32()
 			ds := gin.Storage().F32()
-			if darwinARM64VJPBounds && n >= 0 && n <= len(xs) && n <= len(gs) && n <= len(ds) {
-				xs, gs, ds = xs[:n:n], gs[:n:n], ds[:n:n]
-				for i := range ds {
-					if xs[i] > 0 {
-						ds[i] = gs[i]
-					}
-				}
-			} else {
-				for i := 0; i < n; i++ {
-					if xs[i] > 0 {
-						ds[i] = gs[i]
-					}
+			for i := 0; i < n; i++ {
+				if xs[i] > 0 {
+					ds[i] = gs[i]
 				}
 			}
 			return []*tensor.Tensor{gin}, nil
@@ -235,31 +199,16 @@ func sigmoidVJP(_ *backend.Context, in, out []*tensor.Tensor, attrs backend.Attr
 	yc, gc := y.Contiguous(), g.Contiguous()
 	if x.Dtype() == tensor.F64 && yc.Dtype() == tensor.F64 && gc.Dtype() == tensor.F64 {
 		ys, gs, ds := yc.Storage().F64(), gc.Storage().F64(), gin.Storage().F64()
-		if darwinARM64VJPBounds && n >= 0 && n <= len(ys) && n <= len(gs) && n <= len(ds) {
-			ys, gs, ds = ys[:n:n], gs[:n:n], ds[:n:n]
-			for i := range ds {
-				ds[i] = gs[i] * ys[i] * (1 - ys[i])
-			}
-		} else {
-			for i := 0; i < n; i++ {
-				ds[i] = gs[i] * ys[i] * (1 - ys[i])
-			}
+		for i := 0; i < n; i++ {
+			ds[i] = gs[i] * ys[i] * (1 - ys[i])
 		}
 		return []*tensor.Tensor{gin}, nil
 	}
 	if x.Dtype() == tensor.F32 && yc.Dtype() == tensor.F32 && gc.Dtype() == tensor.F32 {
 		ys, gs, ds := yc.Storage().F32(), gc.Storage().F32(), gin.Storage().F32()
-		if darwinARM64VJPBounds && n >= 0 && n <= len(ys) && n <= len(gs) && n <= len(ds) {
-			ys, gs, ds = ys[:n:n], gs[:n:n], ds[:n:n]
-			for i := range ds {
-				yv := float64(ys[i])
-				ds[i] = float32(float64(gs[i]) * yv * (1 - yv))
-			}
-		} else {
-			for i := 0; i < n; i++ {
-				yv := float64(ys[i])
-				ds[i] = float32(float64(gs[i]) * yv * (1 - yv))
-			}
+		for i := 0; i < n; i++ {
+			yv := float64(ys[i])
+			ds[i] = float32(float64(gs[i]) * yv * (1 - yv))
 		}
 		return []*tensor.Tensor{gin}, nil
 	}
