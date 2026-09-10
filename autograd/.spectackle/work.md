@@ -48,6 +48,7 @@ kind: proposal
 state: draft
 created: 2026-09-10
 refs: R-01M25XNPFEEP58GC32DVNHVB9Q
+grilled: 2026-09-10 open=1
 targets: go:autograd.unaryVJP, go:autograd.reluVJP, go:autograd.sigmoidVJP, .github/workflows/ci.yml, internal/benchcompare/leadership/evidence/m2-vjp-arch-qualify-20260910, docs/benchmarking.md, CHANGELOG.md
 
 Qualify the exact architecture-guarded six-loop VJP candidate from consumed research R-01M25XNPFEEP58GC32DVNHVB9Q against clean merged main d6a76444c5db532fe93732feacf8f30e8032671f. This is a new implementation proposal, not a reopening or promotion of either rejected candidate. Aim for measured end-to-end M2 gains in all six existing typed unary/ReLU/sigmoid paths while preserving original non-target behavior.
