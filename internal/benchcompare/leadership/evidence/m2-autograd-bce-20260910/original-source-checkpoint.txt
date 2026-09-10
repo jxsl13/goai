@@ -1,0 +1,61 @@
+Test-first checkpoint (not a passing whole-SIMD correctness gate)
+Date: 2026-09-10
+Baseline main: c6afe9e4ba8b2a46c254953c921cf97ddf4f72c6
+Production source autograd/vjp_elementwise.go SHA256:
+07adbf223e44d862d5f9e3e38a743eff54def329280bb8b76aa0ffe3f9b62945
+New exact test/benchmark source SHA256:
+bd26d0195b02e23aa1406f01f7df25fff5aa65ea81fea0c3bae9f31d3359648c
+Runtime changes: none.
+
+All Go commands use:
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH
+GOCACHE=/private/tmp/gocache-goai
+GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache
+GOTOOLCHAIN=local
+CGO_ENABLED=0 unless explicitly overridden
+GOEXPERIMENT= unless explicitly simd
+
+Root checks (summarized results, not claimed as complete raw transcripts):
+go test ./autograd ./internal/mdlint ./internal/apicheck -short -count=1
+exit 0; autograd 2.057s, mdlint 0.956s, apicheck 1.494s.
+CGO_ENABLED=1 go test ./autograd -short -count=1
+exit 0; autograd 2.022s.
+GOEXPERIMENT=simd go test ./autograd -run '^TestUnaryVJPBoundsExact$' -count=1
+exit 0; autograd 0.558s.
+go vet ./...
+exit 0, no diagnostics.
+git ls-files '*.go' | xargs gofmt -l
+gofmt -l autograd/vjp_bounds_internal_test.go
+exit 0, no listed paths.
+
+Full SIMD command in primary with new oracle:
+GOEXPERIMENT=simd go test ./autograd -short -count=1
+exit 1; failures preserved in original-full-simd-failure.txt.
+
+The same full SIMD command in pristine /private/tmp/goai-bce-clean-baseline-NodpS5/repo
+at c6afe9e4ba8b2a46c254953c921cf97ddf4f72c6 without the new test file:
+exit 1, same failures and bit values:
+--- FAIL: TestSigmoidFocalCoreExactCompositeVJPParity (0.01s)
+  f64 vjp_sigmoid_focal_test.go:87: got3edc4cec2126b3dc want3edc4cec2126b3db
+  f64#01 vjp_sigmoid_focal_test.go:80: got3fbe9ab13fe1dcd4 want3fbe9ab13fe1dcd6
+--- FAIL: TestWKVOpMatchesHostWKV
+  wkv_test.go:49: diverges at [1 0]
+FAIL autograd 1.776s.
+These pre-existing failures are unresolved, not skipped or counted as success.
+Source/contract research R-01M249HFAVFQR tracks diagnosis separately.
+
+Original production plus identical new harness:
+go test -c ./autograd -o /private/tmp/goai-bce-clean-baseline-NodpS5/old-default-autograd.test
+exit 0.
+Binary SHA256 4ecccb27a2ae0d506e45146c836b40fa10b3f8811148954fbbf6106cab5cf12a.
+No timing measurement yet.
+
+Runner checks:
+ruby -c .../run.rb: exit 0, Syntax OK.
+First new complete-child-environment test: exit 1, 16 runs, 506 assertions,
+0 failures, 1 error; macOS Ruby injected __CF_USER_TEXT_ENCODING after launch.
+Corrected by explicitly pinning and recording that value (UID + neutral encoding),
+not by allowing unrecorded arbitrary environment.
+ruby .../run_test.rb --seed 1: exit 0,
+16 runs, 578 assertions, 0 failures, 0 errors, 0 skips.
+Independent re-review pending; initial FAIL retained.

@@ -1,0 +1,6 @@
+command: env PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 gofmt -w autograd/vjp_bounds_internal_test.go autograd/vjp_elementwise.go && env PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go test ./autograd -run '^TestUnaryVJPBoundsExact$' -count=1 && shasum -a 256 autograd/vjp_elementwise.go autograd/vjp_bounds_internal_test.go && git status --short
+exit: 0
+ok  	github.com/jxsl13/goai/autograd	0.465s
+07adbf223e44d862d5f9e3e38a743eff54def329280bb8b76aa0ffe3f9b62945  autograd/vjp_elementwise.go
+bd26d0195b02e23aa1406f01f7df25fff5aa65ea81fea0c3bae9f31d3359648c  autograd/vjp_bounds_internal_test.go
+?? autograd/vjp_bounds_internal_test.go

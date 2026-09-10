@@ -1,0 +1,83 @@
+# Independent correctness/rejection verification — T-01M246GYK2F9N
+
+## Verdict
+
+**REJECT candidate for correctness.** The frozen exact oracle passes on OLD and fails on NEW under the required race build. The NEW F32 `tanhVJP` proof-window loop changes a NaN result's raw bits. The task requires zero raw-bit mismatch, including NaN sign/payload, so this is conclusive; no benchmark, profile, compiler-shape qualification, or broader test campaign was run.
+
+The full SIMD baseline's two existing F64 focal/WKV failures remain separately tracked as `R-01M249HFAVFQR`; they were neither tested nor changed in this narrow slice.
+
+## Identity and scope
+
+- OLD tree: `/private/tmp/goai-bce-rejection-verify-4pRcQ6/old`
+- NEW tree: `/private/tmp/goai-bce-rejection-verify-4pRcQ6/new`
+- Both `git rev-parse HEAD`: `b5cbe634e8f7f38e0384d63d9709173d1b7c1f5d`
+- OLD `autograd/vjp_elementwise.go` SHA-256: `07adbf223e44d862d5f9e3e38a743eff54def329280bb8b76aa0ffe3f9b62945`
+- NEW `autograd/vjp_elementwise.go` SHA-256: `0084a57d6a6fb3dc41049c860b481035f090e492a0a79789f2430817a7d63cab`
+- OLD and NEW `autograd/vjp_bounds_internal_test.go` SHA-256: `bd26d0195b02e23aa1406f01f7df25fff5aa65ea81fea0c3bae9f31d3359648c`
+- NEW `git status --short` reports only `M autograd/vjp_elementwise.go`; OLD is clean.
+
+I read the task brief with:
+
+```text
+spectackle call -root /private/tmp/goai-bce-rejection-verify-4pRcQ6/new get '{"id":"T-01M246GYK2F9N","depth":0,"budget":12000}'
+```
+
+Exit: `0`.
+
+I read both scoped files completely and compared OLD/NEW runtime source. The only source delta is in `unaryVJP`, `reluVJP`, `tanhVJP`, and `sigmoidVJP`: each typed loop gets a successful-length guard, full slice windows (`[:n:n]`), and a `range ds` loop, while retaining the original indexed loop as the malformed-length fallback. No other production source differs.
+
+## Required discriminator
+
+An initial OLD invocation treated the terminal period as literal (`GOEXPERIMENT=.`); it exited `2` before test execution with `go: unknown GOEXPERIMENT .`. That preliminary environment probe was overwritten by the retained OLD result artifact. The actual discriminator runs interpreted the period as sentence punctuation and used an explicit empty `GOEXPERIMENT=`. The command, run separately from each tree, was:
+
+```text
+env PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=1 GOEXPERIMENT= go test -race ./autograd -run '^TestUnaryVJPBoundsExact$' -count=1
+```
+
+- OLD exit: `0`; stdout/stderr: `ok github.com/jxsl13/goai/autograd 3.299s`
+- NEW exit: `1`; full run reports 17 failing subtests, all in F32 Tanh: sizes `n7`, `n8`, `n9`, `n31`, `n32`, `n33`, `n2048`, `large65537`, plus the nine nonzero layout cases.
+
+Raw artifacts:
+
+- `/private/tmp/goai-bce-rejection-verify-4pRcQ6/old-race.stdout-stderr.txt` — 44 bytes, SHA-256 `1f5d623d2ad0d950cc7e2cac7df7a8c51993a699c9678d953101fabb1032d851`
+- `/private/tmp/goai-bce-rejection-verify-4pRcQ6/old-race.exit.txt` — `0`, SHA-256 `9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa`
+- `/private/tmp/goai-bce-rejection-verify-4pRcQ6/new-race.stdout-stderr.txt` — 1,633,246 bytes, SHA-256 `716fa0337a558a8369a2cc9912431195ab5a6d150ee429ed8e9c73780e943a94`
+- `/private/tmp/goai-bce-rejection-verify-4pRcQ6/new-race.exit.txt` — `1`, SHA-256 `4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865`
+
+## Smallest focused reproduction
+
+Run once in NEW:
+
+```text
+env PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=1 GOEXPERIMENT= go test -race ./autograd -run '^TestUnaryVJPBoundsExact/sizes/tanh/f32/n7$' -count=1
+```
+
+Exit: `1`.
+
+Fixture: dense F32 tensors, shape `{7}`, operation `tanh`; `x`, `y`, and `g` are built by `boundsInputs(F32,F32,F32,{7},"dense","dense","dense")`, hence deterministic seeds 0, 3, and 5. At output index 3, whose constructed special operands include `y` from F32 bits `0x7fc01234` and `g` from the signaling-NaN source bits `0x7fa00001`, the results are:
+
+- NEW production: `0x7fe00001`
+- Historical oracle: `0xffc01234`
+
+All other reported n7 output bits match. Shape, dtype, panic/error outcome, and visits also match; the sole discriminating field is that raw output bit.
+
+Focused raw artifacts:
+
+- `/private/tmp/goai-bce-rejection-verify-4pRcQ6/new-race-focused-tanh-f32-n7.stdout-stderr.txt` — 845 bytes, SHA-256 `222b04ba2a43288601e15c44294831ff3595101336eb36a89ec297e17e600fde`
+- `/private/tmp/goai-bce-rejection-verify-4pRcQ6/new-race-focused-tanh-f32-n7.exit.txt` — `1`, SHA-256 `4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865`
+
+## Source-level finding
+
+The mismatch is reached only in NEW's successful proof-window path at `autograd/vjp_elementwise.go:208-213`:
+
+```go
+ys, gs, ds = ys[:n:n], gs[:n:n], ds[:n:n]
+for i := range ds {
+	yv := float64(ys[i])
+	ds[i] = float32(float64(gs[i]) * (1 - yv*yv))
+}
+```
+
+The arithmetic text matches the historical indexed loop at lines 215-218, but the changed proof/loop shape changes which NaN operand/sign/payload survives the generated floating-point operations when both sides contribute NaNs. This is observable under the task's frozen raw-bit contract. OLD compiling the identical oracle/test file and passing establishes that the test itself is not the discriminator; the four-function runtime delta is.
+
+No source or test file was edited during verification. This report is the only file created.

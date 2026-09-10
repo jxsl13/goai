@@ -14,6 +14,19 @@ import (
 
 func requireSigmoidFocalParity(t *testing.T, got, want *tensor.Tensor) {
 	t.Helper()
+	requireScalarParityLayout(t, got, want)
+	// The active ARM64 SIMD composite uses approximate Softplus leaves. This
+	// does not relax the separate fused CPU/reference bit-exact contract.
+	if got.Dtype() == tensor.F64 && arm64SIMDScalarPolicy {
+		for i, v := range got.Storage().F64() {
+			w := want.Storage().F64()[i]
+			if !f64ScalarPolicyEqual(v, w, 1, 1e-13) {
+				t.Fatalf("element %d: got %.17g (%016x) want %.17g (%016x), scaled error %g",
+					i, v, math.Float64bits(v), w, math.Float64bits(w), math.Abs(v-w)/math.Max(1, math.Abs(w)))
+			}
+		}
+		return
+	}
 	if got.Dtype() != tensor.F32 || !sigmoidFocalF32Tolerant {
 		requireGradBits(t, got, want)
 		return
@@ -55,7 +68,10 @@ func focalInputs(dt tensor.Dtype, n int) (*tensor.Tensor, *tensor.Tensor) {
 }
 
 func TestSigmoidFocalCoreExactCompositeVJPParity(t *testing.T) {
-	cpuBE, _ := backend.Get(backend.CPU)
+	cpuBE, ok := backend.Get(backend.CPU)
+	if !ok {
+		t.Fatal("cpu backend not registered")
+	}
 	controlBE := focalCompositeBackend{cpuBE}
 	for _, dt := range []tensor.Dtype{tensor.F32, tensor.F64} {
 		for _, attrs := range []backend.SigmoidFocalAttrs{{Gamma: 0, Alpha: -1}, {Gamma: 2, Alpha: 0.25}} {

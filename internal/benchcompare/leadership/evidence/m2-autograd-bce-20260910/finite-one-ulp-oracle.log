@@ -1,0 +1,10 @@
+command: env PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 go test ./autograd -run '^TestUnaryVJPBoundsExact/finite-normal/tanh/f32$' -count=1
+exit: 1
+--- FAIL: TestUnaryVJPBoundsExact (0.00s)
+    --- FAIL: TestUnaryVJPBoundsExact/finite-normal/tanh/f32 (0.00s)
+        vjp_bounds_internal_test.go:462: production differs from historical oracle
+            production: autograd.boundsOutcome{outputs:[]autograd.boundsTensorImage{autograd.boundsTensorImage{dtype:0x1, shape:tensor.Shape{3}, bits:[]uint64{0x3f400001, 0x3ff00001, 0xbfa80001}}}, err:"", panic:"", visits:[]autograd.boundsCallbackVisit(nil)}
+            historical: autograd.boundsOutcome{outputs:[]autograd.boundsTensorImage{autograd.boundsTensorImage{dtype:0x1, shape:tensor.Shape{3}, bits:[]uint64{0x3f400000, 0x3ff00000, 0xbfa80000}}}, err:"", panic:"", visits:[]autograd.boundsCallbackVisit(nil)}
+FAIL
+FAIL	github.com/jxsl13/goai/autograd	0.342s
+FAIL

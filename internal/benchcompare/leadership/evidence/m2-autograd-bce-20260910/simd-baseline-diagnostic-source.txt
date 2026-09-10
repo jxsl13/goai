@@ -1,0 +1,180 @@
+package autograd_test
+
+// Diagnostic-only coverage for R-01M249HFAVFQR. This is not a corrected
+// production test and does not authorize either tolerance for permanent use.
+
+import (
+	"math"
+	"testing"
+
+	"github.com/jxsl13/goai/autograd"
+	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/nn"
+	"github.com/jxsl13/goai/tensor"
+)
+
+const (
+	tmpFocalScaledBound = 1e-13
+	tmpWKVScaledBound   = 1e-10
+)
+
+type tmpParityStats struct {
+	maxAbs             float64
+	maxAbsIndex        int
+	maxScaled          float64
+	maxScaledIndex     int
+	mismatchedBits     int
+	nanDiscrepancies   int
+	infDiscrepancies   int
+	zeroSignMismatch   int
+	nonFinitePairs     int
+	overDeclaredBound  int
+}
+
+func tmpRequireComparableF64(t *testing.T, label string, got, want *tensor.Tensor) {
+	t.Helper()
+	if got == nil || want == nil {
+		t.Fatalf("%s: nil tensor: got=%v want=%v", label, got == nil, want == nil)
+	}
+	if got.Dtype() != tensor.F64 || want.Dtype() != tensor.F64 {
+		t.Fatalf("%s: dtype mismatch/non-F64: got=%v want=%v", label, got.Dtype(), want.Dtype())
+	}
+	if !got.Shape().Equal(want.Shape()) {
+		t.Fatalf("%s: shape mismatch: got=%v want=%v", label, got.Shape(), want.Shape())
+	}
+	if got.Numel() != want.Numel() {
+		t.Fatalf("%s: element-count mismatch: got=%d want=%d", label, got.Numel(), want.Numel())
+	}
+}
+
+func tmpMeasureParityF64(t *testing.T, label string, got, want *tensor.Tensor, denomFloor, bound float64) tmpParityStats {
+	t.Helper()
+	tmpRequireComparableF64(t, label, got, want)
+	gs, ws := got.Storage().F64(), want.Storage().F64()
+	stats := tmpParityStats{maxAbsIndex: -1, maxScaledIndex: -1}
+	for i, g := range gs {
+		w := ws[i]
+		gb, wb := math.Float64bits(g), math.Float64bits(w)
+		if gb != wb {
+			stats.mismatchedBits++
+			if math.IsNaN(g) || math.IsNaN(w) {
+				stats.nanDiscrepancies++
+			}
+			if math.IsInf(g, 0) || math.IsInf(w, 0) {
+				stats.infDiscrepancies++
+			}
+			if g == 0 && w == 0 {
+				stats.zeroSignMismatch++
+			}
+		}
+		if math.IsNaN(g) || math.IsNaN(w) || math.IsInf(g, 0) || math.IsInf(w, 0) {
+			stats.nonFinitePairs++
+			continue
+		}
+		absErr := math.Abs(g - w)
+		if stats.maxAbsIndex < 0 || absErr > stats.maxAbs {
+			stats.maxAbs, stats.maxAbsIndex = absErr, i
+		}
+		scaled := absErr / math.Max(denomFloor, math.Abs(w))
+		if stats.maxScaledIndex < 0 || scaled > stats.maxScaled {
+			stats.maxScaled, stats.maxScaledIndex = scaled, i
+		}
+		if scaled > bound {
+			stats.overDeclaredBound++
+		}
+	}
+	return stats
+}
+
+func tmpLogParityStats(t *testing.T, label string, stats tmpParityStats, bound float64) {
+	t.Helper()
+	t.Logf("%s: maxAbs=%.17g at=%d maxScaled=%.17g at=%d mismatchedBits=%d nanDiscrepancies=%d infDiscrepancies=%d zeroSignDiscrepancies=%d nonFinitePairs=%d bound=%.1e exceedances=%d",
+		label, stats.maxAbs, stats.maxAbsIndex, stats.maxScaled, stats.maxScaledIndex,
+		stats.mismatchedBits, stats.nanDiscrepancies, stats.infDiscrepancies,
+		stats.zeroSignMismatch, stats.nonFinitePairs, bound, stats.overDeclaredBound)
+}
+
+func TestTmpSIMDFocalParityDiagnostic(t *testing.T) {
+	cpuBE, ok := backend.Get(backend.CPU)
+	if !ok {
+		t.Fatal("cpu backend not registered")
+	}
+	controlBE := focalCompositeBackend{cpuBE}
+	tests := []struct {
+		name  string
+		attrs backend.SigmoidFocalAttrs
+	}{
+		{name: "gamma0_alphaDisabled", attrs: backend.SigmoidFocalAttrs{Gamma: 0, Alpha: -1}},
+		{name: "gamma2_alpha025", attrs: backend.SigmoidFocalAttrs{Gamma: 2, Alpha: 0.25}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			logits, targets := focalInputs(tensor.F64, 65537)
+
+			fusedTape := autograd.NewTapeOn(cpuBE)
+			fusedCore, err := backend.Execute(fusedTape.Context(), backend.OpSigmoidFocalCore,
+				[]*tensor.Tensor{logits, targets}, tc.attrs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fusedLoss, err := backend.Execute(fusedTape.Context(), backend.OpMean, fusedCore, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			controlTape := autograd.NewTapeOn(controlBE)
+			controlLoss, err := nn.SigmoidFocalLoss(controlTape.Context(), logits, targets,
+				tc.attrs.Gamma, tc.attrs.Alpha)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			forward := tmpMeasureParityF64(t, "forward", fusedLoss[0], controlLoss, 1, tmpFocalScaledBound)
+			tmpLogParityStats(t, "forward", forward, tmpFocalScaledBound)
+
+			if err := fusedTape.Backward(fusedLoss[0]); err != nil {
+				t.Fatal(err)
+			}
+			if err := controlTape.Backward(controlLoss); err != nil {
+				t.Fatal(err)
+			}
+			fusedGrad, controlGrad := fusedTape.Grad(logits), controlTape.Grad(logits)
+			vjp := tmpMeasureParityF64(t, "vjp", fusedGrad, controlGrad, 1, tmpFocalScaledBound)
+			tmpLogParityStats(t, "vjp", vjp, tmpFocalScaledBound)
+
+			if fusedTape.Grad(targets) != nil || controlTape.Grad(targets) != nil {
+				t.Fatal("targets must remain detached")
+			}
+		})
+	}
+}
+
+func TestTmpSIMDWKVParityDiagnostic(t *testing.T) {
+	ins := wkvInputs()
+	out, err := backend.Execute(backend.NewContext(), backend.OpWKV, ins, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := nn.WKV(ins[0], ins[1], ins[2], ins[3])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("WKV output count: got=%d want=1", len(out))
+	}
+	tmpRequireComparableF64(t, "wkv", out[0], want)
+	if out[0].Numel() != 15 {
+		t.Fatalf("WKV fixture element count: got=%d want=15", out[0].Numel())
+	}
+	gs, ws := out[0].Storage().F64(), want.Storage().F64()
+	for i, g := range gs {
+		w := ws[i]
+		idx := tensor.Unravel(i, want.Shape())
+		absErr := math.Abs(g - w)
+		scaled := absErr / math.Max(1e-6, math.Abs(w))
+		t.Logf("wkv[%v]: got=%.17g gotBits=%016x want=%.17g wantBits=%016x abs=%.17g scaled=%.17g",
+			idx, g, math.Float64bits(g), w, math.Float64bits(w), absErr, scaled)
+	}
+	stats := tmpMeasureParityF64(t, "wkv", out[0], want, 1e-6, tmpWKVScaledBound)
+	tmpLogParityStats(t, "wkv", stats, tmpWKVScaledBound)
+}

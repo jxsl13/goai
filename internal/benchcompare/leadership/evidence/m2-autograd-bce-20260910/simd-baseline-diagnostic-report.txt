@@ -1,0 +1,115 @@
+# R-01M249HFAVFQR — pre-existing ARM64 SIMD autograd parity failures
+
+## Conclusion
+
+Neither observed failure is attributable to the new BCE oracle/runtime experiment. Both arise from pre-existing `arm64 && goexperiment.simd` route changes, and the two cases have different binding contracts.
+
+- **WKV:** high-confidence stale test contract. `TestWKVOpMatchesHostWKV` still requires scalar-host bit identity, but the selected ARM64 SIMD WKV leaf is explicitly approximate versus scalar under `ARM64-F64-WKV-NUMERIC-001` (relative error `1e-10`). The failure at `[1 0]` is exactly where the two-channel NEON recurrence begins using its approximate degree-13 exponential after the exact first-token/deep-underflow case. The measured fixture has three one-ULP mismatches, maximum scaled error `1.7347435098673699e-16`, and zero `1e-10` exceedances. This supports a narrow ARM64+SIMD test-contract correction; it is not evidence of a runtime defect.
+- **Sigmoid focal:** high-confidence source cause and now high-confidence stale end-to-end comparator. The fused F64 focal core remains scalar `math.Exp`/`math.Log1p` exact and its focused exact CPU-vs-reference test passes. Its supposed “composite control,” however, inherits the active CPU F64 Softplus forward and backward kernels. Under ARM64+SIMD those are intentionally approximate NEON leaves governed by the `1e-13` F64-exp numeric policy. The diagnostic measured both attrs through backward: every forward/VJP value was inside the predeclared `1e-13` scaled bound with no NaN, infinity, or zero-sign discrepancy. A narrow ARM64+SIMD end-to-end comparator is therefore evidence-backed, while the exact fused-core/reference oracle must remain unchanged. The focal rule itself does not explicitly state whether “preserve” means bit identity after an underlying composite leaf adopts a numeric policy, so the contract should be clarified alongside any test correction.
+
+A narrowly authorized diagnostic and the predeclared focused leaf/reference checks were run after the root released the heavy-work window. All three commands exited 0; no benchmark/profile or broader package test ran.
+
+The green test-first CI run does not refute these local failures. Root reports PR-head run `34419154494` succeeded all 16 jobs / 175 executed steps on Go 1.27.1, but its macOS SIMD lane ran `GOEXPERIMENT=simd go build -tags=simd ./...` and then `GOEXPERIMENT=simd go test -short -count=1 ./internal/simd` only. It did not execute `./autograd` under SIMD. No CI change is proposed here.
+
+## Binding contracts and existing policy
+
+### WKV
+
+- Spectackle rule `ARM64-F64-WKV-NUMERIC-001`: for fresh or continuing ARM64 SIMD WKV scans, scalar output and AA/BB/PP state are bounded by `1e-10` relative error.
+- Spectackle rule `ARM64-F64-WKV-STATE-001`: whole versus unevenly chunked execution of the **same SIMD state path** remains bit-identical for output and final state.
+- Spectackle rule `ARM64-F64-WKV-RANGE-001`: two-aligned SIMD range partitions versus one whole SIMD scan remain bit-identical.
+- The source-level scalar parity gate uses `abs(got-want)/max(1e-6, abs(want)) <= 1e-10` in `internal/simd/wkv_test.go:9-45`. The same effective bound appears in the ARM64 unsafe-pair test at `internal/simd/wkv_arm64_test.go:68-93`, while rejected unsafe pairs are required to be scalar-bit-exact.
+
+These are intentionally separate invariants: approximate SIMD-versus-scalar agreement is bounded; same-algorithm chunk/range consistency and scalar fallback are exact.
+
+### Sigmoid focal and its F64 activation leaves
+
+- Spectackle rule `SIGMOID-FOCAL-FUSION-001`: same-dtype contiguous inputs dispatch one `OpSigmoidFocalCore` followed by `OpMean` and preserve the composite forward/VJP contract. The rule contains no explicit tolerance or bit-identity qualifier.
+- Spectackle rule `ARM64-F64-EXP-NUMERIC-001`: declared ARM64 SIMD F64 operations match scalar within `1e-13` relative error while preserving NaN, infinity, signed zero, and exact deep-underflow behavior.
+- The ARM64 Softplus forward test uses absolute error `<=1e-13` (`backend/cpu/vsoftplus_f64_arm64_test.go:25-53`) and its CPU-vs-reference test repeats that bound (`:107-138`). Softplus backward uses `abs(got-want)/max(1,abs(want)) <=1e-13` (`backend/cpu/vsoftplus_grad_f64_arm64_test.go:26-47,81-109`). Vector lanes versus their operation-identical polynomial tail are separately bit-exact (`vsoftplus_f64_arm64_test.go:56-72`; `vsoftplus_grad_f64_arm64_test.go:50-62`).
+- The focal test policy has only an F32 SIMD exception: `autograd/vjp_sigmoid_focal_policy_default_test.go:1-5` makes F32 exact by default and `autograd/vjp_sigmoid_focal_policy_simd_test.go:1-5` permits F32 tolerance under SIMD. `requireSigmoidFocalParity` still sends every F64 comparison to `requireGradBits` (`autograd/vjp_sigmoid_focal_test.go:15-27`).
+- The fused kernel’s direct CPU/reference test is still F64 bit-exact: the F64 arm of `requireFocalBits` always compares `math.Float64bits` (`backend/cpu/focal_test.go:23-64`), and both forward and backward are checked at `:67-116`. This is the right exact oracle for the fused focal core itself.
+
+## Exact source routes
+
+### Focal `f64` (first attrs: gamma=0) failure at VJP line 87
+
+`TestSigmoidFocalCoreExactCompositeVJPParity` iterates attrs in the order gamma=0 then gamma=2 (`autograd/vjp_sigmoid_focal_test.go:57-94`), so the unsuffixed `f64` case is gamma=0.
+
+Fused side:
+
+1. The real CPU backend supplies `OpSigmoidFocalCore`; its VJP dispatches `OpSigmoidFocalCoreBackward` (`autograd/vjp_sigmoid_focal.go:8-18`).
+2. The F64 gamma=0 backward evaluates `gTerm * stableSigmoid64(z)` (`backend/cpu/focal.go:252-262`). `stableSigmoid64` is the branch-stable scalar `math.Exp` implementation (`:72-78`).
+
+Control side:
+
+1. `focalCompositeBackend` hides only the two fused focal ops and inherits all other CPU kernels (`autograd/vjp_sigmoid_focal_test.go:29-38`). Therefore `nn.SigmoidFocalLoss` falls through to its compatibility composite (`nn/focal.go:172-190`).
+2. Gamma=0 still executes `OpSoftplus` (`nn/focal.go:202-210`). On backward, the Softplus VJP dispatches `OpSoftplusBackward` on the tape's active backend (`autograd/vjp_conv1d.go:8-20`).
+3. CPU F64 Softplus backward always calls `vsoftplusGradF64` (`backend/cpu/elementwise.go:754-765`). With `arm64 && goexperiment.simd`, `backend/cpu/vexp_arm64.go` is selected; it enables the shared approximate F64 sigmoid leaf (`:1,10-27`) and implements the gradient as `vsigmoidF64` followed by multiplication (`:340-369,466-476`).
+
+Therefore the reported one-ULP VJP difference is between scalar-exact focal sigmoid and the active approximate NEON sigmoid used by the composite oracle. It is not evidence that the fused focal backward is wrong.
+
+### Focal `f64#01` (second attrs: gamma=2) failure at forward line 80
+
+Fused side:
+
+- F64 gamma=2 computes a shared exact `math.Log1p(math.Exp(-abs(z)))` Softplus pair and an exact `math.Exp` modulator (`backend/cpu/focal.go:108-117,182-200`).
+
+Control side:
+
+- The composite executes two `OpSoftplus` calls around `z`/`-z`, followed by `OpExp`, multiply, weighting, and mean (`nn/focal.go:202-236`).
+- On ARM64+SIMD, the F64 Softplus kernel is enabled by `vsoftplusF64Fast=true` (`backend/cpu/vexp_arm64.go:25-27`) and routed by `backend/cpu/elementwise.go:624-645` to the two-lane NEON/polynomial Softplus (`backend/cpu/vexp_arm64.go:371-423`). F64 `OpExp` itself remains scalar `math.Exp` exact (`backend/cpu/elementwise.go:403-414`), so the route split is specifically the two Softplus leaves, after which ordinary rounding barriers propagate into the mean.
+
+The reported final scalar differs by two ULP. The non-fail-fast diagnostic subsequently measured gamma=2 VJP as well: 18,666 of 65,537 values differed bitwise, but maximum scaled error was only `5.082197683525802e-21`, with zero `1e-13` exceedances and no NaN/Inf/zero-sign discrepancy. This broad pattern of tiny differences is the expected approximate-leaf propagation, not a localized fused-runtime defect.
+
+### WKV failure at `[1 0]`
+
+1. CPU registers `OpWKV` for F64 (`backend/cpu/wkv.go:159-162`). Contiguous all-F64 input enters `wkvParallelScanF64` (`:38-45`); this small 5x3 fixture stays in one `simd.WKVScanRangeF64` call via the small-work gate (`:79-94`).
+2. The portable implementation is excluded by `//go:build !(amd64 && goexperiment.simd) && !(arm64 && goexperiment.simd)` (`internal/simd/simd.go:1-10`). ARM64+SIMD selects `internal/simd/wkv_arm64.go` (`:1`), which pairs channels 0 and 1 and leaves channel 2 scalar (`:62-110`).
+3. `nn.WKV` remains a scalar per-channel `math.Exp` recurrence (`nn/rwkv.go:41-87`). The autograd test compares CPU output to that scalar utility using direct `!=` (`autograd/wkv_test.go:34-51`).
+4. The NEON leaf uses a degree-13 exp approximation and fused vector arithmetic (`internal/simd/exp_f64_arm64.s:429-588`), whereas the scalar recurrence calls `math.Exp` (`internal/simd/wkv_scalar.go:27-70`). Initial PP is `-1e38`; deep-underflow is masked to exact zero, which makes the first output exactly `v` (`internal/simd/wkv_arm64_test.go:10-25`). The diagnostic found one-ULP differences only at `[1,0]`, `[1,1]`, and `[2,0]`; all first-token outputs and the scalar-tail channel remained exact. Maximum scaled error was `1.7347435098673699e-16`, more than five orders of magnitude inside `1e-10`.
+
+The comments claiming portable/scalar or host bit identity in `backend/cpu/wkv.go:15-23`, `nn/rwkv.go:41-45`, and `autograd/wkv_test.go:34-35` are stale or insufficiently qualified for ARM64+SIMD. The benchmark comment already states the intended `1e-10` tolerance (`backend/cpu/wkv_bench_test.go:11-16`).
+
+## Measured observations
+
+All bounds below were fixed in the temporary source before execution.
+
+| Case | Max absolute error | Max scaled error | Bit mismatches | Contract exceedances | NaN / Inf / zero-sign discrepancies |
+|---|---:|---:|---:|---:|---:|
+| focal gamma=0 forward | 0 | 0 | 0 / 1 | 0 at `1e-13` | 0 / 0 / 0 |
+| focal gamma=0 VJP | `3.3881317890172014e-21` | `3.3881317890172014e-21` | 3,021 / 65,537 | 0 at `1e-13` | 0 / 0 / 0 |
+| focal gamma=2 forward | `2.7755575615628914e-17` | `2.7755575615628914e-17` | 1 / 1 | 0 at `1e-13` | 0 / 0 / 0 |
+| focal gamma=2 VJP | `5.082197683525802e-21` | `5.082197683525802e-21` | 18,666 / 65,537 | 0 at `1e-13` | 0 / 0 / 0 |
+| WKV 5x3 | `1.1102230246251565e-16` | `1.7347435098673699e-16` | 3 / 15 | 0 at `1e-10` | 0 / 0 / 0 |
+
+The existing focused checks also passed:
+
+- ARM64 F64 Softplus maximum absolute error: `7.105e-15` over 262,145 values.
+- ARM64 F64 Softplus gradient maximum relative error: `3.370e-16` over 262,145 values.
+- Exact `TestSigmoidFocalCPUReferenceParity`: all F32/F64 forward/backward cases passed.
+- WKV scalar accuracy cells: maximum reported relative errors `1.386e-12`, `4.501e-12`, `2.950e-14`, and `1.526e-13`; all passed the existing `1e-10` gate.
+
+## Smallest safe corrective direction
+
+No runtime change is supported by the current evidence.
+
+1. **WKV test:** retain exact comparison on all existing exact routes; add a comparator selected only by `arm64 && goexperiment.simd` that applies the binding WKV formula `abs(got-want) <= 1e-10 * max(1e-6, abs(want))`, with exact handling for equal bits/NaNs/infinities as appropriate. Keep the test on the actual CPU route and scalar host utility. Do not skip SIMD and do not redirect the test to reference-only. Update the test comment to distinguish SIMD-versus-scalar numeric parity from same-SIMD-route bit identity.
+2. **Focal end-to-end test:** preserve `TestSigmoidFocalCPUReferenceParity` F64 bit identity. For this composite-route test only, add an `arm64 && goexperiment.simd` F64 comparator using `abs(got-want) <= 1e-13 * max(1,abs(want))`, matching the binding Softplus-backward policy and safely covering the forward absolute bound. Keep default/non-ARM64 behavior exact and keep NaN/Inf/signed-zero edge contracts exact. This is justified as composition of an active approximate leaf, not as relaxation of the fused focal core.
+3. Clarify `SIGMOID-FOCAL-FUSION-001` or the test comment that “preserve composite” means preserve the active backend composite within each participating leaf's documented numeric policy. If maintainers instead intend bit identity regardless of active leaf policy, that is a product-contract decision requiring a focal-specific scalar-control path; the current source does not implement one. Forcing the control to reference-only would lose the actual CPU composite coverage and is not recommended.
+4. Keep the new BCE oracle strict and independent. It must compare the new BCE kernel against historical scalar helpers/rounding barriers, not borrow either WKV's `1e-10` policy or focal/Softplus's `1e-13` policy.
+
+## Diagnostic artifacts and cleanup
+
+- Full combined stdout/stderr, exact commands, and exit codes: `/private/tmp/goai-simd-baseline-research-9tjY31/RAW_RUNS.txt`.
+- Before/after source SHA-256 fingerprints: `/private/tmp/goai-simd-baseline-research-9tjY31/SOURCE_SHA256.txt`.
+- Exact archived temporary source: `/private/tmp/goai-simd-baseline-research-9tjY31/z_tmp_simd_parity_diagnostic_test.go.archived`, SHA-256 `cfd2b2755e30e123c7a5d953670975c6b2e81fbb226e33f501ff3655b111f4fe`.
+
+The in-repository `autograd/z_tmp_simd_parity_diagnostic_test.go` was removed via `apply_patch` after archiving. Before/after hashes of all inspected original source files are identical. No permanent repository file was changed.
+
+## Risks and unknowns
+
+- `SIGMOID-FOCAL-FUSION-001` lacks explicit tolerance wording. Source history and the binding F64 activation policy support a narrow test-contract correction, but a spec clarification is advisable.
+- The diagnostic covers the exact failing fixtures, not an expanded focal input domain. The existing large leaf-domain checks passed, but any permanent focal comparator should remain scoped to the active ARM64 F64 leaf policy rather than being generalized.
+- The focal subtest names are duplicated dtype names with Go-added `#01`; explicit attrs names (`gamma0`, `gamma2`) would make future diagnosis less ambiguous without changing coverage.
+- Do not generalize either tolerance to other architectures/dtypes. AMD64 SIMD policy was outside this research scope.

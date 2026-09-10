@@ -1,0 +1,139 @@
+# Independent benchmark-runner verification
+
+Verdict: **FAIL** for the benchmark-runner slice of Spectackle
+`T-01M246GYK2F9N` / proposal `P-01M246EFHMFR3`.
+
+This is not a verdict on the runtime change, correctness work, or performance.
+No Go build, test, benchmark, or profile command was run. No production or Git
+state was changed. Supplemental tests use only synthetic Ruby executables in
+temporary directories.
+
+## Snapshot checked
+
+- Worktree commit supplied by the parent: `a57c2d704ce68a8c8a859c715c4441609d34e876`.
+- `run.rb`: `95732f9c1c3d69ee0d76e95525ad11d9f0cfbaffc5b856cfd6e9a3ed80970936`
+  (matches the supplied frozen hash).
+- `run_test.rb`: `071e88ce9a1c9bc0f3d9a61c0a0c15ce84613909e708b5c8e85b29bf9b5da89d`
+  (matches the supplied frozen hash).
+- Frozen `README.md`: `d0af340927ff43d446c6da1b44800338f492c35c7886921f11a0e82b568fb562`.
+
+All three files were read in full.
+
+## Concrete defects
+
+### 1. Binary mutation during the last invocation is accepted
+
+`run.rb:127` hashes a binary only immediately before an invocation. It never
+checks the hash after `Open3.capture3` and never performs a final sweep before
+marking the manifest complete at `run.rb:152-155`.
+
+The synthetic candidate binary changed its own file during its seventh and
+last pilot invocation, emitted a fully valid benchmark fixture, and exited
+successfully. The runner accepted the campaign and wrote `status: complete`.
+An earlier self-mutation was correctly detected before that binary's next
+invocation, which isolates the defect to the missing post/final check rather
+than the fixture.
+
+This violates binary-change detection and permits a completed campaign whose
+measured executable does not match the hash in the manifest. Re-hash the
+binary immediately after every subprocess and reject before parsing/retaining
+the result; a final sweep is also a useful defense.
+
+### 2. Contradictory extra host/package headers are accepted
+
+`run.rb:34-37` requires one copy of each expected exact header but does not
+reject another header of the same family with a different value. Each of the
+following was independently appended to otherwise valid output and accepted:
+
+- `goos: linux`
+- `goarch: amd64`
+- `cpu: Other CPU`
+- `pkg: example.invalid/other`
+
+Thus output can simultaneously claim the required Apple M2 Pro/darwin/arm64
+package and a contradictory host or package. Validate that there is exactly
+one total line for each header prefix and that its value is the expected one.
+The existing benchmark-name suffix check did reject a GOMAXPROCS mismatch.
+
+### 3. The actual inherited subprocess environment is not fully retained
+
+`Open3.capture3` at `run.rb:133` inherits the runner process environment.
+However, the manifest records only `GOGC`, `GOMEMLIMIT`, `GODEBUG`, and
+`GOTRACEBACK` at `run.rb:120`, while each invocation records only the explicit
+`GOMAXPROCS` overlay from `run.rb:130,136`.
+
+A synthetic sentinel was visible to and required by every child process, but
+was absent from both the manifest and invocation JSON. The frozen gate says to
+record the full environment before running, so the retained evidence cannot
+reconstruct the actual subprocess environment. A robust fix is to run the
+benchmark under a deliberately controlled complete environment and record
+that exact environment, avoiding accidental persistence of unrelated secrets.
+
+## Checks that passed
+
+- Required syntax check: pass.
+- Supplied suite: 13 runs, 479 assertions, no failures/errors/skips.
+- Exact cell sets: pilot has 8 autograd cells; qualification has 48 autograd
+  cells plus 3 training controls.
+- Exact plans: pilot has 14 invocations; qualification has 336 unique
+  invocations. Adjacent invocations are exact old/new pairs. Initial arm
+  alternates by pair and reverses in campaign 2; GOMAXPROCS order is `1,12`,
+  `12,1`, `1,12` by campaign. Build order is also reversed in campaign 2.
+- Exact sample arithmetic: pilot 112 retained + 112 warmup = 224 raw;
+  qualification 8,568 retained + 8,568 warmup = 17,136 raw.
+- Planned CLI arguments use `-test.run ^$`, the correct benchmark patterns,
+  `-test.benchmem`, `-test.benchtime=200ms`, and `-test.count=2`.
+- The parser's covered cases reject missing/extra/duplicate benchmark cells,
+  wrong process suffixes, missing/duplicate `PASS`, explicit failure markers,
+  replaced host/package headers, missing metrics, duplicate metrics,
+  non-decimal counters, nonfinite/negative floats, zero timing, and invalid
+  iteration counts.
+- Arbitrarily large decimal iteration/B/op/allocs/op counters are accepted
+  without overflow; finite maximum-range positive timing is accepted.
+- The first sample is discarded per cell and planned retained row ordering is
+  deterministic.
+- Nonzero exit and signal failures retain raw stdout/stderr, exit/signal
+  metadata, and matching SHA-256 hashes. Exit-zero/missing-measurement is kept
+  distinct from process failure and marks the campaign failed.
+- An existing destination is refused without overwriting its manifest.
+- The completed manifest explicitly says qualification is not evaluated; the
+  runner makes no performance decision.
+
+## Commands and complete outputs
+
+1. `ruby -c repo/internal/benchcompare/leadership/evidence/m2-autograd-bce-20260910/run.rb 2>&1 | tee ruby-c-run-rb.full.txt; exit ${pipestatus[1]}`
+   — exit 0. Full output:
+   `/private/tmp/goai-bce-runner-verify-J8eROr/ruby-c-run-rb.full.txt`
+   — SHA-256 `bbafef10c22b9323fa5589564990f57fbf57f9a632381d5e765dc5a3b25b4a1b`.
+
+2. `ruby repo/internal/benchcompare/leadership/evidence/m2-autograd-bce-20260910/run_test.rb 2>&1 | tee ruby-run-test-final.full.txt; exit ${pipestatus[1]}`
+   — exit 0. Full output:
+   `/private/tmp/goai-bce-runner-verify-J8eROr/ruby-run-test-final.full.txt`
+   — SHA-256 `4026eb782f02faecdfbc6dfddb75a199d70ff4ab5ebea334324969185f857758`.
+
+3. `ruby plan_check.rb 2>&1 | tee plan-check.full.txt; exit ${pipestatus[1]}`
+   — exit 0. Full output:
+   `/private/tmp/goai-bce-runner-verify-J8eROr/plan-check.full.txt`
+   — SHA-256 `6d5bba435596caea8c02b61b819bf3a6661a9975830cf088d573638a19eeed51`.
+
+4. `ruby plan_dump.rb | tee plan-and-cells.full.json >/dev/null; exit ${pipestatus[1]}`
+   — exit 0. Complete cell sets, patterns, and all plan
+   entries:
+   `/private/tmp/goai-bce-runner-verify-J8eROr/plan-and-cells.full.json`
+   — SHA-256 `0941fce006ad9705935c19b48a8d4b68aaaa43a8dc81c2b78b37da3a8bd84286`.
+
+5. `ruby supplemental_runner_test.rb --seed 1 2>&1 | tee supplemental-runner-test-seed1.full.txt; exit ${pipestatus[1]}`
+   — exit 1, expected audit
+   failure demonstrating the three defects above; 7 runs, 27 assertions,
+   3 failures, 0 errors, 0 skips. Full output:
+   `/private/tmp/goai-bce-runner-verify-J8eROr/supplemental-runner-test-seed1.full.txt`
+   — SHA-256 `b52e21accb42bd30c8b75b94176d1449cde3d0e699ee2f90d96c7d8158eaa099`.
+
+Supplemental sources:
+
+- `/private/tmp/goai-bce-runner-verify-J8eROr/supplemental_runner_test.rb`
+  — SHA-256 `08e7b3763b4d7a984c082dd1b969646d8874f857e3c044f781c4ba74dcb8d38e`.
+- `/private/tmp/goai-bce-runner-verify-J8eROr/plan_check.rb`
+  — SHA-256 `90f7a8c286ffd0d1f9c6d7b3ad92e91c847184feef3c29f800eaa3d578e190ca`.
+- `/private/tmp/goai-bce-runner-verify-J8eROr/plan_dump.rb`
+  — SHA-256 `32852ac4411070e09fab0c9245f0134054cf8fe5a2a11bfce67ba765b2ca1f6c`.

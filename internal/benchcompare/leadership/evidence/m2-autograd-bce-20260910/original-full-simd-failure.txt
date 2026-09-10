@@ -1,0 +1,14 @@
+Source: unchanged runtime plus original-source oracle; no BCE optimization.
+Command: env PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd go test ./autograd -short -count=1
+Exit: 1
+
+--- FAIL: TestSigmoidFocalCoreExactCompositeVJPParity (0.01s)
+    --- FAIL: TestSigmoidFocalCoreExactCompositeVJPParity/f64 (0.00s)
+        vjp_sigmoid_focal_test.go:87: element 0: got 3edc4cec2126b3dc want 3edc4cec2126b3db
+    --- FAIL: TestSigmoidFocalCoreExactCompositeVJPParity/f64#01 (0.00s)
+        vjp_sigmoid_focal_test.go:80: element 0: got 3fbe9ab13fe1dcd4 want 3fbe9ab13fe1dcd6
+--- FAIL: TestWKVOpMatchesHostWKV (0.00s)
+    wkv_test.go:49: diverges at [1 0]
+FAIL
+FAIL	github.com/jxsl13/goai/autograd	1.742s
+FAIL

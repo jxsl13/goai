@@ -1,0 +1,2 @@
+ok  	github.com/jxsl13/goai/internal/mdlint	0.485s
+ok  	github.com/jxsl13/goai/internal/apicheck	2.039s

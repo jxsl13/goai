@@ -10,6 +10,9 @@ schema: v1
 - R-01KYZN89XRE309D4DGSDJFW0DC Round T1047: pooling backward devirtualized about -50%, PS3032, and a fixture that could not see two bugs: Consumed: pooling backward shipped at about -50 percent across four cells with a purpose-built benchmark and a parity gate, the class became PS3032, and the FMA-barrier finding became rule DEVIRTUALIZING-REMOVES-AN-FMA-BARRIER-001. The durable methodological point is that the first parity fixture could not see either of two seeded bugs — no element received more than one accumulation, and a NaN [body truncated at tombstone retention cap]
 - R-01KYZPYA7PEGXART078F2XABJE Round T1050: QR VJP interchange -38%, and interchange beats transpose 3 to 1 on the same kernel: Consumed: QR VJP interchange shipped at -38 percent with allocations unchanged and a verbatim-reference bit-identity gate, and the head-to-head against the transpose remedy became rule INTERCHANGE-BEFORE-TRANSPOSE-001 plus the discriminator in the PS1010 advice. The transpose attempt is recorded with its numbers rather than discarded, because it is the remedy three earlier kernels correctly needed [body truncated at tombstone retention cap]
 - R-01KYZQN159E4WTYSMKJVWNZHAJ Round T1051: SVD VJP projection hoist -96.5%, and a withheld check that missed its own case: Consumed: SVD VJP projection hoist shipped at -96.5 percent (an algorithmic fix, O(m n^3) to O(m n^2)) with matTmulRect interchanged alongside, both gated by tests that call the shipped code. The gate lesson became rule A-SELF-DEFINED-COMPARISON-IS-A-PROOF-NOT-A-GATE-001. The perfscan check for this class was DRAFTED AND WITHHELD with its counts and both failure directions recorded, so a later att [body truncated at tombstone retention cap]
+- R-01M249HFAVFQR8HNHQQVYZPEP6 Diagnose pre-existing M2 SIMD focal and WKV parity failures: Research-only outcome, no production action: clean-main SIMD autograd failures arise from exact host/composite assertions against existing approximate ARM64 routes. Measured focal max scaled forward2.7755575615628914e-17 and VJP5.082197683525802e-21 inside predeclared1e-13; WKV5x3 maxscaled1.7347435098673699e-16 inside1e-10. No class/zero-sign discrepancies; exact fused-focal CPU/reference and foc [body truncated at tombstone retention cap]
+- T-01M24C1S91FWXVP3519MA9NQG2 Correct ARM64 SIMD focal and WKV scalar-parity test policies: validated pass by root no attributed diff (576d38d7478e binds the target list, not code) :: [correctness] Reviewed actual five-file branch diff4ad981bf..c3b4d1f1, not empty committed-state validate pack. Build policies, fixed bounds, layout guards and CPU execution are correct; existing exact/F32 paths preserved. Runtime SHA07adbf223e44d862d5f9e3e38a743eff54def329280bb8b76aa0ffe3f9b62945 and stric [body truncated at tombstone retention cap]
+- P-01M24BYJB6EEP8VZDM9J7G238Q Align ARM64 SIMD scalar parity tests with established numeric contracts: Test-only ARM64 SIMD F64 focal/composite bound1e-13/floor1 and WKV/scalar bound1e-10/floor1e-6 implemented with explicit CPU/layout/nonfinite/signed-zero checks. Root and fresh verifier pass full default/SIMD/CGO/race and existing leaf/state gates; three independent compiling corruptions fail intended assertions and restored full SIMD passes. Initial abbreviated verifier report corrected with comp [body truncated at tombstone retention cap]
 
 ## PERMUTATION-BAND-TWO-GATES-001
 WHEN a permutation nest is split into parallel bands, the its test suite SHALL gate it with BOTH a value comparison against the definition and a -race run, over at least 1 shape clearing the fan-out work gate.
@@ -31,3 +34,18 @@ WHEN one normalized gate weight spans hidden outputs, the typed OpMoECombine VJP
 
 ## EIGH-VJP-OUTPUT-TILE-EXACT-001
 WHEN inner times V-transpose spans 4 adjacent output columns, the Eigh VJP SHALL preserve Float64bits outputs in TestEighVJPIsBitIdentical and keep the scalar n modulo 4 tail.
+
+## UNARY-BCE-EXACT-001 {applies: go:autograd.unaryVJP,go:autograd.reluVJP,go:autograd.tanhVJP,go:autograd.sigmoidVJP}
+WHEN bounds proofs change, the typed unary VJPs SHALL preserve 0 bit differences, callback order, short-input panics, empty/view extents, and dtype fallbacks in TestUnaryVJPBoundsExact.
+
+## UNARY-BCE-PERF-001 {applies: go:autograd.unaryVJP,go:autograd.reluVJP,go:autograd.tanhVJP,go:autograd.sigmoidVJP}
+WHEN three alternating seven-pair M2 Go1.27.1 campaigns qualify unary bounds elimination, the promotion gate SHALL require at least 1.05x direct ReLU and 1.03x taped ReLU medians with p<0.05, and retain 0 allocation increases or reproducible control time regressions above3percent.
+
+## ARM64-SIMD-FOCAL-COMPOSITE-001 {applies: go:autograd_test.TestSigmoidFocalCoreExactCompositeVJPParity}
+WHEN ARM64 SIMD F64 focal tests compare active composite forward or VJP, the comparator SHALL bound abs(got-want)/max(1,abs(want)) by1e-13 without changing fused CPU/reference exactness or other-build policies.
+
+## ARM64-SIMD-WKV-SCALAR-001 {applies: go:autograd_test.TestWKVOpMatchesHostWKV}
+WHEN ARM64 SIMD WKV tests compare CPU output with scalar host output, the comparator SHALL bound abs(got-want)/max(1e-6,abs(want)) by1e-10 without changing same-SIMD state exactness or other-build policies.
+
+## ARM64-SIMD-PARITY-GUARDS-001 {applies: go:autograd_test.TestWKVOpMatchesHostWKV,go:autograd_test.TestSigmoidFocalCoreExactCompositeVJPParity}
+WHEN ARM64 SIMD F64 scalar parity tests compare tensors, the tests SHALL check dtype, shape, count, CPU execution and detached targets; reject mismatched nonfinite bits and opposite zero signs; preserve TestUnaryVJPBoundsExact.

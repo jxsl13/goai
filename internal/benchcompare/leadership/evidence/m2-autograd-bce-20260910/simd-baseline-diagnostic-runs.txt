@@ -1,0 +1,86 @@
+R-01M249HFAVFQR narrowly authorized diagnostic runs
+Captured command output is the exec runner's combined stdout/stderr stream.
+
+COMMAND 1
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd go test ./autograd -run '^TestTmpSIMD(Focal|WKV)ParityDiagnostic$' -count=1 -v
+EXIT 0
+=== RUN   TestTmpSIMDFocalParityDiagnostic
+=== RUN   TestTmpSIMDFocalParityDiagnostic/gamma0_alphaDisabled
+    z_tmp_simd_parity_diagnostic_test.go:133: forward: maxAbs=0 at=0 maxScaled=0 at=0 mismatchedBits=0 nanDiscrepancies=0 infDiscrepancies=0 zeroSignDiscrepancies=0 nonFinitePairs=0 bound=1.0e-13 exceedances=0
+    z_tmp_simd_parity_diagnostic_test.go:143: vjp: maxAbs=3.3881317890172014e-21 at=7231 maxScaled=3.3881317890172014e-21 at=7231 mismatchedBits=3021 nanDiscrepancies=0 infDiscrepancies=0 zeroSignDiscrepancies=0 nonFinitePairs=0 bound=1.0e-13 exceedances=0
+=== RUN   TestTmpSIMDFocalParityDiagnostic/gamma2_alpha025
+    z_tmp_simd_parity_diagnostic_test.go:133: forward: maxAbs=2.7755575615628914e-17 at=0 maxScaled=2.7755575615628914e-17 at=0 mismatchedBits=1 nanDiscrepancies=0 infDiscrepancies=0 zeroSignDiscrepancies=0 nonFinitePairs=0 bound=1.0e-13 exceedances=0
+    z_tmp_simd_parity_diagnostic_test.go:143: vjp: maxAbs=5.082197683525802e-21 at=11034 maxScaled=5.082197683525802e-21 at=11034 mismatchedBits=18666 nanDiscrepancies=0 infDiscrepancies=0 zeroSignDiscrepancies=0 nonFinitePairs=0 bound=1.0e-13 exceedances=0
+--- PASS: TestTmpSIMDFocalParityDiagnostic (0.01s)
+    --- PASS: TestTmpSIMDFocalParityDiagnostic/gamma0_alphaDisabled (0.01s)
+    --- PASS: TestTmpSIMDFocalParityDiagnostic/gamma2_alpha025 (0.01s)
+=== RUN   TestTmpSIMDWKVParityDiagnostic
+    z_tmp_simd_parity_diagnostic_test.go:175: wkv[[0 0]]: got=0.52024859213004215 gotBits=3fe0a5e0601fa266 want=0.52024859213004215 wantBits=3fe0a5e0601fa266 abs=0 scaled=0
+    z_tmp_simd_parity_diagnostic_test.go:175: wkv[[0 1]]: got=0.5356378977591022 gotBits=3fe123f216abf401 want=0.5356378977591022 wantBits=3fe123f216abf401 abs=0 scaled=0
+    z_tmp_simd_parity_diagnostic_test.go:175: wkv[[0 2]]: got=-0.658276580254609 gotBits=bfe5109a0bfd520b want=-0.658276580254609 wantBits=bfe5109a0bfd520b abs=0 scaled=0
+    z_tmp_simd_parity_diagnostic_test.go:175: wkv[[1 0]]: got=0.094127010202943853 gotBits=3fb818b52e7ded4d want=0.094127010202943839 wantBits=3fb818b52e7ded4c abs=1.3877787807814457e-17 scaled=1.4743682794017424e-16
+    z_tmp_simd_parity_diagnostic_test.go:175: wkv[[1 1]]: got=0.63999260888431797 gotBits=3fe47ad1c79ae02c want=0.63999260888431786 wantBits=3fe47ad1c79ae02b abs=1.1102230246251565e-16 scaled=1.7347435098673699e-16
+    z_tmp_simd_parity_diagnostic_test.go:175: wkv[[1 2]]: got=-0.22310823569689017 gotBits=bfcc8ecf87e4a8db want=-0.22310823569689017 wantBits=bfcc8ecf87e4a8db abs=0 scaled=0
+    z_tmp_simd_parity_diagnostic_test.go:175: wkv[[2 0]]: got=-0.21012561399376933 gotBits=bfcae5656813dc42 want=-0.21012561399376936 wantBits=bfcae5656813dc43 abs=2.7755575615628914e-17 scaled=1.3209039625436582e-16
+    z_tmp_simd_parity_diagnostic_test.go:175: wkv[[2 1]]: got=0.53537974027972079 gotBits=3fe121d4b16e27ef want=0.53537974027972079 wantBits=3fe121d4b16e27ef abs=0 scaled=0
+    z_tmp_simd_parity_diagnostic_test.go:175: wkv[[2 2]]: got=0.33116304830442062 gotBits=3fd531c67f871d29 want=0.33116304830442062 wantBits=3fd531c67f871d29 abs=0 scaled=0
+    z_tmp_simd_parity_diagnostic_test.go:175: wkv[[3 0]]: got=-0.17961291556678188 gotBits=bfc6fd8e5726367a want=-0.17961291556678188 wantBits=bfc6fd8e5726367a abs=0 scaled=0
+    z_tmp_simd_parity_diagnostic_test.go:175: wkv[[3 1]]: got=0.24415939737612033 gotBits=3fcf409d795ee9a3 want=0.24415939737612033 wantBits=3fcf409d795ee9a3 abs=0 scaled=0
+    z_tmp_simd_parity_diagnostic_test.go:175: wkv[[3 2]]: got=0.603820662839055 gotBits=3fe3527fb5f15e7c want=0.603820662839055 wantBits=3fe3527fb5f15e7c abs=0 scaled=0
+    z_tmp_simd_parity_diagnostic_test.go:175: wkv[[4 0]]: got=0.36555352080951231 gotBits=3fd7653a983420f2 want=0.36555352080951231 wantBits=3fd7653a983420f2 abs=0 scaled=0
+    z_tmp_simd_parity_diagnostic_test.go:175: wkv[[4 1]]: got=-0.11334425449369806 gotBits=bfbd04210a3d6c54 want=-0.11334425449369806 wantBits=bfbd04210a3d6c54 abs=0 scaled=0
+    z_tmp_simd_parity_diagnostic_test.go:175: wkv[[4 2]]: got=0.42004242389164753 gotBits=3fdae1f99e63053f want=0.42004242389164753 wantBits=3fdae1f99e63053f abs=0 scaled=0
+    z_tmp_simd_parity_diagnostic_test.go:179: wkv: maxAbs=1.1102230246251565e-16 at=4 maxScaled=1.7347435098673699e-16 at=4 mismatchedBits=3 nanDiscrepancies=0 infDiscrepancies=0 zeroSignDiscrepancies=0 nonFinitePairs=0 bound=1.0e-10 exceedances=0
+--- PASS: TestTmpSIMDWKVParityDiagnostic (0.00s)
+PASS
+ok  	github.com/jxsl13/goai/autograd	0.351s
+
+COMMAND 2
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd go test ./backend/cpu -run '^(TestVsoftplusF64Arm64Accuracy|TestSoftplusGradF64Arm64Accuracy|TestSigmoidFocalCPUReferenceParity)$' -count=1 -v
+EXIT 0
+=== RUN   TestVsoftplusF64Arm64Accuracy
+    vsoftplus_f64_arm64_test.go:50: ARM64 NEON F64 Softplus max absolute error 7.105e-15 over 262145 values
+--- PASS: TestVsoftplusF64Arm64Accuracy (0.01s)
+=== RUN   TestSoftplusGradF64Arm64Accuracy
+    vsoftplus_grad_f64_arm64_test.go:44: ARM64 NEON F64 softplus gradient max relative error 3.370e-16 over 262145 values
+--- PASS: TestSoftplusGradF64Arm64Accuracy (0.01s)
+=== RUN   TestSigmoidFocalCPUReferenceParity
+=== RUN   TestSigmoidFocalCPUReferenceParity/f32
+=== RUN   TestSigmoidFocalCPUReferenceParity/f32#01
+=== RUN   TestSigmoidFocalCPUReferenceParity/f64
+=== RUN   TestSigmoidFocalCPUReferenceParity/f64#01
+=== RUN   TestSigmoidFocalCPUReferenceParity/f32#02
+=== RUN   TestSigmoidFocalCPUReferenceParity/f32#03
+=== RUN   TestSigmoidFocalCPUReferenceParity/f64#02
+=== RUN   TestSigmoidFocalCPUReferenceParity/f64#03
+=== RUN   TestSigmoidFocalCPUReferenceParity/f32#04
+=== RUN   TestSigmoidFocalCPUReferenceParity/f32#05
+=== RUN   TestSigmoidFocalCPUReferenceParity/f64#04
+=== RUN   TestSigmoidFocalCPUReferenceParity/f64#05
+--- PASS: TestSigmoidFocalCPUReferenceParity (0.15s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f32 (0.00s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f32#01 (0.00s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f64 (0.00s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f64#01 (0.00s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f32#02 (0.00s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f32#03 (0.00s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f64#02 (0.00s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f64#03 (0.00s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f32#04 (0.02s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f32#05 (0.05s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f64#04 (0.02s)
+    --- PASS: TestSigmoidFocalCPUReferenceParity/f64#05 (0.04s)
+PASS
+ok  	github.com/jxsl13/goai/backend/cpu	0.494s
+
+COMMAND 3
+PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0 GOEXPERIMENT=simd go test ./internal/simd -run '^TestWKVScanF64Accuracy$' -count=1 -v
+EXIT 0
+=== RUN   TestWKVScanF64Accuracy
+    wkv_test.go:40: seq=128 d=512 maxRel=1.386e-12
+    wkv_test.go:40: seq=64 d=1024 maxRel=4.501e-12
+    wkv_test.go:40: seq=130 d=17 maxRel=2.950e-14
+    wkv_test.go:40: seq=200 d=64 maxRel=1.526e-13
+--- PASS: TestWKVScanF64Accuracy (0.01s)
+PASS
+ok  	github.com/jxsl13/goai/internal/simd	0.321s
