@@ -1,0 +1,1 @@
+reindex: 2843 files, 19674 nodes, 35978 edges (+6715 typed calls, 0 skipped) (/private/tmp/goai-m2-simd-parity-policy-fOBDq3/repo)
