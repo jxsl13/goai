@@ -486,3 +486,191 @@ jobs:
         run: |
           BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
           go run ./internal/cichange -run "$BASE" HEAD -- -short -count=1 -timeout 20m
+
+  # The soft SIMD lane tests primitives only. This independent hard gate proves
+  # the strict unary VJP oracle actually executes on all three native runners.
+  vjp-exact:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    name: strict VJP oracle / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    env:
+      GOFLAGS: ""
+      GOPROXY: direct
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.1"
+          cache: false
+      - uses: ./.github/actions/go-build-cache
+        with:
+          lane: vjp-exact-${{ matrix.os }}
+      - name: strict VJP oracle (CGO0 default)
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+          GOEXPERIMENT: ""
+        run: |
+          set -u
+          output_path="$RUNNER_TEMP/vjp-exact-${{ matrix.os }}-default.stdout"
+          error_path="$RUNNER_TEMP/vjp-exact-${{ matrix.os }}-default.stderr"
+          metadata_path="$RUNNER_TEMP/vjp-exact-${{ matrix.os }}-default.meta"
+          {
+            printf '%s\n' 'mode=CGO_ENABLED=0 GOEXPERIMENT='
+            printf '%s\n' 'argv=go test -v -count=1 -timeout 1800s -run ^TestUnaryVJPBoundsExact$ ./autograd'
+            printf 'go_path=%s\n' "$(command -v go)"
+            go version
+            go env GOOS GOARCH GOAMD64 GOARM64 GOEXPERIMENT CGO_ENABLED GOFLAGS GOPROXY GOTOOLCHAIN
+            go tool compile -V=full
+            git rev-parse HEAD
+            git rev-parse HEAD:autograd/vjp_elementwise.go
+            git rev-parse HEAD:autograd/vjp_bounds_internal_test.go
+          } >"$metadata_path" 2>&1
+          task_rc=0
+          go test -v -count=1 -timeout 1800s -run '^TestUnaryVJPBoundsExact$' ./autograd >"$output_path" 2>"$error_path" || task_rc=$?
+          printf 'test_exit_code=%s\n' "$task_rc" >>"$metadata_path"
+          cat "$output_path"
+          cat "$error_path" >&2
+          if [ "$task_rc" -ne 0 ]; then
+            exit "$task_rc"
+          fi
+          [ -s "$output_path" ] || { echo 'strict VJP oracle guard: empty test output' >&2; exit 1; }
+          grep -Eq '^=== RUN   TestUnaryVJPBoundsExact$' "$output_path" || { echo 'strict VJP oracle guard: missing exact top-level RUN record' >&2; exit 1; }
+          grep -Eq '^--- PASS: TestUnaryVJPBoundsExact \([0-9.]+s\)$' "$output_path" || { echo 'strict VJP oracle guard: missing exact top-level PASS record' >&2; exit 1; }
+          grep -Eq '^[[:space:]]*--- PASS: TestUnaryVJPBoundsExact/[^[:space:]]+ \([0-9.]+s\)$' "$output_path" || { echo 'strict VJP oracle guard: missing passing oracle subcase' >&2; exit 1; }
+          if grep -Eq '^[[:space:]]*--- SKIP: TestUnaryVJPBoundsExact([[:space:]/]|$)' "$output_path"; then
+            echo 'strict VJP oracle guard: skipped top-level or child oracle case' >&2
+            exit 1
+          fi
+          grep -Fxq -- 'PASS' "$output_path" || { echo 'strict VJP oracle guard: missing test PASS footer' >&2; exit 1; }
+          footer="$(tail -n 1 "$output_path")"
+          case "$footer" in
+            ok*github.com/jxsl13/goai/autograd*) ;;
+            *) echo 'strict VJP oracle guard: missing complete autograd result footer' >&2; exit 1 ;;
+          esac
+      - name: strict VJP oracle (CGO0 SIMD)
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+          GOEXPERIMENT: simd
+        run: |
+          set -u
+          output_path="$RUNNER_TEMP/vjp-exact-${{ matrix.os }}-simd.stdout"
+          error_path="$RUNNER_TEMP/vjp-exact-${{ matrix.os }}-simd.stderr"
+          metadata_path="$RUNNER_TEMP/vjp-exact-${{ matrix.os }}-simd.meta"
+          {
+            printf '%s\n' 'mode=CGO_ENABLED=0 GOEXPERIMENT=simd'
+            printf '%s\n' 'argv=go test -v -count=1 -timeout 1800s -run ^TestUnaryVJPBoundsExact$ ./autograd'
+            printf 'go_path=%s\n' "$(command -v go)"
+            go version
+            go env GOOS GOARCH GOAMD64 GOARM64 GOEXPERIMENT CGO_ENABLED GOFLAGS GOPROXY GOTOOLCHAIN
+            go tool compile -V=full
+            git rev-parse HEAD
+            git rev-parse HEAD:autograd/vjp_elementwise.go
+            git rev-parse HEAD:autograd/vjp_bounds_internal_test.go
+          } >"$metadata_path" 2>&1
+          task_rc=0
+          go test -v -count=1 -timeout 1800s -run '^TestUnaryVJPBoundsExact$' ./autograd >"$output_path" 2>"$error_path" || task_rc=$?
+          printf 'test_exit_code=%s\n' "$task_rc" >>"$metadata_path"
+          cat "$output_path"
+          cat "$error_path" >&2
+          if [ "$task_rc" -ne 0 ]; then
+            exit "$task_rc"
+          fi
+          [ -s "$output_path" ] || { echo 'strict VJP oracle guard: empty test output' >&2; exit 1; }
+          grep -Eq '^=== RUN   TestUnaryVJPBoundsExact$' "$output_path" || { echo 'strict VJP oracle guard: missing exact top-level RUN record' >&2; exit 1; }
+          grep -Eq '^--- PASS: TestUnaryVJPBoundsExact \([0-9.]+s\)$' "$output_path" || { echo 'strict VJP oracle guard: missing exact top-level PASS record' >&2; exit 1; }
+          grep -Eq '^[[:space:]]*--- PASS: TestUnaryVJPBoundsExact/[^[:space:]]+ \([0-9.]+s\)$' "$output_path" || { echo 'strict VJP oracle guard: missing passing oracle subcase' >&2; exit 1; }
+          if grep -Eq '^[[:space:]]*--- SKIP: TestUnaryVJPBoundsExact([[:space:]/]|$)' "$output_path"; then
+            echo 'strict VJP oracle guard: skipped top-level or child oracle case' >&2
+            exit 1
+          fi
+          grep -Fxq -- 'PASS' "$output_path" || { echo 'strict VJP oracle guard: missing test PASS footer' >&2; exit 1; }
+          footer="$(tail -n 1 "$output_path")"
+          case "$footer" in
+            ok*github.com/jxsl13/goai/autograd*) ;;
+            *) echo 'strict VJP oracle guard: missing complete autograd result footer' >&2; exit 1 ;;
+          esac
+      - name: strict VJP oracle (CGO1 race)
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+          GOEXPERIMENT: ""
+        run: |
+          set -u
+          output_path="$RUNNER_TEMP/vjp-exact-${{ matrix.os }}-race.stdout"
+          error_path="$RUNNER_TEMP/vjp-exact-${{ matrix.os }}-race.stderr"
+          metadata_path="$RUNNER_TEMP/vjp-exact-${{ matrix.os }}-race.meta"
+          {
+            printf '%s\n' 'mode=CGO_ENABLED=1 GOEXPERIMENT= -race'
+            printf '%s\n' 'argv=go test -v -count=1 -timeout 1800s -race -run ^TestUnaryVJPBoundsExact$ ./autograd'
+            printf 'go_path=%s\n' "$(command -v go)"
+            go version
+            go env GOOS GOARCH GOAMD64 GOARM64 GOEXPERIMENT CGO_ENABLED GOFLAGS GOPROXY GOTOOLCHAIN
+            go tool compile -V=full
+            git rev-parse HEAD
+            git rev-parse HEAD:autograd/vjp_elementwise.go
+            git rev-parse HEAD:autograd/vjp_bounds_internal_test.go
+          } >"$metadata_path" 2>&1
+          task_rc=0
+          go test -v -count=1 -timeout 1800s -race -run '^TestUnaryVJPBoundsExact$' ./autograd >"$output_path" 2>"$error_path" || task_rc=$?
+          printf 'test_exit_code=%s\n' "$task_rc" >>"$metadata_path"
+          cat "$output_path"
+          cat "$error_path" >&2
+          if [ "$task_rc" -ne 0 ]; then
+            exit "$task_rc"
+          fi
+          [ -s "$output_path" ] || { echo 'strict VJP oracle guard: empty test output' >&2; exit 1; }
+          grep -Eq '^=== RUN   TestUnaryVJPBoundsExact$' "$output_path" || { echo 'strict VJP oracle guard: missing exact top-level RUN record' >&2; exit 1; }
+          grep -Eq '^--- PASS: TestUnaryVJPBoundsExact \([0-9.]+s\)$' "$output_path" || { echo 'strict VJP oracle guard: missing exact top-level PASS record' >&2; exit 1; }
+          grep -Eq '^[[:space:]]*--- PASS: TestUnaryVJPBoundsExact/[^[:space:]]+ \([0-9.]+s\)$' "$output_path" || { echo 'strict VJP oracle guard: missing passing oracle subcase' >&2; exit 1; }
+          if grep -Eq '^[[:space:]]*--- SKIP: TestUnaryVJPBoundsExact([[:space:]/]|$)' "$output_path"; then
+            echo 'strict VJP oracle guard: skipped top-level or child oracle case' >&2
+            exit 1
+          fi
+          grep -Fxq -- 'PASS' "$output_path" || { echo 'strict VJP oracle guard: missing test PASS footer' >&2; exit 1; }
+          footer="$(tail -n 1 "$output_path")"
+          case "$footer" in
+            ok*github.com/jxsl13/goai/autograd*) ;;
+            *) echo 'strict VJP oracle guard: missing complete autograd result footer' >&2; exit 1 ;;
+          esac
+      - name: verify strict VJP raw artifacts exist
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          missing=0
+          for mode in default simd race; do
+            for extension in stdout stderr meta; do
+              file_path="$RUNNER_TEMP/vjp-exact-${{ matrix.os }}-$mode.$extension"
+              if [ ! -f "$file_path" ]; then
+                echo "missing strict VJP raw artifact: $file_path" >&2
+                missing=1
+              fi
+            done
+          done
+          exit "$missing"
+      - name: upload strict VJP raw oracle evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: vjp-exact-${{ matrix.os }}-raw
+          path: |
+            ${{ runner.temp }}/vjp-exact-${{ matrix.os }}-default.stdout
+            ${{ runner.temp }}/vjp-exact-${{ matrix.os }}-default.stderr
+            ${{ runner.temp }}/vjp-exact-${{ matrix.os }}-default.meta
+            ${{ runner.temp }}/vjp-exact-${{ matrix.os }}-simd.stdout
+            ${{ runner.temp }}/vjp-exact-${{ matrix.os }}-simd.stderr
+            ${{ runner.temp }}/vjp-exact-${{ matrix.os }}-simd.meta
+            ${{ runner.temp }}/vjp-exact-${{ matrix.os }}-race.stdout
+            ${{ runner.temp }}/vjp-exact-${{ matrix.os }}-race.stderr
+            ${{ runner.temp }}/vjp-exact-${{ matrix.os }}-race.meta
+          if-no-files-found: error

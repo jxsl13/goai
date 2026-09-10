@@ -4,6 +4,16 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### ci -- qualify native VJP oracles; retain original runtime (T-01M26474J0EDX, 2026-09-11)
+
+Hard CI gates now execute the strict unary VJP oracle on Linux, Windows and
+macOS in default, SIMD and race modes. The architecture-gated bounds-check
+candidate was rejected after an inconclusive seven-pair M2 pilot; the original
+runtime is restored and no speedup or regression is claimed. The
+[qualification summary and small measurement fixture](internal/benchcompare/leadership/evidence/m2-vjp-arch-qualify-20260910/README.md)
+retain all 224 samples. Large evidence captures, compiler binaries, books and
+private reference documents remain local, outside public Git history.
+
 ### research -- preflight Apple ARM64 VJP bounds isolation (R-01M25XNPFEEP5, 2026-09-10)
 
 A compile-time architecture guard retains all six intended M2 VJP hot loops

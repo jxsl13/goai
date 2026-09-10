@@ -15,6 +15,14 @@ path is optimized to its ceiling and still loses by the §C3 threshold.
 
 ## Running
 
+The [2026-09-10 architecture-gated VJP pilot](../internal/benchcompare/leadership/evidence/m2-vjp-arch-qualify-20260910/README.md)
+was inconclusive: all six targets failed significance, five missed their
+minimum ratios, and within-arm sample ranges were 5.48–44.02%. The original
+runtime is restored; only hard native correctness CI is retained. The public
+fixture includes all 112 warmup and 112 retained samples, with no compiler
+binaries, private documents or large local evidence archives. No speedup,
+regression, or external leadership claim follows from this pilot.
+
 The [2026-09-09 Go 1.27.1 rebuild evidence](../internal/benchcompare/leadership/evidence/go1271-toolchain-rebuild-20260909/README.md)
 pins the source, compilers, frozen binaries, raw alternating pairs, and
 confirmation run. It records no compiler speedup: an initial 22% parallel
