@@ -469,3 +469,4 @@ ARM64-SIMD-PARITY-GUARDS-001	go:autograd_test.TestWKVOpMatchesHostWKV	autograd/w
 ARM64-SIMD-PARITY-GUARDS-001	go:autograd_test.TestSigmoidFocalCoreExactCompositeVJPParity	autograd/vjp_sigmoid_focal_test.go	70-110	faa74e8788d38a99	aee0f3183293e24a
 KAN-SIMD-BASELINE-DIAGNOSIS-001	go:nn.TestKANForwardIsBitIdentical	nn/kan_bitidentity_test.go	20-54	752e9f00d1a93761	f819ff27f468cc6f
 KAN-SIMD-BASELINE-DIAGNOSIS-001	go:nn.KANLayer.Forward	nn/kan.go	181-228	42f7a1580f191b98	f819ff27f468cc6f
+KAN-FEATURE-CI-DIGEST-001	go:nn.TestKANForwardIsBitIdentical	nn/kan_bitidentity_test.go	20-54	752e9f00d1a93761	9100d5fb1aad10db
