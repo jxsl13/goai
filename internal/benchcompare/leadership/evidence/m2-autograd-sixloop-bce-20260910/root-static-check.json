@@ -1,0 +1,20 @@
+{
+  "command": "ruby /private/tmp/goai-sixloop-static-review.rb /private/tmp/goai-m2-autograd-sixloops-BPS8GN/repo",
+  "cwd": "/Users/john/Desktop/goai",
+  "result": {
+    "chunk_id": "d14071",
+    "wall_time_seconds": 0.030772042,
+    "exit_code": 0,
+    "original_token_count": 351,
+    "output": "{\n  \"source_sha256\": \"9969389cb316d0ba85d0121e7fcbcbc1ecbcc85b34b7b98fc15b2d0b80402d5e\",\n  \"base_sha256\": \"07adbf223e44d862d5f9e3e38a743eff54def329280bb8b76aa0ffe3f9b62945\",\n  \"restored_source_matches_base\": true,\n  \"hot_bodies_match_original_cold_bodies\": true,\n  \"proof_paths\": [\n    {\n      \"guard_line\": 29,\n      \"cold_else_line\": 34,\n      \"end_line\": 38,\n      \"guard\": \"if n >= 0 && n <= len(xs) && n <= len(ys) && n <= len(gs) && n <= len(ds) {\"\n    },\n    {\n      \"guard_line\": 45,\n      \"cold_else_line\": 50,\n      \"end_line\": 54,\n      \"guard\": \"if n >= 0 && n <= len(xs) && n <= len(ys) && n <= len(gs) && n <= len(ds) {\"\n    },\n    {\n      \"guard_line\": 136,\n      \"cold_else_line\": 143,\n      \"end_line\": 149,\n      \"guard\": \"if n >= 0 && n <= len(xs) && n <= len(gs) && n <= len(ds) {\"\n    },\n    {\n      \"guard_line\": 156,\n      \"cold_else_line\": 163,\n      \"end_line\": 169,\n      \"guard\": \"if n >= 0 && n <= len(xs) && n <= len(gs) && n <= len(ds) {\"\n    },\n    {\n      \"guard_line\": 234,\n      \"cold_else_line\": 239,\n      \"end_line\": 243,\n      \"guard\": \"if n >= 0 && n <= len(ys) && n <= len(gs) && n <= len(ds) {\"\n    },\n    {\n      \"guard_line\": 248,\n      \"cold_else_line\": 254,\n      \"end_line\": 259,\n      \"guard\": \"if n >= 0 && n <= len(ys) && n <= len(gs) && n <= len(ds) {\"\n    }\n  ],\n  \"oracle_sha256\": \"bd26d0195b02e23aa1406f01f7df25fff5aa65ea81fea0c3bae9f31d3359648c\"\n}\n"
+  },
+  "artifact_validation": {
+    "chunk_id": "e36521",
+    "wall_time_seconds": 0.015901083,
+    "exit_code": 0,
+    "original_token_count": 15,
+    "output": "All 135 decoded artifacts match original bytes and hashes\n"
+  },
+  "artifact_validation_caveat": "The first root gzip-byte comparison returned exit 1 at candidate-source.stdout because decoded UTF-8 and binary-encoded Ruby strings were compared without normalizing encoding. The corrected byte comparison uses .b and verifies all 135 artifacts against original bytes, size and SHA-256. No source or captured artifact changed to obtain this pass."
+}
+
