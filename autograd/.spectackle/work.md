@@ -45,7 +45,7 @@ MACHINE-PRODUCED LIST, reproducible with internal/perfscan/tools/exactness_sweep
 
 ## P-01M25H86Z0FZRAK5B99V05DYM6 Qualify six exact unary VJP bounds proofs with historical tanh frozen
 kind: proposal
-state: draft
+state: active
 created: 2026-09-10
 refs: R-01M249HFAVFQR8HNHQQVYZPEP6
 grilled: 2026-09-10 open=0
