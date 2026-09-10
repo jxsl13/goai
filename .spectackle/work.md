@@ -3966,3 +3966,34 @@ option: Resize hidden scratch for every Step shape
 option: Retain the capacity-wide unary control
 blocks: P-01M0SKYF35FYGB3RPMP0DDPCAW
 choice: One bounded BiasGELU recorder dispatch
+
+## T-01M25NHXPAEYABCQWC637CASR1 Qualify exact KAN CPU goldens by architecture and SIMD feature
+kind: task
+state: draft
+created: 2026-09-10
+refs: P-01M25KRMYZEH599AP2131M1GD6, R-01M25JEGEJFDEVBR7B0YZKQ3MX
+targets: go:nn.TestKANForwardIsBitIdentical, go:archgold.PickSIMD
+
+GOAL: correct only KAN test goldens for the existing scalar/SIMD CPU feature policy, using independently qualified native baselines, and enforce the existing SiLU quality gates in CI. No production operation or tolerance changes and no performance claim.
+
+BASE/EVIDENCE: branch starts at81bfae535480e144495dc54fcf93ae4b66171745, the archived diagnostic phase on PR1256. R-01M25JEGEJFDE source attribution was independently reproduced from retained diagnostic SHA284e0869f3c96c6188e7a1ab47ddc6156f00718bf28d57092631cb24c76f2fa9: only replacing SIMD SiLU by historical x/(1+math.Exp(-x)) restores all arm64 default finals; other operations remain CPU. Scalar-reference-backend SiLU is not bit-identical to that formula and is not an authorized substitute. NativeCI34476604943 at6bc7fa61 completed with13successfuljobs and3actualSIMD failures despite overall success. CGO0 Linux/Windows fullnn tests pass original scalar goldens; both native SIMD jobs agree on every AMD64 value. MacARM SIMD matches root M2. Full raw joblogs, hashes, manifest, finaljob/stepJSON and45freshverifier artifacts are in internal/benchcompare/leadership/evidence/m2-kan-simd-baseline-20260910/. Rosetta default disagrees with2storedAMD64 values, so it is not a golden source or an acceptance gate. Diagnostic lifecycle archive emitted a missing explicit validate-stamp advisory; actual independent source/test/mutation verification is retained. This final task must obtain an explicit independent validate verdict before archive.
+
+EXACT LEASE/EDIT: nn/kan_bitidentity_test.go and .github/workflows/ci.yml only. Read internal/archgold/archgold.go, backend/cpu/vsilu_f64_arm64_test.go, backend/cpu/vsilu_f64_test.go and the evidence README/native-ci-manifest.json as references. No production code, archgold implementation, current numeric tests/limits, VJP oracle, benchmark/runner, dependency, workflow triggers/permissions/jobs/soft-policy, or other file edits. Root handles evidence/specification edits centrally.
+
+TEST CHANGE: replace only the three archgold.Pick calls with archgold.PickSIMD(arm64,amd64,arm64SIMD,amd64SIMD). The exact tuples for existing named cases are:
+3x5x7: (5936029728971432568,14272068029666688409,17265271475585544907,16662584054408946177)
+13x8x6: (15159748691548848689,6609257596807823200,5035091549113534389,3106186755478235033)
+96x24x32: (515177776064738749,9025949438388873583,12048638696559957597,611919531391070369).
+Retain every default constant, fixture geometry, seed1, math.Sin input, F64 representation, exact FNV64a formula, named serial t.Run, explicit registeredCPU and compiler metadata, and strict digest equality. Add a concise comment explaining that F64 SIMD SiLU intentionally differs from scalar math.Exp and that goldens are exact per architecture+experiment, sourced from the pinned native baseline evidence. Do not add tolerance, skip, architecture-specific bypass, output normalization or generated expected values. Reuse PickSIMD as-is; its existing build-tag feature selection is the API.
+
+CI CHANGE: keep all existing commands in existing simd compile/test step, including the diagnostic KAN command. Append exactly:
+GOEXPERIMENT=simd go test -short -count=1 -v -run '^Test(VsiluF64(Accuracy|Arm64(Accuracy|VectorTailBitIdentity|Edges))|ExpF64polyMatchesVector)$' ./backend/cpu
+This runs available build-specific existing tests on each native matrix runner. ARM64 accuracy/vector-tail/edge tests are guarded arm64&&goexperiment.simd; AMD64 VsiluF64Accuracy and ExpF64polyMatchesVector are guarded amd64&&goexperiment.simd. Never call the AMD64-only accuracy test an ARM gate. Do not alter any bounds (existing accuracy <=1e-13) or failure handling.
+
+PINNED ENV: PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/gocache-goai GOMODCACHE=/private/tmp/goai-go1271-j1cLvq/modcache GOTOOLCHAIN=local CGO_ENABLED=0. Use prefix for Spectackle too; GOEXPERIMENT='' default or GOEXPERIMENT=simd. For race/CGO tests put CGO_ENABLED=1 after prefix. Root grants exclusive heavy-Go window; serialize all Go commands. Preserve direct complete stdout/stderr and exact numeric exits, exact argv/env/cwd/source hashes. Do not represent summaries as raw logs or a compiling regex that selected zero tests as verification.
+
+VERIFY: gofmt only leased test file. Default and SIMD: go test ./nn -short -count=1 and focused go test ./nn -run '^TestKANForwardIsBitIdentical$' -count=1 -v; both must now pass all3. SIMD run the exact new CPU CI command locally and assert ARM3tests ran/passed (AMD-only names legitimately excluded here). CGO1 default go test ./nn -short -count=1; CGO1 default and SIMD go test -race ./nn -run '^TestKANForwardIsBitIdentical$' -count=1 -v. Also CGO1 default go test -race ./autograd -run '^TestUnaryVJPBoundsExact$' -count=1. Run default go vet ./... and go test ./internal/mdlint ./internal/apicheck. Audit all6defaultconstants unchanged, no production code diff, and runtime/oracle hashes unchanged versus base; git diff --check must pass. Retain full source diff and each command/exits. Any unexpected failure must be reported before further edits; do not update additional goldens, weaken tests, change runtime or imitate native AMD64 numbers locally. Native CI verification is root-owned and mandatory for final acceptance.
+
+INDEPENDENT HANDOFF: a fresh verifier will rerun the above VERIFY and reversible one-ULP output mutation in both default and SIMD builds, then restore/retest. Root reviews full captures, source and native CI; do not perform benchmark timings for this test-only correction or claim runtime gain. Root will also independently rebuild with pinnedGo1.27.1 before delivery.
+
+PROTOCOL: isolated worktree provided; get task/parent, claim exact2file leaseTTL7200, apply_patch edits, no Git writes/push/PR/lifecycle/rules/raw .spectackle I/O or extra agents. Artifacts outside repo; a tracked-file git diff must actually be nonempty. Release lease and Go window promptly; report exact source readiness without marking done. Root creates separate stacked draft PR against1256 and owns validation/archive/merge. Child may merge only after complete default/SIMD accuracy+exactness qualification and all exact-head CI jobs AND executed steps pass, including soft lanes; parent then gets its own main-target CI. Broad goal and six-loop work remain unfinished.
