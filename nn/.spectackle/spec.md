@@ -94,3 +94,8 @@ Rationale: Repeated optimizer products must not recreate shape-invariant buffers
 WHEN 7 alternating M2 Pro 30-iteration BenchmarkMuonStepOnly campaigns compare the merged baseline, the Muon SHALL retain the candidate only at 3.00x median speed, 99 percent lower B/op, and exact 3-step F64 and F32 digests.
 
 Rationale: The architectural seam is justified only by large end-to-end optimizer leverage without trajectory drift.
+
+## KAN-SIMD-BASELINE-DIAGNOSIS-001 {applies: go:nn.TestKANForwardIsBitIdentical,go:nn.KANLayer.Forward}
+WHEN diagnosing a KAN whole-layer digest mismatch under GOEXPERIMENT=simd, the diagnostic SHALL preserve production code and official goldens, reproduce unchanged-source outputs in both default and SIMD builds, and isolate dispatch differences before proposing a feature-specific exact baseline.
+
+Rationale: An inherited SIMD baseline failure must not be hidden by a performance candidate or converted to a new golden without independent evidence.
