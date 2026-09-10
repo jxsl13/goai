@@ -24,9 +24,10 @@ func TestKANForwardIsBitIdentical(t *testing.T) {
 		batch, in, out int
 		want           uint64
 	}{
-		{"3x5x7", 3, 5, 7, archgold.Pick(5936029728971432568, 14272068029666688409)},
-		{"13x8x6", 13, 8, 6, archgold.Pick(15159748691548848689, 6609257596807823200)},
-		{"96x24x32", 96, 24, 32, archgold.Pick(515177776064738749, 9025949438388873583)},
+		// F64 SIMD SiLU intentionally differs from scalar math.Exp; these exact goldens are per architecture and experiment, sourced from pinned native baseline evidence.
+		{"3x5x7", 3, 5, 7, archgold.PickSIMD(5936029728971432568, 14272068029666688409, 17265271475585544907, 16662584054408946177)},
+		{"13x8x6", 13, 8, 6, archgold.PickSIMD(15159748691548848689, 6609257596807823200, 5035091549113534389, 3106186755478235033)},
+		{"96x24x32", 96, 24, 32, archgold.PickSIMD(515177776064738749, 9025949438388873583, 12048638696559957597, 611919531391070369)},
 	}
 	cpuBE, ok := backend.Get(backend.CPU)
 	if !ok {
