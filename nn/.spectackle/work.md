@@ -73,6 +73,7 @@ kind: task
 state: draft
 created: 2026-09-10
 refs: P-01M25KRMYZEH599AP2131M1GD6, R-01M25JEGEJFDEVBR7B0YZKQ3MX
+grilled: 2026-09-10 open=0
 targets: go:nn.TestKANForwardIsBitIdentical
 
 GOAL: expose every existing KAN exact-output fixture in native CI without changing any expected digest or production operation. This is the diagnostic phase of P-01M25KRMYZEH5; expected inherited failures are evidence, not permission to mark the final correction qualified.
