@@ -1,0 +1,9 @@
+{
+  "artifacts": 893,
+  "unique_blobs": 439,
+  "decoded_artifact_bytes": 546691828,
+  "every_hash_and_original_byte_verified": true,
+  "archive_bytes": 5845848,
+  "archive_sha256": "8405e6319df2e4c1917b077b743b4cf1af9bff1c109dc8289ca2f37c0088f838",
+  "manifest_sha256": "8b22a13fd877b03110e302ddd6340c5df9e38f459fa0cf04a2b1ad404afc2617"
+}
