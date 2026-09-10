@@ -188,5 +188,3 @@ COMMAND: PATH=/private/tmp/goai-go1271-j1cLvq/go/bin:$PATH GOCACHE=/private/tmp/
 STDOUT+STDERR:
 ok  	github.com/jxsl13/goai/autograd	2.328s
 EXIT: 0
-
-

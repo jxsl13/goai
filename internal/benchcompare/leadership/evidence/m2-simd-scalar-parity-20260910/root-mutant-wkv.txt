@@ -1,8 +1,2 @@
-*** Begin Patch
-*** Update File: /private/tmp/goai-m2-simd-parity-policy-fOBDq3/repo/autograd/wkv_test.go
-@@
- 	requireScalarParityLayout(t, out[0], want)
-+	if arm64SIMDScalarPolicy {
-+		out[0].Storage().F64()[0] += 1
-+	}
-*** End Patch
+JSON-encoded apply_patch input (decode to preserve literal context tabs):
+"*** Begin Patch\n*** Update File: /private/tmp/goai-m2-simd-parity-policy-fOBDq3/repo/autograd/wkv_test.go\n@@\n \trequireScalarParityLayout(t, out[0], want)\n+\tif arm64SIMDScalarPolicy {\n+\t\tout[0].Storage().F64()[0] += 1\n+\t}\n*** End Patch"

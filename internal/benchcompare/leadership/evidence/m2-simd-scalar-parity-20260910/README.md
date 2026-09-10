@@ -78,4 +78,3 @@ are still required. CI's soft SIMD lane builds the tree and tests internal/simd,
 not autograd, so its success cannot replace the local full SIMD autograd gate.
 Merge commit only after qualification; delete exact remote feature branches
 only after the result reaches default main.
-
