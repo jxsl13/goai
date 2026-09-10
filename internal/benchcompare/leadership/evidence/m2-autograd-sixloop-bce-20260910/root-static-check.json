@@ -17,4 +17,3 @@
   },
   "artifact_validation_caveat": "The first root gzip-byte comparison returned exit 1 at candidate-source.stdout because decoded UTF-8 and binary-encoded Ruby strings were compared without normalizing encoding. The corrected byte comparison uses .b and verifies all 135 artifacts against original bytes, size and SHA-256. No source or captured artifact changed to obtain this pass."
 }
-

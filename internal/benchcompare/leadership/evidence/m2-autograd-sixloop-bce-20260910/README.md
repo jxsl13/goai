@@ -120,6 +120,17 @@ branch analysis, command manifests and exits. A first overbroad helper predicate
 rejected expected cold BCE findings (exit 9); the corrected hot-line predicate
 passes. Both outputs are retained. This was not a Go test or source failure.
 
+Final independent evidence review found a second recovery-helper defect:
+`fresh-tanh-freeze-check` exited 1 after assigning to zsh's read-only `status`
+variable. The embedded historical report incorrectly says that command's cmp
+exited zero. That assertion is not accepted as evidence; the raw failed command
+and report remain unmodified. The separate root source-reconstruction proof
+establishes that the complete tanh declaration remained unchanged.
+The final reviewer also decoded and hash-validated the independent baseline
+and candidate tanh extracts: both are 926 bytes with SHA-256
+`10b6ee15d51252bff1ce32ddfd089284e77f0240aa985c04955032b8c05261b0`,
+and the corrected read-only byte comparison passed.
+
 These results establish the stated M2 correctness/control-flow observations,
 not cross-platform exactness or performance leverage.
 
@@ -173,3 +184,8 @@ command on clean main `814876f1` reports the same ten, and those files are
 unchanged. `restored-spec-check.json` records 136 inherited warnings and two
 inherited record-only-context errors, with no drift or orphan bindings. These
 checks are not represented as globally clean.
+
+Outer JSON/helper EOF whitespace was normalized without changing any decoded
+artifact. The inert rejected diff retains its original whitespace, including
+diff-context prefixes before Go tabs; whitespace checks exclude that exact
+evidence file instead of rewriting the historical patch.

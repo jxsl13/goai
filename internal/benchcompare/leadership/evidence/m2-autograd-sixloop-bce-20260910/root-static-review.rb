@@ -39,4 +39,3 @@ abort 'bytes outside the six guarded-loop replacements changed' unless restored.
 oracle = File.join(root, 'autograd/vjp_bounds_internal_test.go')
 abort 'oracle changed' unless Digest::SHA256.file(oracle).hexdigest == 'bd26d0195b02e23aa1406f01f7df25fff5aa65ea81fea0c3bae9f31d3359648c'
 puts JSON.pretty_generate({ source_sha256: Digest::SHA256.hexdigest(source), base_sha256: Digest::SHA256.hexdigest(base), restored_source_matches_base: true, hot_bodies_match_original_cold_bodies: true, proof_paths: proofs, oracle_sha256: Digest::SHA256.file(oracle).hexdigest })
-
