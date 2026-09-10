@@ -49,3 +49,6 @@ WHEN ARM64 SIMD WKV tests compare CPU output with scalar host output, the compar
 
 ## ARM64-SIMD-PARITY-GUARDS-001 {applies: go:autograd_test.TestWKVOpMatchesHostWKV,go:autograd_test.TestSigmoidFocalCoreExactCompositeVJPParity}
 WHEN ARM64 SIMD F64 scalar parity tests compare tensors, the tests SHALL check dtype, shape, count, CPU execution and detached targets; reject mismatched nonfinite bits and opposite zero signs; preserve TestUnaryVJPBoundsExact.
+
+## SIXLOOP-BCE-TANH-FROZEN-001 {applies: go:autograd.tanhVJP}
+WHEN the six-loop unary bounds-proof experiment changes vjp_elementwise.go, the candidate SHALL preserve tanhVJP byte-for-byte against0d7c62fe and retain TestUnaryVJPBoundsExact unchanged, including race-enabled NaN payload checks.
