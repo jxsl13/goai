@@ -493,7 +493,7 @@ AMD64-ROW-PASS-TEST-SEMANTICS-001	go:cpu.TestSoftmaxRowPassNeonParity	backend/cp
 AMD64-ROW-PASS-TEST-SEMANTICS-001	go:cpu.TestRowMaxF32NeonSpecialValues	backend/cpu/softmax_neon_test.go	84-108	117ff68794f60d03	100df0192840ca5e
 AMD64-ROW-PASS-TEST-SEMANTICS-001	go:cpu.rowMaxF32	backend/cpu/softmax_avx_amd64.go	17-46	aa85d1c702026f18	100df0192840ca5e
 AMD64-ROW-PASS-TEST-SEMANTICS-001	go:cpu.axpbRowF32	backend/cpu/softmax_avx_amd64.go	50-65	4bb173b85e7687a9	100df0192840ca5e
-WKV-DYADIC-GOLDEN-PROVENANCE-001	go:cpu.TestWKVOpIsBitIdentical	backend/cpu/wkv_minmax_bitidentity_test.go	73-98	3445d908fd6c5376	1f1e2485aba58952
-WKV-DYADIC-GOLDEN-PROVENANCE-001	go:cpu.wkvOpDigest	backend/cpu/wkv_minmax_bitidentity_test.go	19-67	28b75137f073c958	1f1e2485aba58952
+WKV-DYADIC-GOLDEN-PROVENANCE-001	go:cpu.TestWKVOpIsBitIdentical	backend/cpu/wkv_minmax_bitidentity_test.go	34-76	3445d908fd6c5376	1f1e2485aba58952
+WKV-DYADIC-GOLDEN-PROVENANCE-001	go:cpu.wkvOpDigest	backend/cpu/wkv_minmax_bitidentity_test.go	15-26	28b75137f073c958	1f1e2485aba58952
 AMX-GENERATION-NONFINITE-ORACLE-001	go:cpu.TestGemmAMXMatchesReference	backend/cpu/gemm_amx_test.go	47-75	07040781ca4e9e11	06cf7237acdd5498
 AMX-GENERATION-NONFINITE-ORACLE-001	go:cpu.checkTolerance	backend/cpu/gemm_amx_test.go	26-41	a6b7446aaadcb8c3	06cf7237acdd5498
