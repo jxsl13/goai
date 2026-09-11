@@ -82,7 +82,7 @@ ARM64-F64-EXP-FALLBACK-001	go:simd.ExpScaledF64~2	internal/simd/simd.go	91-95	b6
 ARM64-F64-EXP-FALLBACK-001	go:simd.SigmoidF64~2	internal/simd/simd.go	99-108	588bed54fd4c6c19	36f0a91c983bb2d7
 ARM64-F64-EXP-FALLBACK-001	go:simd.SoftplusNegLLSumF64~2	internal/simd/simd.go	112-123	c901dc868591febc	36f0a91c983bb2d7
 ARM64-F64-EXP-SCOPE-001	go:cpu.vexpF64Fast~2	backend/cpu/vexp_arm64.go	13-13	816a1c01e6bd8ca7	f6e68f76ffe459b4
-ARCH-GOLD-SIMD-001	go:archgold.PickSIMD	internal/archgold/archgold.go	53-61	97955be025ebf1a1	74fa54db1fa8cafd
+ARCH-GOLD-SIMD-001	go:archgold.PickSIMD	internal/archgold/archgold.go	52-60	97955be025ebf1a1	74fa54db1fa8cafd
 ARCH-GOLD-SIMD-001	go:simd.SigmoidF64	internal/simd/exp_f64_arm64.go	88-112	a95e49d4aac85e1f	74fa54db1fa8cafd
 ARM64-F64-SSM-PERF-001	go:simd.ssmChannelNegNeonF64	internal/simd/ssm_arm64.go	8-8	14cb44602c4069e0	6bfbee8beb4846b9
 ARM64-F64-SSM-PERF-001	asm:simd.ssmChannelNegNeonF64	internal/simd/exp_f64_arm64.s	208-208	8bce3dcd2059ec00	6bfbee8beb4846b9
