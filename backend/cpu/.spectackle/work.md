@@ -48,6 +48,7 @@ WKV F64 SIMD has separately approximated vector exponentials/FMA recurrence. Two
 Migrate exact tests to architecture-identical dyadic fixtures with separate GOARCH/default/SIMD output digests. Retain legacy Sin/Cos vectors as non-golden CPU-vs-reference accuracy coverage, and retain the independent scan/state/chunk/range/F32 exactness suites. Harvest AMD64 default and SIMD output values from native CI only, never Rosetta. Add explicit provenance and input-digest consistency checks.
 Contract reconciliation required: ARCH-GOLD-SIMD-001 protects unchanged-fixture default goldens when an implementation intentionally changes FP bits. This proposal changes neither runtime nor implementation arithmetic; it replaces an invalid fixture under FP-GOLDENS-ARE-PER-ARCH-001. Record this narrow distinction in an ADR and independently review before migration, with old fixtures retained for accuracy rather than silently weakening them.
 Independent research by goai-amd64-cpu-ci-parity-research used code, original scope contracts, and native logs; no local native AMD64 run, source mutation, or benchmark claim. Root confirmed exact source and contract texts. Native production-path tests, no placeholder goldens or silent skips, reached mutations, and full exact-head CI remain acceptance gates.
+Phase A consumed by ADR-01M276PVRWEA0, P-01M276R107ERM and active T-01M276SRXTEV1. Signed source commit 1ba7deb6 adds the five reviewed test/CI/comment files only. Legacy WKV goldens and production softmax/WKV remain unchanged. Fresh independent verifier reran Go1.27.1 CGO0 default vet, default/SIMD CPU+internal/simd short tests, default/SIMD focused WKV provenance and Darwin/AMD64 SIMD cross-compilation: exits0, empty stderr, final source hashes unchanged. Root verified capture integrity and all8rows/fourchildren/top-levelPASS per native ARM64 mode. Cross-compilation is build evidence only. Native Linux/Windows agreement, Phase B exact assertions, reached mutations, final review and full exact-head CI remain outstanding; no final acceptance/archive or speed claim. Normal submit kept the task active. Full Spectackle check retains only138 pre-existing wording/context findings; no new drift.
 
 ## R-01M274Z25WFEKBS9T4K98AMA43 Diagnose native ARM64 CI AMX GEMM numerical failures
 kind: research
@@ -108,7 +109,7 @@ review pass goai-amd64-test-provenance-plan-reviewer :: PASS. [correctness] The 
 
 ## T-01M276SRXTEV1VXTEZKHNZKMWE Add native AVX coverage and migrate WKV digest fixtures in two phases
 kind: task
-state: approved
+state: active
 created: 2026-09-11
 parent: P-01M276R107ERMRVRXBNW27ZYNG
 refs: R-01M274Z1NSFX7T8K4QJMCD7XKB, ADR-01M276PVRWEA0RV0ZFJR4GXF8D
