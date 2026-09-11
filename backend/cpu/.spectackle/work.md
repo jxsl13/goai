@@ -108,7 +108,7 @@ review pass goai-amd64-test-provenance-plan-reviewer :: PASS. [correctness] The 
 
 ## T-01M276SRXTEV1VXTEZKHNZKMWE Add native AVX coverage and migrate WKV digest fixtures in two phases
 kind: task
-state: draft
+state: approved
 created: 2026-09-11
 parent: P-01M276R107ERMRVRXBNW27ZYNG
 refs: R-01M274Z1NSFX7T8K4QJMCD7XKB, ADR-01M276PVRWEA0RV0ZFJR4GXF8D
