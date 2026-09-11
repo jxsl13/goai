@@ -92,7 +92,7 @@ review pass goai-amd64-test-provenance-plan-reviewer :: PASS. [correctness] The 
 
 ## P-01M276R107ERMRVRXBNW27ZYNG Repair AMD64 SIMD test scope and WKV native golden provenance
 kind: proposal
-state: draft
+state: approved
 created: 2026-09-11
 refs: R-01M274Z1NSFX7T8K4QJMCD7XKB, ADR-01M276PVRWEA0RV0ZFJR4GXF8D, T-01M26Z9CN6E8SV0092QSY8BWD1
 grilled: 2026-09-11 open=0
