@@ -477,3 +477,14 @@ VJP-ARCH-CODEGEN-001	go:autograd.unaryVJP	autograd/vjp_elementwise.go	18-50	a498
 VJP-ARCH-CODEGEN-001	go:autograd.reluVJP	autograd/vjp_elementwise.go	112-148	60c82c25f3b736e6	fca74884aa9eed2b
 VJP-ARCH-CODEGEN-001	go:autograd.sigmoidVJP	autograd/vjp_elementwise.go	195-216	629480a7cf6758d8	fca74884aa9eed2b
 VJP-NATIVE-CI-001	go:autograd.TestUnaryVJPBoundsExact	autograd/vjp_bounds_internal_test.go	379-524	cfa1c39357aa3207	78966bde7a2e7430
+ARM64-CAUSAL-BWD-EXACT-001	go:cpu.mhaBwdGemmBand	backend/cpu/mha.go	779-849	df73b91643cc5c99	da11bb028d524a74
+ARM64-CAUSAL-BWD-EXACT-001	go:cpu.mhaBwdGemmF32	backend/cpu/mha.go	704-775	0b03a81aed25e5c0	da11bb028d524a74
+ARM64-CAUSAL-BWD-PERF-001	go:cpu.mhaBwdGemmF32	backend/cpu/mha.go	704-775	0b03a81aed25e5c0	f13b23fc0ca40233
+ARM64-CAUSAL-BWD-SCOPE-001	go:cpu.mhaBwdGemmBand	backend/cpu/mha.go	779-849	df73b91643cc5c99	c9716df50269274e
+ARM64-CAUSAL-BWD-SCOPE-001	go:cpu.mhaBwdGemmF32	backend/cpu/mha.go	704-775	0b03a81aed25e5c0	c9716df50269274e
+CPU-MHA-NATIVE-ORACLE-CI-001	go:cpu.mhaBwdGemmBand	backend/cpu/mha.go	779-849	df73b91643cc5c99	cf7abb0be785db70
+ARM64-CAUSAL-BWD-EXACT-002	go:cpu.mhaBwdGemmBand	backend/cpu/mha.go	779-849	df73b91643cc5c99	da11bb028d524a74
+ARM64-CAUSAL-BWD-EXACT-002	go:cpu.mhaBwdGemmF32	backend/cpu/mha.go	704-775	0b03a81aed25e5c0	da11bb028d524a74
+ARM64-CAUSAL-BWD-PERF-002	go:cpu.mhaBwdGemmF32	backend/cpu/mha.go	704-775	0b03a81aed25e5c0	f13b23fc0ca40233
+ARM64-CAUSAL-BWD-SCOPE-002	go:cpu.mhaBwdGemmBand	backend/cpu/mha.go	779-849	df73b91643cc5c99	c9716df50269274e
+ARM64-CAUSAL-BWD-SCOPE-002	go:cpu.mhaBwdGemmF32	backend/cpu/mha.go	704-775	0b03a81aed25e5c0	c9716df50269274e
