@@ -183,3 +183,33 @@ Rationale: Target Go1.27.1 M2 Pro CGO0 SIMD GOMAXPROCS12; significant means p<0.
 WHEN the call is outside eligible arm64 SIMD causal backward pruning, the CPU backend SHALL preserve prior execution with 0 changes to forward, F64, generic drivers, AMD64, default builds, noncausal calls, or backward band size 128.
 
 Rationale: Pure Go algorithm/layout experiment, not forward-copy or worker-pool tuning. Window!=0 and exceptional inputs may use unchanged fallback.
+
+## AMX-GENERATION-LOAD-WIDTH-001 {applies: go:cpu.amxSupported,go:cpu.gemmF32TileAMX32x32,asm:cpu.gemmF32TileAMX32x32}
+WHEN raw AMX dispatch selects a tile, the dispatcher SHALL use pair loads for exact M1 families and quad loads for exact M2/M3 families, retaining portable fallback for unsupported names or sysctl failures.
+
+Rationale: R-01M274Z25WFEK: M1 ignores AMX load descriptor bit 60; the previous M1/M2/M3 predicate incorrectly enabled the M2 quad-load loop on M1. Do not disable supported M1 arithmetic or infer generation capability from AMX presence.
+
+## AMX-GENERATION-NUMERICS-001 {applies: asm:cpu.gemmF32TileAMX32x32,go:cpu.TestGemmAMXMatchesReference}
+WHEN a generation-specific AMX tile executes, the tile SHALL accumulate K in ascending FMA order, overwrite the complete 32x32 destination, remain non-calling between AMX_SET and AMX_CLR, and satisfy CPU-002 for tails and repeated calls.
+
+Rationale: The generation repair must fix missing input register loads without changing reduction order, leaving stale destination elements, skipping M1 tests, or widening tolerances. Pair versus quad finite bits are expected identical on hardware supporting both paths.
+
+## AMX-GENERATION-M2-PRESERVATION-001 {applies: go:cpu.gemmF32AMXCompute}
+WHEN the generation repair is qualified on M2, the report SHALL compare identical prebuilt harnesses across five shapes and three interleaved count-seven campaigns, blocking reproducible significant regressions above 3 percent or allocation increases without claiming M1 speed.
+
+Rationale: P-01M275KYPYFG0 freezes Go 1.27.1 CGO0 SIMD GOMAXPROCS12, 500 ms per cell, retained excluded warmups, separate reviewed preflight, no concurrent owned work or sample selection, and unchanged packing/pool thresholds. Public Git contains source, small sanitized samples, and authored summaries only.
+
+## AMD64-ROW-PASS-TEST-SEMANTICS-001 {applies: go:cpu.TestSoftmaxRowPassNeonParity,go:cpu.TestRowMaxF32NeonSpecialValues,go:cpu.rowMaxF32,go:cpu.axpbRowF32}
+WHEN AMD64 SIMD row-pass tests execute, the tests SHALL check native VMAXPS lane reduction, fused vector affine prefixes, rounded scalar tails, exact scaling, special values, and input preservation while ARM64 retains its separate scalar-bit contract.
+
+Rationale: P-01M276R107ERM repairs test scoping only. Existing AVX MulAdd/Max behavior must not be changed to satisfy ARM64-only tests; preserve the full end-to-end softmax reference gate.
+
+## WKV-DYADIC-GOLDEN-PROVENANCE-001 {applies: go:cpu.TestWKVOpIsBitIdentical,go:cpu.wkvOpDigest}
+WHEN WKV replacement goldens are frozen, the exact test SHALL use architecture-identical dyadic inputs, separate native architecture/build-mode output digests, and retain legacy fixture reference parity without widening tolerances or treating diagnostic output as golden acceptance.
+
+Rationale: ADR-01M276PVRWEA0 separates prohibited-fixture migration from implementation-induced bit changes. No valid unchanged-fixture default golden changes. Native AMD64 Ubuntu/Windows values must agree; Rosetta is forbidden for harvesting.
+
+## AMX-GENERATION-NONFINITE-ORACLE-001 {applies: go:cpu.TestGemmAMXMatchesReference,go:cpu.checkTolerance}
+WHEN AMX generation parity is checked, the oracle SHALL reject nonfinite results from finite inputs, verify all 1024 tile elements are overwritten, compare nonfinite classes explicitly, and check required zero signs before finite tolerances.
+
+Rationale: A diff > limit comparison alone accepts NaN silently. The generation repair needs a non-vacuous class-aware reference and reached load-width mutation evidence.
