@@ -321,3 +321,5 @@
 {"t":"2026-09-11T03:23:02Z","eid":"5b8d459aa23a75ac","ag":"goai-amd64-test-provenance-implementer","ev":"move","id":"T-01M276SRXTEV1VXTEZKHNZKMWE","dir":"backend/cpu","fr":"approved","to":"active"}
 {"t":"2026-09-11T03:49:54Z","eid":"15cc0b245dbe9b5f","ag":"goai-amd64-test-provenance-implementer","ev":"submit","id":"T-01M276SRXTEV1VXTEZKHNZKMWE","dir":"backend/cpu","note":"branch spectackle/T-01M276SRXTEV1: 16 events, 1 rules, 5 items replayed"}
 {"t":"2026-09-11T03:52:12Z","eid":"7f3b7b855d213963","ag":"goai-amd64-test-provenance-root","ev":"revise","id":"R-01M274Z1NSFX7T8K4QJMCD7XKB","dir":"backend/cpu","note":"body revised"}
+{"t":"2026-09-11T04:02:31Z","eid":"4ab803e40c01f836","ag":"goai-amx-generation-root","ev":"revise","id":"R-01M274Z25WFEKBS9T4K98AMA43","dir":"backend/cpu","note":"body revised"}
+{"t":"2026-09-11T04:08:12Z","eid":"74b76e7bfab21141","ag":"goai-amd64-test-provenance-root","ev":"revise","id":"R-01M274Z1NSFX7T8K4QJMCD7XKB","dir":"backend/cpu","note":"body revised"}
