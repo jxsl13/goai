@@ -1515,3 +1515,5 @@
 {"t":"2026-09-11T01:56:41Z","eid":"d86d1e77896bcb0f","ag":"goai-cpu-attention-publication","ev":"start","id":"T-01M272G830EXEVGSXB933R2YPA","note":"branch spectackle/T-01M272G830EXE base 2bc5836f5112"}
 {"t":"2026-09-11T00:00:16Z","eid":"b8b714a57bc2c759","ag":"goai-cpu-attention-implementer","ev":"move","id":"T-01M26VPHRVFAN9H0KKJJ69ZQBF","fr":"approved","to":"active"}
 {"t":"2026-09-11T02:03:48Z","eid":"e79f444ba0d942e4","ag":"goai-cpu-attention-implementer","ev":"submit","id":"T-01M26VPHRVFAN9H0KKJJ69ZQBF","note":"branch spectackle/T-01M26VPHRVFAN: 21 events, 6 rules, 3 items replayed"}
+{"t":"2026-09-11T01:16:08Z","eid":"ec415a357dc71ecc","ag":"goai-cpu-attention-ci","ev":"move","id":"T-01M26Z9CN6E8SV0092QSY8BWD1","fr":"approved","to":"active"}
+{"t":"2026-09-11T02:12:39Z","eid":"8c966ff5410e35bf","ag":"goai-cpu-attention-ci","ev":"submit","id":"T-01M26Z9CN6E8SV0092QSY8BWD1","note":"branch spectackle/T-01M26Z9CN6E8S: 36 events, 7 rules, 4 items replayed"}
