@@ -4081,7 +4081,7 @@ Prepare only the reproducible small-data publication layer for the current AMX g
 
 ## T-01M27D9R9VE3XSWB6GA97YX8G8 Build and validate small AMX generation measurement fixtures
 kind: task
-state: approved
+state: active
 created: 2026-09-11
 parent: P-01M27D7A38FX8A22KEP6HFPAQ5
 refs: R-01M274Z25WFEKBS9T4K98AMA43, T-01M275SM1PFSZT5K41GNKGS91A
