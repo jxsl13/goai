@@ -3988,6 +3988,7 @@ FOLLOW-UP VALIDATION: Root audited candidate oracle45 matching distinct RUN/PASS
 INDEPENDENT GATES: Fresh verifier confirmed retained-row tiling proof (non-final cutoff multiple128/4, same NEON4x16 and dk-driven scalar column tails). gofmt PASS. Full CGO0 default test exit1 only baseline DiffusionLMGrammarE2E; scoped CGO0 SIMD CPU/benchcompare/autograd PASS, NLP exit1 only baseline diffusion and PRM margin. CGO1 SIMD CPU/benchcompare PASS. All have empty stderr. Markdown lint exit1 with10 findings in unchanged docs/gguf.md, docs/perf-notes-training.md and internal/perfscan/PATTERNS.md; root confirms those files and linter source have no baseline diff. No test/lint tolerance relaxed and aggregate non-green results remain explicit. Fresh CI verifier found no defect: all13 output fixtures and native-arch positive/negative fixtures have expected exits,11 existing jobs unchanged. No final verdict/archive: native exact-head3OS and performance qualification still open. For the predeclared confirmations, interpret near5% conservatively as min-max/median <=5.00% in each arm for a sub10% target claim; this tightens precision before any confirmation result, not post-hoc relaxation.
 CONFIRMATION01 / REJECTION:48 clean invocations,144 rows (18 excluded warmup,126 retained),7 alternating-order pairs at2s allcells. Independent audit matches everyCSV row to rawstdout and each63-row measured bench arm; all binary hashes match. S256 median872829→787617ns p=.535, arm spreads10.39/31.10%, FAIL significance and sub10% spread. S5123039470→2503479ns(-17.63%,p=.017); S102411541344→9640173(-16.47%,p=.001). GPT latency60932114→59333009 p=.805 not significant; B/op+2.01% p=.007 and allocs2744→2750(+.22%,p=.005). Target backward18alloc/op botharms. Allocation regression is observed, its source-level cause NOT identified; do not infer one-per-layer causality from+6 alone.
 CONSERVATIVE FUTILITY STOP: First confirmation is valid and permanently non-qualifying, so the fixed three-campaign requirement cannot be met without forbidden replacement. Root and independent verifier support failed-valid-pilot stop. Planned confirmation02/03 NOT RUN (explicit departure from planned count solely for rejection, no positive inference, no replacement/resampling). Runtime withdrawn; backend/cpu/mha.go restored byte-for-byte baseline SHA bfeb5d479c52bccd774782e376b32fbcbb4c596a400aefa34a429f0658c4a43c. Both prototype helper files moved unchanged to local private storage, recoverable; no productiondiff remains. Oracle/harness and hardCI retained. Small source-only withdrawn patch plus288 sanitized pilot02/confirmation01 rows planned under new supporting T-01M272G830EXE; fullcaptures/binaries/private documents remain outsidepublicGit. Revisedruntime would be a new candidate needing fresh evidence, not revival by thresholdchange.
+FINAL LOCAL INTEGRATION: Main oracle/harness, supporting hard CI, and five-file sanitized publication fixture are integrated. Independent publication verification passed: exact288rows, two deterministic regenerations, all22 adversarial cases, exact three-source patch reconstruction and independent Mann-Whitney p-value reproduction. Corrected paired-test wording only; data and rejection decision unchanged. Fixture59,194bytes total, CSV34,813bytes. Root actual combined-tree native ARM64 architecture/full-short-CPU/44-case guard PASS exit0/stderr0. Changed documentation markdown lint PASS. All runtime files remain byte-identical to baseline. Replayed duplicate contracts were inspected and retired through API while retaining originals/rationales. Exact-head three-OS native CI remains required before final acceptance/archive/merge.
 
 ## P-01M26VM9ATEMAA8NVEKC692E71 Measure and gate causal CPU attention backward work pruning
 kind: proposal
@@ -4001,7 +4002,7 @@ Consume R-01M26VGN74EMG after its source review. Investigate the remaining full-
 
 ## T-01M26VPHRVFAN9H0KKJJ69ZQBF Build the CPU attention attribution harness and gate one causal backward prototype
 kind: task
-state: approved
+state: active
 created: 2026-09-10
 parent: P-01M26VM9ATEMAA8NVEKC692E71
 refs: R-01M26VGN74EMGSGJ2SQTFH07NJ
@@ -4018,7 +4019,7 @@ PUBLICATION: Only source/small sanitized fixture/CSV/concise authored summary an
 
 ## T-01M26Z9CN6E8SV0092QSY8BWD1 Run the frozen CPU MHA backward oracle on native SIMD CI
 kind: task
-state: approved
+state: active
 created: 2026-09-11
 parent: P-01M26VM9ATEMAA8NVEKC692E71
 refs: R-01M26VGN74EMGSGJ2SQTFH07NJ, T-01M26VPHRVFAN9H0KKJJ69ZQBF

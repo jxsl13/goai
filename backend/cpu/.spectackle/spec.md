@@ -183,21 +183,3 @@ Rationale: Target Go1.27.1 M2 Pro CGO0 SIMD GOMAXPROCS12; significant means p<0.
 WHEN the call is outside eligible arm64 SIMD causal backward pruning, the CPU backend SHALL preserve prior execution with 0 changes to forward, F64, generic drivers, AMD64, default builds, noncausal calls, or backward band size 128.
 
 Rationale: Pure Go algorithm/layout experiment, not forward-copy or worker-pool tuning. Window!=0 and exceptional inputs may use unchanged fallback.
-
-## ARM64-CAUSAL-BWD-EXACT-002 {applies: go:cpu.mhaBwdGemmBand,go:cpu.mhaBwdGemmF32}
-WHEN arm64 SIMD causal backward pruning executes, the CPU implementation SHALL preserve all 3 gradients, input immutability, finite-result bits, signed-zero bits, and nonfinite classes against the frozen full-rectangle algorithm.
-
-## ARM64-CAUSAL-BWD-PERF-002 {applies: go:cpu.mhaBwdGemmF32}
-WHEN causal backward pruning is promoted, the gate SHALL require 3 interleaved count-seven campaigns with significant whole-backward gains at seq256/512, 0 reproducible GPT/control regressions above 3 percent, and 0 allocation increases.
-
-## ARM64-CAUSAL-BWD-SCOPE-002 {applies: go:cpu.mhaBwdGemmBand,go:cpu.mhaBwdGemmF32}
-WHEN the call is outside eligible arm64 SIMD causal backward pruning, the CPU backend SHALL preserve prior execution with 0 changes to forward, F64, generic drivers, AMD64, default builds, noncausal calls, or backward band size 128.
-
-## ARM64-CAUSAL-BWD-EXACT-003 {applies: go:cpu.mhaBwdGemmBand,go:cpu.mhaBwdGemmF32}
-WHEN arm64 SIMD causal backward pruning executes, the CPU implementation SHALL preserve all 3 gradients, input immutability, finite-result bits, signed-zero bits, and nonfinite classes against the frozen full-rectangle algorithm.
-
-## ARM64-CAUSAL-BWD-PERF-003 {applies: go:cpu.mhaBwdGemmF32}
-WHEN causal backward pruning is promoted, the gate SHALL require 3 interleaved count-seven campaigns with significant whole-backward gains at seq256/512, 0 reproducible GPT/control regressions above 3 percent, and 0 allocation increases.
-
-## ARM64-CAUSAL-BWD-SCOPE-003 {applies: go:cpu.mhaBwdGemmBand,go:cpu.mhaBwdGemmF32}
-WHEN the call is outside eligible arm64 SIMD causal backward pruning, the CPU backend SHALL preserve prior execution with 0 changes to forward, F64, generic drivers, AMD64, default builds, noncausal calls, or backward band size 128.
