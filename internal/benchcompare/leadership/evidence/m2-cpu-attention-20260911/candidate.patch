@@ -1,0 +1,94 @@
+diff --git a/backend/cpu/mha.go b/backend/cpu/mha.go
+index 341463b..79964c7 100644
+--- a/backend/cpu/mha.go
++++ b/backend/cpu/mha.go
+@@ -839,11 +839,14 @@ func mhaBwdGemmBand(q, g, dQ, pack []float32, partK, partV []float32, geo mhaGeo
+-	for r := range iN {
++	if mhaBwdCausalPartials(qb, gb, sb, da, pt, dat, partK, partV, geo, i0, iN) {
++		return
++	}
++	for r := range iN {
++		pr := sb[r*seq : (r+1)*seq : (r+1)*seq]
++		dar := da[r*seq : (r+1)*seq : (r+1)*seq]
++		for j := range seq {
++			pt[j*iN+r] = pr[j]
++			dat[j*iN+r] = dar[j]
++		}
++	}
++	gemmF32Rows(pt, gb, partV, 0, seq, iN, dk)
++	gemmF32Rows(dat, qb, partK, 0, seq, iN, dk)
+-		pr := sb[r*seq : (r+1)*seq : (r+1)*seq]
+-		dar := da[r*seq : (r+1)*seq : (r+1)*seq]
+-		for j := range seq {
+-			pt[j*iN+r] = pr[j]
+-			dat[j*iN+r] = dar[j]
+-		}
+-	}
+-	gemmF32Rows(pt, gb, partV, 0, seq, iN, dk)
+-	gemmF32Rows(dat, qb, partK, 0, seq, iN, dk)
+ }
+diff --git a/backend/cpu/mha_bwd_causal_arm64.go b/backend/cpu/mha_bwd_causal_arm64.go
+new file mode 100644
+index 0000000..1185006
+--- /dev/null
++++ b/backend/cpu/mha_bwd_causal_arm64.go
+@@ -0,0 +1,43 @@
++//go:build arm64 && goexperiment.simd
++
++package cpu
++
++import "math"
++
++// mhaBwdCausalPartials computes the dK/dV partial rows whose causal mask can
++// contain live products. Rows at and beyond cutoff=i0+iN have P=dS=+0 for the
++// whole band. With finite packed Q/dO, their incumbent products are therefore
++// sums of signed zero and exactly +0; clearing those raw-scratch output rows is
++// bit-identical. Nonfinite Q/dO must retain the full GEMMs because 0*Inf/NaN is
++// NaN. K/V need no guard: they affect live P/dS, while the masked suffix is
++// explicitly cleared before this point.
++func mhaBwdCausalPartials(qb, gb, sb, da, pt, dat, partK, partV []float32, geo mhaGeo, i0, iN int) bool {
++	cutoff := i0 + iN
++	if !geo.causal || geo.off != 0 || cutoff >= geo.sq ||
++		!mhaBwdCausalPackedFinite(qb) || !mhaBwdCausalPackedFinite(gb) {
++		return false
++	}
++	seq, dk := geo.sq, geo.dk
++	for r := range iN {
++		pr := sb[r*seq : (r+1)*seq : (r+1)*seq]
++		dar := da[r*seq : (r+1)*seq : (r+1)*seq]
++		for j := range cutoff {
++			pt[j*iN+r] = pr[j]
++			dat[j*iN+r] = dar[j]
++		}
++	}
++	gemmF32Rows(pt, gb, partV, 0, cutoff, iN, dk)
++	gemmF32Rows(dat, qb, partK, 0, cutoff, iN, dk)
++	clear(partV[cutoff*dk:])
++	clear(partK[cutoff*dk:])
++	return true
++}
++
++func mhaBwdCausalPackedFinite(x []float32) bool {
++	for _, v := range x {
++		if math.Float32bits(v)&0x7f800000 == 0x7f800000 {
++			return false
++		}
++	}
++	return true
++}
+diff --git a/backend/cpu/mha_bwd_causal_default.go b/backend/cpu/mha_bwd_causal_default.go
+new file mode 100644
+index 0000000..16708ff
+--- /dev/null
++++ b/backend/cpu/mha_bwd_causal_default.go
+@@ -0,0 +1,10 @@
++//go:build !(arm64 && goexperiment.simd)
++
++package cpu
++
++// The causal partial-row pilot is ARM64+SIMD only. This constant-false stub is
++// inlined away so default and non-ARM64 builds retain the incumbent transpose
++// and full dK/dV GEMMs without a runtime branch or frame change.
++func mhaBwdCausalPartials([]float32, []float32, []float32, []float32, []float32, []float32, []float32, []float32, mhaGeo, int, int) bool {
++	return false
++}
