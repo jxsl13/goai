@@ -168,3 +168,36 @@ Rationale: This is an attribution experiment before a SIMD redesign; scalar erf 
 WHEN three campaigns measure 2048-element GOMAXPROCS1/12 and 262144-element GOMAXPROCS12 controls, the direct-call GELU promotion gate SHALL reject reproducible time regressions above 3 percent or allocation increases.
 
 Rationale: Retain all raw samples, discarded warmup boundaries, frozen binary hashes and build flags; small effects must satisfy PROC-INTERLEAVE-001. Preserve the AMD64 SIMD route and do not enable the ARM64 GELU SIMD gate.
+
+## ARM64-CAUSAL-BWD-EXACT-001 {applies: go:cpu.mhaBwdGemmBand,go:cpu.mhaBwdGemmF32}
+WHEN arm64 SIMD causal backward pruning executes, the CPU implementation SHALL preserve all 3 gradients, input immutability, finite-result bits, signed-zero bits, and nonfinite classes against the frozen full-rectangle algorithm.
+
+Rationale: R-01M26VGN74EMG: masked 0*x is not safely removable for nonfinite operands. Explicit fallback must preserve exceptional semantics. CPU-002 reference tolerance is unchanged; this candidate additionally preserves current finite bits.
+
+## ARM64-CAUSAL-BWD-PERF-001 {applies: go:cpu.mhaBwdGemmF32}
+WHEN causal backward pruning is promoted, the gate SHALL require 3 interleaved count-seven campaigns with significant whole-backward gains at seq256/512, 0 reproducible GPT/control regressions above 3 percent, and 0 allocation increases.
+
+Rationale: Target Go1.27.1 M2 Pro CGO0 SIMD GOMAXPROCS12; significant means p<0.05. Warmup retained/excluded; medians and dispersion required; sub10% claims require near5% arm spread. PERF-010 force-off establishes removable whole-operation work. No external leadership claim from internal A/B.
+
+## ARM64-CAUSAL-BWD-SCOPE-001 {applies: go:cpu.mhaBwdGemmBand,go:cpu.mhaBwdGemmF32}
+WHEN the call is outside eligible arm64 SIMD causal backward pruning, the CPU backend SHALL preserve prior execution with 0 changes to forward, F64, generic drivers, AMD64, default builds, noncausal calls, or backward band size 128.
+
+Rationale: Pure Go algorithm/layout experiment, not forward-copy or worker-pool tuning. Window!=0 and exceptional inputs may use unchanged fallback.
+
+## ARM64-CAUSAL-BWD-EXACT-002 {applies: go:cpu.mhaBwdGemmBand,go:cpu.mhaBwdGemmF32}
+WHEN arm64 SIMD causal backward pruning executes, the CPU implementation SHALL preserve all 3 gradients, input immutability, finite-result bits, signed-zero bits, and nonfinite classes against the frozen full-rectangle algorithm.
+
+## ARM64-CAUSAL-BWD-PERF-002 {applies: go:cpu.mhaBwdGemmF32}
+WHEN causal backward pruning is promoted, the gate SHALL require 3 interleaved count-seven campaigns with significant whole-backward gains at seq256/512, 0 reproducible GPT/control regressions above 3 percent, and 0 allocation increases.
+
+## ARM64-CAUSAL-BWD-SCOPE-002 {applies: go:cpu.mhaBwdGemmBand,go:cpu.mhaBwdGemmF32}
+WHEN the call is outside eligible arm64 SIMD causal backward pruning, the CPU backend SHALL preserve prior execution with 0 changes to forward, F64, generic drivers, AMD64, default builds, noncausal calls, or backward band size 128.
+
+## ARM64-CAUSAL-BWD-EXACT-003 {applies: go:cpu.mhaBwdGemmBand,go:cpu.mhaBwdGemmF32}
+WHEN arm64 SIMD causal backward pruning executes, the CPU implementation SHALL preserve all 3 gradients, input immutability, finite-result bits, signed-zero bits, and nonfinite classes against the frozen full-rectangle algorithm.
+
+## ARM64-CAUSAL-BWD-PERF-003 {applies: go:cpu.mhaBwdGemmF32}
+WHEN causal backward pruning is promoted, the gate SHALL require 3 interleaved count-seven campaigns with significant whole-backward gains at seq256/512, 0 reproducible GPT/control regressions above 3 percent, and 0 allocation increases.
+
+## ARM64-CAUSAL-BWD-SCOPE-003 {applies: go:cpu.mhaBwdGemmBand,go:cpu.mhaBwdGemmF32}
+WHEN the call is outside eligible arm64 SIMD causal backward pruning, the CPU backend SHALL preserve prior execution with 0 changes to forward, F64, generic drivers, AMD64, default builds, noncausal calls, or backward band size 128.
