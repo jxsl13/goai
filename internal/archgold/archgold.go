@@ -20,10 +20,9 @@
 // arch still gets a full bit-exact assertion — nothing is weakened to a tolerance — and a
 // reordering on either one is still caught.
 //
-// The amd64 values are trustworthy from an Apple-silicon dev box: `GOARCH=amd64 go test` runs under
-// Rosetta 2 and reproduces CI exactly. TestQRVJPIsBitIdentical reports the same digests under
-// Rosetta as on GitHub's ubuntu-latest and windows-latest runners, so one golden per arch class is
-// sufficient and can be regenerated locally.
+// Rosetta 2 can help diagnose an amd64 failure from an Apple-silicon development box, but it is not
+// a golden-generation environment. Record amd64 floating-point goldens on native CI runners and
+// require the native Linux and Windows values to agree before freezing them.
 package archgold
 
 import "runtime"

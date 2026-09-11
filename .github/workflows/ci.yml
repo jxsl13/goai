@@ -141,7 +141,7 @@ jobs:
         shell: bash
         run: |
           BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
-          go run ./internal/cichange -run "$BASE" HEAD -- -short -count=1 -timeout 10m
+          go run ./internal/cichange -run "$BASE" HEAD -- -v -short -count=1 -timeout 10m
       # §V5: benchmarks must at least build and run one iteration.
       - name: smoke-run every benchmark once (they must at least build+run, §V5)
         shell: bash
