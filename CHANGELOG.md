@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### test -- verify native AVX semantics and freeze dyadic WKV fixtures (T-01M276SRXTEV1, 2026-09-11)
+
+ARM64-only softmax bit checks now have explicit architecture constraints and
+independent, non-skipping AMD64 AVX/FMA replacements. Exact WKV assertions use
+frozen dyadic inputs and separate native architecture/build-mode digests,
+harvested from agreeing Linux/Windows runs and independently checked ARM64
+results. The original transcendental fixtures remain as reference-accuracy
+tests with unchanged tolerances. Input/output corruption mutations fail all
+eight exact cases; production arithmetic is unchanged. Final native CI
+qualification remains required before merge. Raw captures and binaries stay
+private; no performance gain is claimed by these test-only changes.
+
 ### test -- freeze CPU MHA backward exactness and benchmark its full cost (T-01M26VPHRVFAN, 2026-09-11)
 
 A production-called 44-case oracle checks all three attention gradients,
