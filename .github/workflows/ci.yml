@@ -453,6 +453,128 @@ jobs:
           GOEXPERIMENT=simd go test -short -count=1 -v -run '^TestKANForwardIsBitIdentical$' ./nn
           GOEXPERIMENT=simd go test -short -count=1 -v -run '^Test(VsiluF64(Accuracy|Arm64(Accuracy|VectorTailBitIdentity|Edges))|ExpF64polyMatchesVector)$' ./backend/cpu
 
+  # The soft SIMD lane exercises selected primitives. This independent hard
+  # gate runs the complete short CPU package and proves that all frozen MHA
+  # backward oracle cases execute on the expected native architecture.
+  mha-exact:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    name: strict MHA backward oracle / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            expected_arch: amd64
+          - os: windows-latest
+            expected_arch: amd64
+          - os: macos-latest
+            expected_arch: arm64
+    env:
+      CGO_ENABLED: "0"
+      GOEXPERIMENT: simd
+      GOFLAGS: ""
+      GOPROXY: direct
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.1"
+          cache: false
+      - uses: ./.github/actions/go-build-cache
+        with:
+          lane: mha-exact-${{ matrix.os }}
+      - name: assert native runner architecture
+        shell: bash
+        run: |
+          set -u
+          goarch="$(go env GOARCH)"
+          gohostarch="$(go env GOHOSTARCH)"
+          uname_arch="$(uname -m)"
+          printf 'expected=%s GOARCH=%s GOHOSTARCH=%s uname=%s\n' \
+            '${{ matrix.expected_arch }}' "$goarch" "$gohostarch" "$uname_arch"
+          case '${{ matrix.expected_arch }}' in
+            amd64)
+              [ "$goarch" = amd64 ] || { echo "native architecture guard: GOARCH=$goarch, want amd64" >&2; exit 1; }
+              [ "$gohostarch" = amd64 ] || { echo "native architecture guard: GOHOSTARCH=$gohostarch, want amd64" >&2; exit 1; }
+              case "$uname_arch" in
+                amd64|x86_64) ;;
+                *) echo "native architecture guard: uname=$uname_arch, want amd64/x86_64" >&2; exit 1 ;;
+              esac
+              ;;
+            arm64)
+              [ "$goarch" = arm64 ] || { echo "native architecture guard: GOARCH=$goarch, want arm64" >&2; exit 1; }
+              [ "$gohostarch" = arm64 ] || { echo "native architecture guard: GOHOSTARCH=$gohostarch, want arm64" >&2; exit 1; }
+              case "$uname_arch" in
+                arm64|aarch64) ;;
+                *) echo "native architecture guard: uname=$uname_arch, want arm64/aarch64" >&2; exit 1 ;;
+              esac
+              ;;
+            *)
+              echo 'native architecture guard: unsupported matrix expectation' >&2
+              exit 1
+              ;;
+          esac
+      - name: run complete short CPU package and require exact MHA backward oracle
+        shell: bash
+        run: |
+          set -u
+          output_path="$RUNNER_TEMP/mha-exact-${{ matrix.os }}.stdout"
+          error_path="$RUNNER_TEMP/mha-exact-${{ matrix.os }}.stderr"
+          run_raw_path="$RUNNER_TEMP/mha-exact-${{ matrix.os }}.run-raw"
+          pass_raw_path="$RUNNER_TEMP/mha-exact-${{ matrix.os }}.pass-raw"
+          run_names_path="$RUNNER_TEMP/mha-exact-${{ matrix.os }}.run-names"
+          pass_names_path="$RUNNER_TEMP/mha-exact-${{ matrix.os }}.pass-names"
+          test_rc=0
+          go test -v -short -count=1 -timeout 1800s ./backend/cpu >"$output_path" 2>"$error_path" || test_rc=$?
+          cat "$output_path"
+          cat "$error_path" >&2
+          if [ "$test_rc" -ne 0 ]; then
+            exit "$test_rc"
+          fi
+          [ -s "$output_path" ] || { echo 'strict MHA backward oracle guard: empty test output' >&2; exit 1; }
+          [ ! -s "$error_path" ] || { echo 'strict MHA backward oracle guard: test emitted stderr' >&2; exit 1; }
+          [ "$(grep -Fxc '=== RUN   TestMHABwdCausalFrozenCurrentExact' "$output_path")" -eq 1 ] || {
+            echo 'strict MHA backward oracle guard: expected exactly one top-level RUN record' >&2
+            exit 1
+          }
+          [ "$(grep -Ec '^--- PASS: TestMHABwdCausalFrozenCurrentExact \([0-9.]+s\)$' "$output_path")" -eq 1 ] || {
+            echo 'strict MHA backward oracle guard: expected exactly one top-level PASS record' >&2
+            exit 1
+          }
+          awk '$1 == "===" && $2 == "RUN" && $3 ~ /^TestMHABwdCausalFrozenCurrentExact\/[^[:space:]]+$/ { print $3 }' \
+            "$output_path" >"$run_raw_path"
+          awk '$1 == "---" && $2 == "PASS:" && $3 ~ /^TestMHABwdCausalFrozenCurrentExact\/[^[:space:]]+$/ { print $3 }' \
+            "$output_path" >"$pass_raw_path"
+          run_count="$(awk 'END { print NR }' "$run_raw_path")"
+          pass_count="$(awk 'END { print NR }' "$pass_raw_path")"
+          [ "$run_count" -eq 44 ] || { echo "strict MHA backward oracle guard: child RUN count=$run_count, want 44" >&2; exit 1; }
+          [ "$pass_count" -eq 44 ] || { echo "strict MHA backward oracle guard: child PASS count=$pass_count, want 44" >&2; exit 1; }
+          LC_ALL=C sort -u "$run_raw_path" >"$run_names_path"
+          LC_ALL=C sort -u "$pass_raw_path" >"$pass_names_path"
+          run_distinct="$(awk 'END { print NR }' "$run_names_path")"
+          pass_distinct="$(awk 'END { print NR }' "$pass_names_path")"
+          [ "$run_distinct" -eq 44 ] || { echo "strict MHA backward oracle guard: distinct child RUN count=$run_distinct, want 44" >&2; exit 1; }
+          [ "$pass_distinct" -eq 44 ] || { echo "strict MHA backward oracle guard: distinct child PASS count=$pass_distinct, want 44" >&2; exit 1; }
+          cmp -s "$run_names_path" "$pass_names_path" || {
+            echo 'strict MHA backward oracle guard: child RUN/PASS name sets differ' >&2
+            exit 1
+          }
+          if grep -Eq '^[[:space:]]*--- (FAIL|SKIP): TestMHABwdCausalFrozenCurrentExact([/[:space:]]|$)' "$output_path"; then
+            echo 'strict MHA backward oracle guard: failed or skipped top-level/child oracle case' >&2
+            exit 1
+          fi
+          [ "$(grep -Fxc 'PASS' "$output_path")" -eq 1 ] || { echo 'strict MHA backward oracle guard: missing test PASS footer' >&2; exit 1; }
+          footer="$(tail -n 1 "$output_path")"
+          if [[ ! "$footer" =~ ^ok[[:space:]]+github\.com/jxsl13/goai/backend/cpu[[:space:]]+[0-9]+(\.[0-9]+)?s$ ]]; then
+            echo 'strict MHA backward oracle guard: missing exact backend/cpu result footer' >&2
+            exit 1
+          fi
+
   # §T604 capability matrix, cgo axis on windows (mingw): the tagless cgo build
   # must behave like everywhere else; tests run selectively via the runner.
   test-windows-cgo:
