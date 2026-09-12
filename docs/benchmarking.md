@@ -15,6 +15,19 @@ path is optimized to its ceiling and still loses by the §C3 threshold.
 
 ## Running
 
+The [2026-09-11 CPU attention backward experiment](../internal/benchcompare/leadership/evidence/m2-cpu-attention-20260911/README.md)
+retains the original runtime. Its causal dK/dV pruning prototype passed the
+44-case frozen-current numeric oracle, but the first longer confirmation
+failed the sequence-256 significance gate (p=.535) and increased whole-GPT
+allocations (2,744 to 2,750, p=.005). Sequence 512 improved in that campaign,
+but the complete promotion contract did not pass. The remaining two planned
+confirmations were not run after this conservative stop for failure; no
+replacement samples or relaxed thresholds are used. The public fixture keeps
+all 288 pilot and confirmation samples, including excluded warmups, plus a
+clearly withdrawn source patch. Binaries, full captures and private references
+remain local. The portable CPU benchmarks and hard native oracle CI gate stay;
+no runtime, model-speedup or external leadership claim is promoted.
+
 The [2026-09-10 architecture-gated VJP pilot](../internal/benchcompare/leadership/evidence/m2-vjp-arch-qualify-20260910/README.md)
 was inconclusive: all six targets failed significance, five missed their
 minimum ratios, and within-arm sample ranges were 5.48–44.02%. The original

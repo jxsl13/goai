@@ -802,3 +802,13 @@ Rationale: Darwin ARM64 cannot compile AMD64-only experimental archsimd calls, w
 The GoAI public Git publication SHALL include code and small sanitized test data, with 0 private documents, books, compiler binaries, or large local evidence bundles in outgoing history.
 
 Rationale: User boundary clarified 2026-09-11. Full captures remain local. Publish concise authored summaries, small measurement fixtures and verifiers, and exclude unpublished full-evidence commits from public ancestry. This supersedes the qualification task full-public-archive requirement, not correctness or performance gates. The clean merged-state archival branch avoids replay of a retired private-local anchor; the affected local state is preserved and Spectackle issue288 records the defect.
+
+## CPU-MHA-NATIVE-ORACLE-CI-001 {applies: go:cpu.mhaBwdGemmBand}
+WHEN CPU backward CI runs, the numeric CI gate SHALL execute all 44 frozen-current oracle cases on native ARM64 and AMD64 with SIMD enabled and 0 skipped oracle cases.
+
+Rationale: T-01M26Z9CN6E8S: the existing soft SIMD lane only executes selected primitives; default package runs skip the native F32 attention oracle. Explicit RUN/PASS cardinality and no-skip checks prevent vacuous green CI.
+
+## NATIVE-GOLDEN-LOG-VISIBILITY-001
+WHEN native floating-point golden provenance is harvested, the CI test commands SHALL expose verbose passing-test output for both default and SIMD builds without narrowing package selection, softening failures, or requiring an intentionally failing diagnostic test.
+
+Rationale: Default pure-go CI currently suppresses passing t.Log output. One -v flag addition preserves the full selected workload and makes the dyadic input/output provenance auditable. No new failed-test placeholder is needed.

@@ -4,6 +4,33 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### test -- verify native AVX semantics and freeze dyadic WKV fixtures (T-01M276SRXTEV1, 2026-09-11)
+
+ARM64-only softmax bit checks now have explicit architecture constraints and
+independent, non-skipping AMD64 AVX/FMA replacements. Exact WKV assertions use
+frozen dyadic inputs and separate native architecture/build-mode digests,
+harvested from agreeing Linux/Windows runs and independently checked ARM64
+results. The original transcendental fixtures remain as reference-accuracy
+tests with unchanged tolerances. Input/output corruption mutations fail all
+eight exact cases; production arithmetic is unchanged. Final native CI
+qualification remains required before merge. Raw captures and binaries stay
+private; no performance gain is claimed by these test-only changes.
+
+### test -- freeze CPU MHA backward exactness and benchmark its full cost (T-01M26VPHRVFAN, 2026-09-11)
+
+A production-called 44-case oracle checks all three attention gradients,
+finite and signed-zero bits, nonfinite classes, input immutability and poisoned
+scratch. A hard Linux/Windows AMD64 and macOS ARM64 SIMD CI gate requires every
+oracle case to execute. Portable benchmarks cover complete CPU backward and
+forward operations, controls, and the fixed six-layer GPT training objective.
+
+The ARM64 causal dK/dV pruning prototype was withdrawn after a valid longer
+confirmation failed sequence-256 significance and increased whole-GPT
+allocations. The original runtime is restored. The
+[small measurement fixture and withdrawn source patch](internal/benchcompare/leadership/evidence/m2-cpu-attention-20260911/README.md)
+retain the experiment without a promoted speedup claim; compiler binaries,
+full captures, books and private reference documents stay outside public Git.
+
 ### ci -- qualify native VJP oracles; retain original runtime (T-01M26474J0EDX, 2026-09-11)
 
 Hard CI gates now execute the strict unary VJP oracle on Linux, Windows and

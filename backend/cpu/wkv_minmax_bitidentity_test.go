@@ -1,23 +1,83 @@
 package cpu
 
 import (
-	"github.com/jxsl13/goai/internal/archgold"
+	"fmt"
 	"math"
 	"testing"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/archgold"
 	"github.com/jxsl13/goai/tensor"
 )
 
-// The WKV recurrence's running maximum is a math.Max per token per channel, and it lives in
-// THREE places that a per-file sweep does not connect: backend/ref/wkv.go, the F32 scan in
-// backend/cpu/wkv.go, and the architecture-selected internal/simd WKV scan.
-//
-// This digest runs the op on BOTH backends in BOTH dtypes, so a conversion that misses one of
-// the three files shows up as an unchanged number where a change was expected, and a
-// conversion that changes a value shows up here rather than in a tolerance somewhere.
-func wkvOpDigest(t *testing.T, be backend.Name, dt tensor.Dtype, seq, d int) uint64 {
+// wkvOpDigest binds the actual executed inputs to the frozen dyadic fixture.
+// Output metadata, finiteness, and unchanged inputs are checked before hashing.
+func wkvOpDigest(t *testing.T, be backend.Name, in []*tensor.Tensor, wantInputSHA string) uint64 {
 	t.Helper()
+	if got := wkvInputSHA256(in); got != wantInputSHA {
+		t.Fatalf("%v frozen input SHA: got %s want %s", be, got, wantInputSHA)
+	}
+	out := executeWKVDyadic(t, be, in)
+	requireWKVFinite(t, be, out)
+	if got := wkvInputSHA256(in); got != wantInputSHA {
+		t.Fatalf("%v mutated frozen inputs: got %s want %s", be, got, wantInputSHA)
+	}
+	return wkvOutputDigest(out)
+}
+
+// Exact dyadic goldens were harvested with Go 1.27.1 in native CI run
+// https://github.com/jxsl13/goai/actions/runs/34560190514 from source head
+// b9867e2ba8c0b4fade00e91a74d308301c1729fb. Linux and Windows agree in both
+// build modes; native macOS agrees with an independent M2 run. The CI merge
+// 2032c7774b090a2668613515e1c1c68b08f7f809 has the identical source tree.
+// No golden was obtained from emulation or a transcendental input fixture.
+func TestWKVOpIsBitIdentical(t *testing.T) {
+	if !archgold.Supported() {
+		t.Skip(archgold.Reason)
+	}
+	// 37 channels exercises remainder bands; 96 exercises complete groups.
+	cases := []struct {
+		dt               tensor.Dtype
+		seq, d           int
+		inputSHA         string
+		wantRef, wantCPU uint64
+	}{
+		{tensor.F32, 24, 37,
+			"237d57a777afaf54dc842cb4ebca902d5dcd44a769f663c3223825500e293ab4",
+			archgold.Pick(12746545039049088356, 12746545039049088356),
+			archgold.PickSIMD(12746545039049088356, 12746545039049088356, 12746545039049088356, 12746545039049088356)},
+		{tensor.F64, 24, 37,
+			"66b4821f3b049d918411fbffab0511221b67481d75c7a547c73fb6b1448ae0e3",
+			archgold.Pick(17367948250675808524, 6028244063516659357),
+			archgold.PickSIMD(17367948250675808524, 6028244063516659357, 4909970916033361732, 7419203717802686153)},
+		{tensor.F32, 64, 96,
+			"7e11d15d2d3c8691a747c9bf2b37ee7f6ee33d3e34ed0399b13b2a485cd81fa7",
+			archgold.Pick(3640097571888084831, 3640097571888084831),
+			archgold.PickSIMD(3640097571888084831, 3640097571888084831, 3640097571888084831, 3640097571888084831)},
+		{tensor.F64, 64, 96,
+			"673f8d6b748f3a7290fa9cf02a7dba18fd0c11d55a16e1110f32362b3cf50721",
+			archgold.Pick(18162273878488981657, 15771226142186551746),
+			archgold.PickSIMD(18162273878488981657, 15771226142186551746, 7543576894518255023, 14264126157401123388)},
+	}
+	for _, c := range cases {
+		for _, be := range []backend.Name{backend.Ref, backend.CPU} {
+			t.Run(fmt.Sprintf("%s/%s/%dx%d", be, c.dt, c.seq, c.d), func(t *testing.T) {
+				want := c.wantRef
+				if be == backend.CPU {
+					want = c.wantCPU
+				}
+				got := wkvOpDigest(t, be, wkvDyadicInputs(c.dt, c.seq, c.d), c.inputSHA)
+				if got != want {
+					t.Fatalf("output digest: got %d want %d", got, want)
+				}
+			})
+		}
+	}
+}
+
+// Preserve the old Sin/Cos vectors as reference-accuracy coverage. Their input
+// bits are architecture-dependent, so they are deliberately not golden fixtures.
+func wkvLegacyInputs(dt tensor.Dtype, seq, d int) []*tensor.Tensor {
 	mk := func(shape tensor.Shape, fn func(i int) float64) *tensor.Tensor {
 		x := tensor.New(dt, shape)
 		n := x.Numel()
@@ -38,61 +98,35 @@ func wkvOpDigest(t *testing.T, be backend.Name, dt tensor.Dtype, seq, d int) uin
 	v := mk(tensor.Shape{seq, d}, func(i int) float64 { return math.Cos(float64(i) * 0.21) })
 	w := mk(tensor.Shape{d}, func(i int) float64 { return 0.5 + 0.01*float64(i%7) })
 	u := mk(tensor.Shape{d}, func(i int) float64 { return -0.25 + 0.02*float64(i%5) })
-	impl, ok := backend.Get(be)
-	if !ok {
-		t.Fatalf("backend %v not registered", be)
-	}
-	ctx := backend.NewContext().WithBackend(impl)
-	out, err := backend.Execute(ctx, backend.OpWKV, []*tensor.Tensor{k, v, w, u}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h := uint64(14695981039346656037)
-	mix := func(u uint64) {
-		for s := 0; s < 64; s += 8 {
-			h = (h ^ (u>>s)&0xff) * 1099511628211
-		}
-	}
-	n := out[0].Numel()
-	if dt == tensor.F64 {
-		for _, x := range out[0].Storage().F64()[:n] {
-			mix(math.Float64bits(x))
-		}
-	} else {
-		for _, x := range out[0].Storage().F32()[:n] {
-			mix(uint64(math.Float32bits(x)))
-		}
-	}
-	return h
+	return []*tensor.Tensor{k, v, w, u}
 }
 
-// Ref and CPU remain bit-identical within a dtype in default builds. Experimental SIMD
-// transcendental kernels intentionally carry a separately frozen architecture-specific CPU F64
-// digest; the internal SIMD suite independently gates their 1e-10 accuracy and hostile fallback.
-// F32 remains bit-identical in both build modes.
-func TestWKVOpIsBitIdentical(t *testing.T) {
-	// 37 channels rather than a round number: the CPU F64 path bands the channels across
-	// GOMAXPROCS, and a shape that divides evenly would leave the remainder band untested.
-	cases := []struct {
-		be     backend.Name
-		dt     tensor.Dtype
-		seq, d int
-		want   uint64
-	}{
-		{backend.Ref, tensor.F64, 24, 37, archgold.Pick(10566835949036511716, 17150419372584378800)},
-		{backend.Ref, tensor.F32, 24, 37, archgold.Pick(3093831351525738813, 3093831351525738813)},
-		{backend.CPU, tensor.F64, 24, 37, archgold.PickSIMD(
-			10566835949036511716, 17150419372584378800,
-			15900442622490220052, 17150419372584378800)},
-		{backend.CPU, tensor.F32, 24, 37, archgold.Pick(3093831351525738813, 3093831351525738813)},
-		{backend.CPU, tensor.F64, 64, 96, archgold.PickSIMD(
-			13474779355268514115, 16963565634156262264,
-			1970352338795860704, 16963565634156262264)},
-	}
-	for _, c := range cases {
-		got := wkvOpDigest(t, c.be, c.dt, c.seq, c.d)
-		if got != c.want {
-			t.Errorf("%v %v seq=%d d=%d: digest %d", c.be, c.dt, c.seq, c.d, got)
+func TestWKVLegacyFixtureReferenceParity(t *testing.T) {
+	for _, shape := range [][2]int{{24, 37}, {64, 96}} {
+		for _, dt := range []tensor.Dtype{tensor.F32, tensor.F64} {
+			t.Run(fmt.Sprintf("%s/%dx%d", dt, shape[0], shape[1]), func(t *testing.T) {
+				var outputs [2]*tensor.Tensor
+				var inputSHA string
+				for i, be := range []backend.Name{backend.Ref, backend.CPU} {
+					in := wkvLegacyInputs(dt, shape[0], shape[1])
+					before := wkvInputSHA256(in)
+					if i == 0 {
+						inputSHA = before
+					} else if before != inputSHA {
+						t.Fatal("legacy CPU/Ref input bits differ")
+					}
+					outputs[i] = executeWKVDyadic(t, be, in)
+					requireWKVFinite(t, be, outputs[i])
+					if wkvInputSHA256(in) != before {
+						t.Fatalf("%v mutated legacy inputs", be)
+					}
+				}
+				if wkvSIMDExperimentEnabled() && dt == tensor.F64 {
+					requireWKVF64Relative(t, outputs[1], outputs[0])
+				} else {
+					requireWKVExact(t, "legacy CPU vs Ref", outputs[1], outputs[0])
+				}
+			})
 		}
 	}
 }
